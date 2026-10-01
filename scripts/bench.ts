@@ -12,6 +12,7 @@ import { endpoints } from "./endpoints.ts";
 const EKUBO_CORE = "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b";
 
 const { values: a } = parseArgs({
+  allowNegative: true,
   options: {
     endpoint: { type: "string", default: "alchemy" },
     from: { type: "string" },

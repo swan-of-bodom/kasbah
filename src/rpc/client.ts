@@ -1,3 +1,9 @@
+import { promisify } from "node:util";
+import { zstdDecompress as zstdCallback } from "node:zlib";
+
+const zstdDecompress = promisify(zstdCallback);
+const utf8 = new TextDecoder();
+
 export class RpcError extends Error {
   readonly method: string;
   readonly code: number;
@@ -97,12 +103,16 @@ export class RpcClient {
     this.stats.calls += calls.length;
     const res = await fetch(this.#url, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", "accept-encoding": "zstd, br, gzip" },
       body: JSON.stringify(calls.length === 1 ? body[0] : body),
       signal: AbortSignal.timeout(this.#timeoutMs),
     });
     onStatus(res.status);
-    const text = await res.text();
+    // fetch decodes br and gzip itself but hands zstd through as is.
+    const text =
+      res.headers.get("content-encoding") === "zstd"
+        ? utf8.decode(await zstdDecompress(new Uint8Array(await res.arrayBuffer())))
+        : await res.text();
     this.stats.bytes += text.length;
     if (!res.ok) throw new RpcError(calls[0]!.method, res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
     const parsed = JSON.parse(text) as Response | Response[];
