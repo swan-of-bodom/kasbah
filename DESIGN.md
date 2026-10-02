@@ -151,10 +151,21 @@ Transactions and receipts only for handlers that declare they need them (`includ
 Each tick (interval configurable, about one block time):
 1. `starknet_blockHashAndNumber` → new tip `M` (and its hash).
 2. `getEvents` from `last + 1` to `M` (explicit numbers), same single filter as backfill.
-3. Headers for blocks with events; verify `parent_hash` links against the last known header.
+3. Headers for every new block, one batched request: each `parent_hash` must link to the block before, the first
+   to the last indexed block, and every event's `block_hash` must match its header.
 
-Cost: about 2–3 calls per tick, independent of the number of contracts. Ponder's Starknet fork made one call per
+Cost: 3 HTTP requests per tick, independent of the number of contracts. Ponder's Starknet fork made one call per
 child address per block.
+
+Built (`src/sync/live.ts`). What a tick does when the answers don't agree:
+- First header doesn't link to our head: walk back through the kept hashes to the common ancestor, revert, go on
+  from there (a reorg deeper than the window is an error).
+- A tip behind ours, a block the node doesn't have yet (error 24), a header chain that doesn't link, or an event
+  whose block hash isn't its header's: an inconsistent (load-balanced, lagging) node. Nothing is indexed; retry next
+  tick.
+- Each live block is one transaction: its writes, its undo journal, its hash and the checkpoint. A crash leaves the
+  last committed block; the restart re-checks it against the chain on its first tick.
+- Not handled yet: a class upgrade while following the head (class history is read at startup).
 
 ### 6.2 WebSocket (opt-in, when the probe passes)
 
@@ -317,8 +328,9 @@ Target size: under 10k lines for v1.
    This validates the core bet before writing anything else.
    Done, results in §11.1.
 2. Decoder, config, schema, handlers, buffered store with COPY. Backfill end to end.
-3. Raw-event cache + coverage; re-index with zero RPC calls.
-4. Live polling, undo journal, crash recovery.
+   Done.
+3. Raw-event cache + coverage; re-index with zero RPC calls. (Moved after 5: a full Ekubo refetch costs $0.57.)
+4. Live polling, undo journal, crash recovery. Done.
 5. Read API.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 

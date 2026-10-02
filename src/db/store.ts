@@ -14,6 +14,8 @@ type State = {
   /** Every row is in `cache`: a miss means the row doesn't exist. True on a fresh run until the cache is evicted. */
   complete: boolean;
   pending: Map<string, Pending>;
+  /** In live mode: each row touched since the last flush, as it was before (null: it didn't exist). */
+  before: Map<string, Row | null>;
 };
 
 export type StoreOptions = { complete: boolean; maxCachedRows?: number };
@@ -39,17 +41,29 @@ export type InsertQuery<T extends PgTable> = PromiseLike<Selected<T>> & {
   onConflictDoUpdate(change: Partial<Values<T>> | ((row: Selected<T>) => Partial<Values<T>>)): Promise<Selected<T>>;
 };
 
+/** A row's values for `columns`, as the driver would send them, keyed by column name. */
+function driverValues(row: Row, columns: TableInfo["columns"]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const { key, column } of columns) {
+    const v = row[key];
+    out[column.name] = v === null || v === undefined ? null : column.mapToDriverValue(v);
+  }
+  return out;
+}
+
 export class Store {
   readonly db: Db;
   readonly #tables = new Map<PgTable, State>();
   readonly #orm: NodePgDatabase;
   readonly #maxCachedRows: number;
+  /** Record pre-images for the undo journal (blocks inside the reorg window). */
+  journal = false;
 
   constructor(orm: NodePgDatabase, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
     this.#maxCachedRows = options.maxCachedRows ?? 500_000;
     for (const t of tables) {
-      this.#tables.set(t, { info: tableInfo(t), cache: new Map(), complete: options.complete, pending: new Map() });
+      this.#tables.set(t, { info: tableInfo(t), cache: new Map(), complete: options.complete, pending: new Map(), before: new Map() });
     }
     this.db = this.#createDb();
   }
@@ -71,11 +85,17 @@ export class Store {
     return (row as Row | undefined) ?? null;
   }
 
-  #write(s: State, row: Row, existed: boolean) {
+  #remember(s: State, k: string, before: Row | null) {
+    if (this.journal && !s.before.has(k)) s.before.set(k, before === null ? null : { ...before });
+  }
+
+  #write(s: State, row: Row, before: Row | null) {
+    const existed = before !== null;
     const k = s.info.keyOf(row);
-    const before = s.pending.get(k)?.op;
+    this.#remember(s, k, before);
+    const prior = s.pending.get(k)?.op;
     // A row inserted this batch never reached the database; one deleted or upserted this batch may be there.
-    const op = before === "insert" ? "insert" : before !== undefined || existed ? "upsert" : "insert";
+    const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
     s.pending.set(k, { op, row });
     s.cache.set(k, row);
   }
@@ -86,25 +106,25 @@ export class Store {
       const k = s.info.keyOf(values);
       const row = { ...values };
       const plain = async () => {
-        if (s.cache.get(k)) throw new Error(`${s.info.name}: a row with key ${k} already exists`);
-        this.#write(s, row, false);
+        if (await this.#get(s, row)) throw new Error(`${s.info.name}: a row with key ${k} already exists`);
+        this.#write(s, row, null);
         return row;
       };
       const query = {
         then: (ok?: (v: Row) => unknown, fail?: (e: unknown) => unknown) => plain().then(ok, fail),
         onConflictDoNothing: async () => {
           if (await this.#get(s, row)) return null;
-          this.#write(s, row, false);
+          this.#write(s, row, null);
           return row;
         },
         onConflictDoUpdate: async (change: Row | ((r: Row) => Row)) => {
           const current = await this.#get(s, row);
           if (current === null) {
-            this.#write(s, row, false);
+            this.#write(s, row, null);
             return row;
           }
           const next = { ...current, ...(typeof change === "function" ? change(current) : change) };
-          this.#write(s, next, true);
+          this.#write(s, next, current);
           return next;
         },
       };
@@ -120,7 +140,7 @@ export class Store {
           const current = await this.#get(s, key as Row);
           if (current === null) throw new Error(`${s.info.name}: no row with key ${s.info.keyOf(key as Row)}`);
           const next = { ...current, ...(typeof change === "function" ? change(current as never) : change) };
-          this.#write(s, next, true);
+          this.#write(s, next, current);
           return next as never;
         },
       }),
@@ -129,6 +149,7 @@ export class Store {
         const current = await this.#get(s, key as Row);
         if (current === null) return false;
         const k = s.info.keyOf(current);
+        this.#remember(s, k, current);
         if (s.pending.get(k)?.op === "insert") s.pending.delete(k);
         else s.pending.set(k, { op: "delete", row: current });
         s.cache.set(k, null);
@@ -143,8 +164,15 @@ export class Store {
     return n;
   }
 
-  /** Writes every buffered change with `client`, inside the caller's transaction. */
-  async flush(client: PoolClient): Promise<void> {
+  /**
+   * Writes every buffered change with `client`, inside the caller's transaction. In journal mode, `block` tags the
+   * pre-images written to the undo journal.
+   */
+  async flush(client: PoolClient, block?: number): Promise<void> {
+    if (this.journal) {
+      if (block === undefined) throw new Error("journal mode needs the block being flushed");
+      await this.#writeJournal(client, block);
+    }
     for (const s of this.#tables.values()) {
       if (s.pending.size === 0) continue;
       const inserts: Row[] = [];
@@ -172,6 +200,66 @@ export class Store {
         s.complete = false;
       }
     }
+  }
+
+  async #writeJournal(client: PoolClient, block: number) {
+    const tables: string[] = [];
+    const keys: string[] = [];
+    const befores: (string | null)[] = [];
+    for (const s of this.#tables.values()) {
+      for (const [k, before] of s.before) {
+        const row = before ?? s.cache.get(k);
+        if (row === null || row === undefined) continue;
+        tables.push(s.info.name);
+        keys.push(JSON.stringify(driverValues(row, s.info.primaryKey)));
+        befores.push(before === null ? null : JSON.stringify(driverValues(before, s.info.columns)));
+      }
+      s.before.clear();
+    }
+    if (tables.length === 0) return;
+    await client.query(
+      `INSERT INTO _kasbah_journal (block, tbl, pk, before)
+       SELECT $1, t, k::jsonb, b::jsonb FROM unnest($2::text[], $3::text[], $4::text[]) WITH ORDINALITY AS u(t, k, b, i) ORDER BY i`,
+      [block, tables, keys, befores],
+    );
+  }
+
+  /**
+   * Undoes every journaled block after `ancestor`, newest first, inside the caller's transaction, and drops the
+   * caches: the database is the truth again.
+   */
+  async revert(client: PoolClient, ancestor: number): Promise<number> {
+    const { rows } = await client.query<{ tbl: string; pk: Record<string, unknown>; before: Record<string, unknown> | null }>(
+      `DELETE FROM _kasbah_journal WHERE block > $1 RETURNING tbl, pk, before, block, seq`,
+      [ancestor],
+    );
+    const ordered = (rows as unknown as { tbl: string; pk: Record<string, unknown>; before: Record<string, unknown> | null; block: number; seq: string }[])
+      .sort((a, b) => b.block - a.block || Number(BigInt(b.seq) - BigInt(a.seq)));
+    const byName = new Map([...this.#tables.values()].map((s) => [s.info.name, s.info]));
+    for (const r of ordered) {
+      const info = byName.get(r.tbl);
+      if (info === undefined) throw new Error(`journal names unknown table ${r.tbl}`);
+      const pkCols = info.primaryKey.map((c) => c.column.name);
+      if (r.before === null) {
+        const where = pkCols.map((c, i) => `${quote(c)} = $${i + 1}`).join(" AND ");
+        await client.query(`DELETE FROM ${quote(info.name)} WHERE ${where}`, pkCols.map((c) => r.pk[c]));
+      } else {
+        const cols = info.columns.map((c) => c.column.name);
+        const set = cols.filter((c) => !pkCols.includes(c)).map((c) => `${quote(c)} = EXCLUDED.${quote(c)}`);
+        await client.query(
+          `INSERT INTO ${quote(info.name)} (${cols.map(quote).join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})
+           ON CONFLICT (${pkCols.map(quote).join(", ")}) ${set.length > 0 ? `DO UPDATE SET ${set.join(", ")}` : "DO NOTHING"}`,
+          cols.map((c) => r.before![c]),
+        );
+      }
+    }
+    for (const s of this.#tables.values()) {
+      s.cache.clear();
+      s.pending.clear();
+      s.before.clear();
+      s.complete = false;
+    }
+    return ordered.length;
   }
 
   async #delete(client: PoolClient, info: TableInfo, rows: Row[]) {

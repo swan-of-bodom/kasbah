@@ -1,9 +1,12 @@
 // Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
-//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--to <block>] [--reset]
+//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--reset]
+// Without --to it backfills, then follows the head until Ctrl-C.
 import { parseArgs } from "node:util";
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { bignum, createConfig, hex, kasbah } from "../../src/index.ts";
 import abi from "./abi.ts";
+
+const { values } = parseArgs({ options: { start: { type: "string" }, to: { type: "string" }, reset: { type: "boolean" } } });
 
 export const pools = pgTable("pools", {
   id: text().primaryKey(),
@@ -26,7 +29,7 @@ const config = createConfig({
   database: process.env.DATABASE_URL!,
   schema: "ekubo",
   contracts: {
-    Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: 165_392 },
+    Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: values.start === undefined ? 165_392 : Number(values.start) },
   },
   tables: { pools },
 });
@@ -60,7 +63,10 @@ app.on("Core:PoolInitialized", async ({ event, context }) => {
 
 app.on("Core:Swapped", async ({ event, context }) => {
   const { pool_key, delta, sqrt_ratio_after, tick_after, liquidity_after } = event.args;
-  await context.db.update(pools, { id: poolId(pool_key) }).set((p) => ({
+  const id = poolId(pool_key);
+  // Started with --start after the pool was created: it isn't indexed.
+  if (values.start !== undefined && (await context.db.find(pools, { id })) === null) return;
+  await context.db.update(pools, { id }).set((p) => ({
     swaps: p.swaps + 1,
     volume0: p.volume0 + abs(delta.amount0),
     volume1: p.volume1 + abs(delta.amount1),
@@ -70,5 +76,6 @@ app.on("Core:Swapped", async ({ event, context }) => {
   }));
 });
 
-const { values } = parseArgs({ options: { to: { type: "string" }, reset: { type: "boolean" } } });
-await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset });
+const stop = new AbortController();
+process.once("SIGINT", () => stop.abort());
+await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, signal: stop.signal });
