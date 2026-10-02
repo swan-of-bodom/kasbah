@@ -131,10 +131,18 @@ Universal Deployer's `ContractDeployed` event (covers UDC deployments only) or a
 
 ### 5.4 Block headers
 
-`getEvents` results have no timestamp. Fetch headers only for **blocks that have matched events**, deduplicated,
-in parallel (`getBlockWithTxHashes`; there is no header-only HTTP method). Transactions and receipts only for
-handlers that declare they need them (`include: { transaction: true }`), via `getTransactionReceipt` or
-`getBlockWithReceipts` when many events share a block.
+`getEvents` results have no timestamp. Measured on Ekubo (§11.1), **headers cost about 100× more RPC than the
+events themselves**: one `getBlockWithTxHashes` per block with events (there is no header-only HTTP method), versus
+one `getEvents` per 1,024–10,240 events. So headers are opt-in:
+- An event carries `block.number` and `block.hash` (both in `getEvents` results) for free.
+- `block.timestamp` / `parent_hash` / `status` need the header. A handler declares it (`include: { block: true }`),
+  or kasbah records which fields handlers read on the first batch (Ponder's column-access proxy) and fetches
+  headers only for contracts whose handlers read them.
+- Headers are fetched in JSON-RPC batches of 100 (Alchemy: 835/s unbatched, 7,840/s batched). PublicNode
+  throttles `getBlockWithTxHashes` to about 20/s whatever the batch size: header backfills go to a paid endpoint.
+
+Transactions and receipts only for handlers that declare they need them (`include: { transaction: true }`), via
+`getTransactionReceipt` or `getBlockWithReceipts` when many events share a block.
 
 ## 6. Following the head
 
@@ -250,8 +258,25 @@ Cairo 1 only and names events by struct path. kasbah's types follow the same mod
   contracts. That is what was missing in the fork.
 
 **ABI source:** given in config as a `const` (for types), or fetched with `getClassAt` once and saved
-(`kasbah abi <address>` writes a typed `.ts` file). A contract upgraded to a new class (`replaced_classes`)
-can change ABI: config allows an ABI per block range.
+(`kasbah abi <address>` writes a typed `.ts` file).
+
+### 8.4 Upgraded contracts: decode with the class active at each block
+
+Measured on Ekubo Core (§11.1): its class changed 22 times, and twice the events changed. With today's ABI, the
+4.82M events before block 629,533 give 628 decode errors (`PoolInitialized` gained a field) and **324,430 events
+silently unknown** (`ProtocolFeesPaid`, removed from today's ABI). Over the full history (55,074,891 events),
+today's ABI silently drops **1,839,169** `ProtocolFeesPaid` events; with the class of each block, 0 errors and 0
+unknown. So a "latest ABI only" indexer loses data without any error.
+
+- At startup, `classHistory` (`src/abi/history.ts`) bisects `getClassHashAt` over the contract's range: ~25 calls
+  per change (Ekubo: 22 classes in 358 calls, 1.9 s). Each class's ABI is fetched once (`getClass`) and cached.
+- Events decode with the class active at their block (`createHistoricalDecoder`).
+- Blind spot: a class replaced and restored between two probes (1M blocks apart by default) is missed. For
+  factories, children's classes come from the same bisection, per child, lazily.
+- Types: handlers are typed against the ABI given in config (normally the latest). An event whose layout differs
+  in an older class decodes to that class's shape; config can declare older ABIs for an event so the handler gets
+  a typed union. Events unknown to the config ABI but known to an older class are reported at startup, not dropped
+  silently.
 
 ## 9. Storage and caches
 
@@ -290,11 +315,36 @@ Target size: under 10k lines for v1.
 1. **Spike: fetcher benchmark.** Endpoint probe + backfill fetcher only, printing events/s. Run on a real
    Ekubo history against Alchemy, Cartridge (Pathfinder) and PublicNode (Juno), and compare with the Ponder fork.
    This validates the core bet before writing anything else.
+   Done, results in §11.1.
 2. Decoder, config, schema, handlers, buffered store with COPY. Backfill end to end.
 3. Raw-event cache + coverage; re-index with zero RPC calls.
 4. Live polling, undo journal, crash recovery.
 5. Read API.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
+
+### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
+
+`scripts/bench.ts`. Every run of the same range gave the same event count and checksum, on every endpoint and in
+every mode.
+
+500k blocks (16.0M–16.5M), 1,233,321 events:
+
+| Endpoint | Sequential | Parallel ×32 |
+|---|---|---|
+| Alchemy (Pathfinder, paid) | 7,594/s | 93,963/s; **117,031/s** with zstd |
+| PublicNode (Juno, free) | 16,924/s | 94,734/s (br) |
+| Cartridge (Pathfinder, free) | 2,736/s | 4,893/s (throttled, concurrency fell to 7, no failures) |
+
+- ×64 and ×128 were no faster: the link was the limit (11.5 MB/s of compressed JSON against a 12.4 MB/s line;
+  main thread 54% idle). On a server, expect several times more.
+- JSON is ~870 bytes per Ekubo event; gzip 7×, zstd 9×. Node's fetch decodes gzip and br but not zstd, so the
+  client asks for `zstd, br, gzip` and decompresses zstd itself.
+- Decoding: ~1.4 µs per event, about 1% of the time.
+
+Full history (blocks 165,392–17,101,222): **55,074,576 events in 652 s** (84k/s), 54,006 calls ≈ 1.08M CU ≈
+$0.57 on Alchemy, no retries. 5,171,698 blocks have events, so headers would be ≈ 103M CU ≈ $54 (§5.4).
+
+Headers: Alchemy 835/s unbatched, 7,840/s in batches of 100. PublicNode ~20/s at any batch size.
 
 ## 12. Decisions
 

@@ -2,6 +2,7 @@
 //   node --env-file=.env --no-warnings scripts/bench.ts --endpoint alchemy --from 900000 --to 1000000 --concurrency 32
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { classHistory, createHistoricalDecoder } from "../src/abi/history.ts";
 import { type Abi, createDecoder } from "../src/index.ts";
 import { RpcClient } from "../src/rpc/client.ts";
 import { blockNumber, getEvents, getHeaders } from "../src/rpc/methods.ts";
@@ -24,6 +25,7 @@ const { values: a } = parseArgs({
     headers: { type: "string", default: "0" },
     "header-batch": { type: "string", default: "100" },
     "first-block": { type: "boolean", default: false },
+    history: { type: "boolean", default: false },
   },
 });
 
@@ -50,7 +52,18 @@ if (a["first-block"]) {
 
 const from = Number(a.from ?? head - 100_000);
 const to = Number(a.to ?? head);
-const decode = createDecoder(JSON.parse(readFileSync(new URL("../test/fixtures/ekubo-core.abi.json", import.meta.url), "utf8")) as Abi);
+const todayDecode = createDecoder(JSON.parse(readFileSync(new URL("../test/fixtures/ekubo-core.abi.json", import.meta.url), "utf8")) as Abi);
+let decode = (_block: number, keys: readonly string[], data: readonly string[]) => todayDecode(keys, data);
+if (a.history) {
+  const spans = await classHistory(rpc, EKUBO_CORE, from, to);
+  const withAbis = await Promise.all(spans.map(async (s) => {
+    const cls = await rpc.request<{ abi: string | Abi }>("starknet_getClass", { block_id: "latest", class_hash: s.classHash });
+    return { ...s, abi: (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi };
+  }));
+  decode = createHistoricalDecoder(withAbis);
+  console.error(`decoding with ${spans.length} classes`);
+}
+let unknown = 0;
 
 let checksum = 0n;
 let decodeMs = 0;
@@ -77,8 +90,9 @@ const stats = await fetchEvents({
     const t = performance.now();
     for (const e of events) {
       try {
-        const d = decode(e.keys, e.data);
+        const d = decode(e.block_number!, e.keys, e.data);
         if (d) counts[d.name] = (counts[d.name] ?? 0) + 1;
+        else unknown++;
       } catch {
         decodeErrors++;
       }
@@ -102,6 +116,7 @@ const result: Record<string, unknown> = {
   decodeMs: Math.round(decodeMs),
   decodePerEventUs: +((decodeMs * 1000) / Math.max(1, stats.events)).toFixed(2),
   decodeErrors,
+  unknown,
   retries: rpc.stats.retries,
   throttled: rpc.stats.throttled,
   finalConcurrency: rpc.concurrency,
