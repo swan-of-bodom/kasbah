@@ -8,6 +8,7 @@ import { classHistory, createHistoricalDecoder } from "./abi/history.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import { Store, type Db } from "./db/store.ts";
 import { createTableSql, quote, tableInfo } from "./db/table.ts";
+import { Api } from "./api/server.ts";
 import { RpcClient } from "./rpc/client.ts";
 import { blockNumber, type EmittedEvent, getHeaders } from "./rpc/methods.ts";
 import { probe } from "./rpc/probe.ts";
@@ -29,6 +30,8 @@ export type Config = {
   reorgWindow?: number;
   /** Head polling interval. Default 2 s. */
   pollMs?: number;
+  /** Serve the read API (SQL over HTTP, GraphQL) while indexing. */
+  api?: { port: number; host?: string; readDatabase?: string };
 };
 
 export const createConfig = <const C extends Config>(config: C): C => config;
@@ -115,9 +118,12 @@ export function kasbah<const C extends Config>(config: C) {
     };
     const setCheckpoint = (tx: pg.PoolClient, block: number) =>
       tx.query(`INSERT INTO _kasbah_meta VALUES ('checkpoint', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [JSON.stringify(block)]);
+    const setPhase = (phase: "backfill" | "live") =>
+      pool.query(`INSERT INTO _kasbah_meta VALUES ('phase', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [JSON.stringify(phase)]);
     const saveHash = (q: pg.PoolClient | pg.Pool, block: BlockRef) =>
       q.query(`INSERT INTO _kasbah_blocks VALUES ($1, $2) ON CONFLICT (number) DO UPDATE SET hash = EXCLUDED.hash`, [block.number, block.hash]);
 
+    let api: Api | undefined;
     try {
       const buildId = createHash("sha256")
         .update(JSON.stringify({
@@ -145,6 +151,11 @@ export function kasbah<const C extends Config>(config: C) {
         const blocks = await tx.query<{ number: number; hash: string }>(`SELECT number, hash FROM _kasbah_blocks`);
         for (const b of blocks.rows) known.set(b.number, b.hash);
       });
+
+      if (config.api !== undefined) {
+        api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
+        log(`API on http://${config.api.host ?? "127.0.0.1"}:${api.port} (POST /sql, POST /graphql, GET /status)`);
+      }
 
       const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined });
       const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency ?? 32 });
@@ -215,6 +226,7 @@ export function kasbah<const C extends Config>(config: C) {
       // Backfill: final blocks, no journal, one transaction every FLUSH_EVENTS events.
       const first = Math.max(Math.min(...contracts.map((c) => c.startBlock)), (checkpoint ?? -1) + 1);
       if (first <= backfillTo) {
+        await setPhase("backfill");
         const started = performance.now();
         let sinceFlush = 0;
         let through = first - 1;
@@ -256,6 +268,7 @@ export function kasbah<const C extends Config>(config: C) {
         known.set(last, head.hash);
       }
       store.journal = true;
+      await setPhase("live");
       log(`following the head from block ${head.number}`);
       await follow({
         rpc, address: addresses, keys, chunkSize: endpoint.maxChunk, head, known, signal, log,
@@ -286,6 +299,7 @@ export function kasbah<const C extends Config>(config: C) {
         },
       });
     } finally {
+      await api?.close();
       await pool.end();
     }
   };

@@ -1,27 +1,13 @@
 // Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
-//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--reset]
+//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--reset]
 // Without --to it backfills, then follows the head until Ctrl-C.
 import { parseArgs } from "node:util";
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
-import { bignum, createConfig, hex, kasbah } from "../../src/index.ts";
+import { createConfig, kasbah } from "../../src/index.ts";
 import abi from "./abi.ts";
+import { pools } from "./schema.ts";
 
-const { values } = parseArgs({ options: { start: { type: "string" }, to: { type: "string" }, reset: { type: "boolean" } } });
-
-export const pools = pgTable("pools", {
-  id: text().primaryKey(),
-  token0: hex().notNull(),
-  token1: hex().notNull(),
-  fee: bignum().notNull(),
-  tickSpacing: bignum().notNull(),
-  extension: hex().notNull(),
-  createdAt: integer().notNull(),
-  swaps: integer().notNull(),
-  volume0: bignum().notNull(),
-  volume1: bignum().notNull(),
-  sqrtRatio: bignum(),
-  tick: bignum().notNull(),
-  liquidity: bignum().notNull(),
+const { values } = parseArgs({
+  options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, reset: { type: "boolean" } },
 });
 
 const config = createConfig({
@@ -32,6 +18,7 @@ const config = createConfig({
     Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: values.start === undefined ? 165_392 : Number(values.start) },
   },
   tables: { pools },
+  ...(values.port === undefined ? {} : { api: { port: Number(values.port) } }),
 });
 
 const app = kasbah(config);

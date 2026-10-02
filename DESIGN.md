@@ -331,7 +331,17 @@ Target size: under 10k lines for v1.
    Done.
 3. Raw-event cache + coverage; re-index with zero RPC calls. (Moved after 5: a full Ekubo refetch costs $0.57.)
 4. Live polling, undo journal, crash recovery. Done.
-5. Read API.
+5. Read API. Done (`src/api/`):
+   - `POST /sql` `{ sql, params }` → `{ columns, rows }`. Runs as `<schema>_reader`, a login role kasbah creates
+     (or `api.readDatabase`) with SELECT on the app's tables and `_kasbah_meta` only. Each query: one read-only
+     transaction with a timeout (10 s), always rolled back, so nothing it sets outlives it; sent wrapped as
+     `SELECT * FROM (<sql>) LIMIT $n` with the extended protocol, so only one SELECT/WITH/VALUES statement parses;
+     at most 10,000 rows.
+   - `POST /graphql`: per table `pool(<primary key>)` and `pools(where, orderBy, orderDirection, limit, after)`,
+     keyset paging on non-null columns with the primary key as tiebreak; filters `x`, `x_not`, `x_in`,
+     `x_not_in`, `x_gt/gte/lt/lte`, `AND`, `OR`. Numbers past 32 bits are `BigInt` decimal strings. `_meta`.
+   - `GET /status`: checkpoint and phase (backfill or live).
+   - Not yet: live queries (push on new blocks), relations between tables.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
