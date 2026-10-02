@@ -1,0 +1,74 @@
+// Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
+//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--to <block>] [--reset]
+import { parseArgs } from "node:util";
+import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { bignum, createConfig, hex, kasbah } from "../../src/index.ts";
+import abi from "./abi.ts";
+
+export const pools = pgTable("pools", {
+  id: text().primaryKey(),
+  token0: hex().notNull(),
+  token1: hex().notNull(),
+  fee: bignum().notNull(),
+  tickSpacing: bignum().notNull(),
+  extension: hex().notNull(),
+  createdAt: integer().notNull(),
+  swaps: integer().notNull(),
+  volume0: bignum().notNull(),
+  volume1: bignum().notNull(),
+  sqrtRatio: bignum(),
+  tick: bignum().notNull(),
+  liquidity: bignum().notNull(),
+});
+
+const config = createConfig({
+  rpc: process.env.KASBAH_RPC_URL!,
+  database: process.env.DATABASE_URL!,
+  schema: "ekubo",
+  contracts: {
+    Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: 165_392 },
+  },
+  tables: { pools },
+});
+
+const app = kasbah(config);
+
+type PoolKey = { token0: `0x${string}`; token1: `0x${string}`; fee: bigint; tick_spacing: bigint; extension: `0x${string}` };
+const poolId = (k: PoolKey) => `${k.token0}:${k.token1}:${k.fee}:${k.tick_spacing}:${k.extension}`;
+const signed = (v: { mag: bigint; sign: boolean }) => (v.sign ? -v.mag : v.mag);
+const abs = (v: { mag: bigint }) => v.mag;
+
+app.on("Core:PoolInitialized", async ({ event, context }) => {
+  const k = event.args.pool_key;
+  await context.db.insert(pools).values({
+    id: poolId(k),
+    token0: k.token0,
+    token1: k.token1,
+    fee: k.fee,
+    tickSpacing: k.tick_spacing,
+    extension: k.extension,
+    createdAt: event.block.number,
+    swaps: 0,
+    volume0: 0n,
+    volume1: 0n,
+    // Before block 629,533 Ekubo's PoolInitialized had no sqrt_ratio.
+    sqrtRatio: event.args.sqrt_ratio ?? null,
+    tick: signed(event.args.initial_tick),
+    liquidity: 0n,
+  });
+});
+
+app.on("Core:Swapped", async ({ event, context }) => {
+  const { pool_key, delta, sqrt_ratio_after, tick_after, liquidity_after } = event.args;
+  await context.db.update(pools, { id: poolId(pool_key) }).set((p) => ({
+    swaps: p.swaps + 1,
+    volume0: p.volume0 + abs(delta.amount0),
+    volume1: p.volume1 + abs(delta.amount1),
+    sqrtRatio: sqrt_ratio_after,
+    tick: signed(tick_after),
+    liquidity: liquidity_after,
+  }));
+});
+
+const { values } = parseArgs({ options: { to: { type: "string" }, reset: { type: "boolean" } } });
+await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset });

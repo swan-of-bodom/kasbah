@@ -50,11 +50,12 @@ function syntheticEvents(blocks: number, seed: number): EmittedEvent[] {
 }
 
 test.each([
-  { concurrency: 1, windowSize: 20_000 },
-  { concurrency: 4, windowSize: 20_000 },
-  { concurrency: 16, windowSize: 3_000 },
-  { concurrency: 32, windowSize: 100_000 },
-])("every event exactly once: %o", async ({ concurrency, windowSize }) => {
+  { concurrency: 1, windowEvents: 256, maxBuffered: 100_000 },
+  { concurrency: 4, windowEvents: 256, maxBuffered: 100_000 },
+  { concurrency: 16, windowEvents: 64, maxBuffered: 100_000 },
+  { concurrency: 32, windowEvents: 4096, maxBuffered: 100_000 },
+  { concurrency: 16, windowEvents: 256, maxBuffered: 500 },
+])("every event exactly once, in order: %o", async ({ concurrency, windowEvents, maxBuffered }) => {
   const events = syntheticEvents(20_000, concurrency);
   const node = fakeNode(events, 2_048);
   const seen: string[] = [];
@@ -65,13 +66,16 @@ test.each([
     to: 19_999,
     chunkSize: 64,
     concurrency,
-    windowSize,
+    windowEvents,
+    maxBuffered,
     onEvents(page) {
       for (const e of page) seen.push(`${e.block_number}:${e.transaction_index}:${e.event_index}`);
     },
   });
   expect(stats.events).toBe(events.length);
   expect(new Set(seen).size).toBe(events.length);
-  expect(seen.sort()).toEqual(events.map((e) => `${e.block_number}:${e.transaction_index}:${e.event_index}`).sort());
+  expect(seen).toEqual(events.map((e) => `${e.block_number}:${e.transaction_index}:${e.event_index}`));
+  // Three budgets (see `mayFetch`), plus one page from each request in flight.
+  expect(stats.peakBuffered).toBeLessThanOrEqual(3 * maxBuffered + concurrency * 64);
   if (concurrency > 1) expect(stats.splits).toBeGreaterThan(0);
 });

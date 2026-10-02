@@ -19,7 +19,8 @@ const { values: a } = parseArgs({
     from: { type: "string" },
     to: { type: "string" },
     concurrency: { type: "string", default: "32" },
-    window: { type: "string", default: "81920" },
+    window: { type: "string" },
+    buffer: { type: "string" },
     sequential: { type: "boolean", default: false },
     decode: { type: "boolean", default: true },
     headers: { type: "string", default: "0" },
@@ -79,7 +80,8 @@ const stats = await fetchEvents({
   to,
   chunkSize: endpoint.maxChunk,
   concurrency: a.sequential ? 1 : concurrency,
-  windowSize: a.sequential ? to - from + 1 : Number(a.window),
+  windowEvents: a.window === undefined ? undefined : Number(a.window),
+  maxBuffered: a.buffer === undefined ? undefined : Number(a.buffer),
   minSplit: a.sequential ? Number.POSITIVE_INFINITY : 64,
   onEvents(events) {
     for (const e of events) {
@@ -104,12 +106,13 @@ const fetchMs = performance.now() - t0;
 
 const result: Record<string, unknown> = {
   endpoint: `${a.endpoint} (${endpoint.node}, chunk ${endpoint.maxChunk})`,
-  mode: a.sequential ? "sequential" : `parallel ×${concurrency}, window ${a.window}`,
+  mode: a.sequential ? "sequential" : `parallel ×${concurrency}`,
   range: `${from}..${to} (${to - from + 1} blocks)`,
   events: stats.events,
   blocksWithEvents: blocks.size,
   pages: stats.pages,
   windows: stats.windows,
+  peakBuffered: stats.peakBuffered,
   splits: stats.splits,
   seconds: +(fetchMs / 1000).toFixed(2),
   eventsPerSecond: Math.round(stats.events / (fetchMs / 1000)),
