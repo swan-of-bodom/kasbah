@@ -4,7 +4,7 @@ import type { PgTable } from "drizzle-orm/pg-core";
 import pg from "pg";
 import type { Abi } from "./abi/abi.ts";
 import { abiEvents } from "./abi/events.ts";
-import { classHistory, createHistoricalDecoder } from "./abi/history.ts";
+import { type ClassSpan, classHistory, createHistoricalDecoder } from "./abi/history.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import { Store, type Db } from "./db/store.ts";
 import { createTableSql, quote, tableInfo } from "./db/table.ts";
@@ -13,7 +13,7 @@ import { RpcClient } from "./rpc/client.ts";
 import { blockNumber, type EmittedEvent, getHeaders } from "./rpc/methods.ts";
 import { probe } from "./rpc/probe.ts";
 import { eventStream } from "./sync/fetch.ts";
-import { type BlockRef, follow } from "./sync/live.ts";
+import { type BlockRef, findAncestor, follow } from "./sync/live.ts";
 
 export type ContractConfig = { abi: Abi; address: string; startBlock: number };
 
@@ -165,34 +165,70 @@ export function kasbah<const C extends Config>(config: C) {
       const backfillTo = live ? tip - window : Math.min(options.to!, tip);
 
       // Classes are looked up to the tip when following it: live blocks decode with the class active now.
+      const abis = new Map<string, Promise<Abi>>();
+      const abiOf = (classHash: string) => {
+        let abi = abis.get(classHash);
+        if (abi === undefined) {
+          abi = rpc.request<{ abi: string | Abi }>("starknet_getClass", { block_id: "latest", class_hash: classHash })
+            .then((cls) => (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi);
+          abis.set(classHash, abi);
+        }
+        return abi;
+      };
+      const keys: string[][] = [[]];
+
       const contracts = await Promise.all(
         Object.entries(config.contracts).map(async ([name, c]) => {
           const spans = await classHistory(rpc, c.address, c.startBlock, live ? tip : backfillTo);
           if (spans.length === 0) throw new Error(`${name} is not deployed at ${c.address} by block ${tip}`);
-          const withAbis = await Promise.all(spans.map(async (s) => {
-            const cls = await rpc.request<{ abi: string | Abi }>("starknet_getClass", { block_id: "latest", class_hash: s.classHash });
-            return { ...s, abi: (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi };
-          }));
           const handled = new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
-          const selectors = new Set<string>();
           const configured = new Set(abiEvents(c.abi).map((e) => e.name));
-          const missing = new Set<string>();
-          for (const s of withAbis) {
-            for (const e of abiEvents(s.abi)) {
-              if (handled.has(e.name)) selectors.add(e.selectors[0]!);
-              if (!configured.has(e.name)) missing.add(e.name);
-            }
-          }
-          if (missing.size > 0) {
-            log(`${name}: older classes emit events not in the configured ABI, they are skipped: ${[...missing].join(", ")}`);
-          }
-          return { name, address: canonical(c.address), startBlock: c.startBlock, classes: spans.length, decode: createHistoricalDecoder(withAbis), selectors };
+          const contract = {
+            name,
+            address: canonical(c.address),
+            startBlock: c.startBlock,
+            spans: [] as (ClassSpan & { abi: Abi })[],
+            decode: createHistoricalDecoder([]),
+            /** Classes are known up to this block. */
+            checked: live ? tip : backfillTo,
+            /** Adds class spans: new handled selectors join the filter, unknown event names are reported. */
+            async add(added: ClassSpan[]) {
+              const withAbis = await Promise.all(added.map(async (s) => ({ ...s, abi: await abiOf(s.classHash) })));
+              const missing = new Set<string>();
+              for (const s of withAbis) {
+                for (const e of abiEvents(s.abi)) {
+                  if (handled.has(e.name) && !keys[0]!.includes(e.selectors[0]!)) keys[0]!.push(e.selectors[0]!);
+                  if (!configured.has(e.name)) missing.add(e.name);
+                }
+              }
+              if (missing.size > 0) log(`${name}: some classes emit events not in the configured ABI, they are skipped: ${[...missing].join(", ")}`);
+              this.spans.push(...withAbis);
+              this.decode = createHistoricalDecoder(this.spans);
+            },
+          };
+          await contract.add(spans);
+          return contract;
         }),
       );
       const byAddress = new Map(contracts.map((c) => [c.address, c]));
-      const keys = [[...new Set(contracts.flatMap((c) => [...c.selectors]))]];
       const addresses = contracts.map((c) => c.address);
-      log(`${endpoint.node} endpoint, spec ${endpoint.spec}, tip ${tip}; ${contracts.map((c) => `${c.name}: ${c.classes} classes`).join(", ")}`);
+      log(`${endpoint.node} endpoint, spec ${endpoint.spec}, tip ${tip}; ${contracts.map((c) => `${c.name}: ${c.spans.length} classes`).join(", ")}`);
+
+      /** Before live blocks up to `to` are indexed: one batched class check, a bisection only if one changed. */
+      const checkClasses = async (to: number) => {
+        const current = await rpc.batch<string[]>(
+          contracts.map((c) => ({ method: "starknet_getClassHashAt", params: { block_id: { block_number: to }, contract_address: c.address } })),
+        );
+        await Promise.all(contracts.map(async (c, i) => {
+          if (to <= c.checked) return;
+          if (current[i] !== c.spans.at(-1)!.classHash) {
+            const changes = (await classHistory(rpc, c.address, c.checked, to)).slice(1);
+            log(`${c.name}: class replaced at block ${changes.map((s) => `${s.from} (${s.classHash})`).join(", ")}`);
+            await c.add(changes);
+          }
+          c.checked = to;
+        }));
+      };
       if (keys[0]!.length === 0) {
         log("no handlers registered");
         return;
@@ -222,6 +258,27 @@ export function kasbah<const C extends Config>(config: C) {
         }
         indexed++;
       };
+
+      const revert = async (ancestor: BlockRef) => {
+        let undone = 0;
+        await transaction(async (tx) => {
+          undone = await store.revert(tx, ancestor.number);
+          await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [ancestor.number]);
+          await setCheckpoint(tx, ancestor.number);
+        });
+        for (const n of known.keys()) if (n > ancestor.number) known.delete(n);
+        checkpoint = ancestor.number;
+        log(`reverted to block ${ancestor.number}, ${undone} row changes undone`);
+      };
+
+      // Stopped while live: the blocks indexed last may have been reorged since. Backfill trusts its start, so check.
+      if (checkpoint !== undefined && known.has(checkpoint)) {
+        const ancestor = await findAncestor(rpc, checkpoint, known);
+        if (ancestor.number < checkpoint) {
+          log(`reorg while stopped: block ${checkpoint} replaced, back to ${ancestor.number}`);
+          await revert(ancestor);
+        }
+      }
 
       // Backfill: final blocks, no journal, one transaction every FLUSH_EVENTS events.
       const first = Math.max(Math.min(...contracts.map((c) => c.startBlock)), (checkpoint ?? -1) + 1);
@@ -273,6 +330,7 @@ export function kasbah<const C extends Config>(config: C) {
       await follow({
         rpc, address: addresses, keys, chunkSize: endpoint.maxChunk, head, known, signal, log,
         pollMs: config.pollMs ?? 2_000,
+        prepare: checkClasses,
         onBlock: async (block) => {
           for (const e of block.events) await handle(e);
           const prune = block.number - window;
@@ -287,16 +345,7 @@ export function kasbah<const C extends Config>(config: C) {
           for (const n of known.keys()) if (n < prune) known.delete(n);
           if (block.events.length > 0) log(`block ${block.number}: ${block.events.length} events`);
         },
-        onReorg: async (ancestor) => {
-          let undone = 0;
-          await transaction(async (tx) => {
-            undone = await store.revert(tx, ancestor.number);
-            await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [ancestor.number]);
-            await setCheckpoint(tx, ancestor.number);
-          });
-          for (const n of known.keys()) if (n > ancestor.number) known.delete(n);
-          log(`reverted to block ${ancestor.number}, ${undone} row changes undone`);
-        },
+        onReorg: revert,
       });
     } finally {
       await api?.close();

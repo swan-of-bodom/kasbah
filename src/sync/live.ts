@@ -19,6 +19,8 @@ export type FollowOptions = {
   maxBlocks?: number;
   signal: AbortSignal;
   onBlock: (block: LiveBlock) => Promise<void>;
+  /** Runs before blocks up to `to` are fetched and indexed (the caller may change `keys` in place). */
+  prepare?: (to: number) => Promise<void>;
   /** Called with the newest block both chains share; everything after it must be undone. */
   onReorg: (ancestor: BlockRef) => Promise<void>;
   log?: (line: string) => void;
@@ -53,6 +55,15 @@ async function eventsIn(o: FollowOptions, from: number, to: number): Promise<Emi
   return out;
 }
 
+/** The newest block in `known` (at or below `from`) whose hash the chain still has. */
+export async function findAncestor(rpc: RpcClient, from: number, known: Map<number, string>): Promise<BlockRef> {
+  for (let n = from; known.has(n); n--) {
+    const [header] = await getHeaders(rpc, [n], 1);
+    if (header!.block_hash === known.get(n)) return { number: n, hash: header!.block_hash };
+  }
+  throw new Error(`reorg deeper than the ${known.size} blocks kept, below block ${from}`);
+}
+
 /**
  * Follows the chain from `head`: every tick reads the tip, then the headers and events of the new blocks by number.
  * Headers must link to the last indexed block; if the first one doesn't, walks back through `known` to the common
@@ -63,13 +74,7 @@ export async function follow(o: FollowOptions): Promise<void> {
   const maxBlocks = o.maxBlocks ?? 100;
   let head = o.head;
 
-  const ancestor = async (): Promise<BlockRef> => {
-    for (let n = head.number; o.known.has(n); n--) {
-      const [header] = await getHeaders(o.rpc, [n], 1);
-      if (header!.block_hash === o.known.get(n)) return { number: n, hash: header!.block_hash };
-    }
-    throw new Error(`reorg deeper than the ${o.known.size} blocks kept, below block ${head.number}`);
-  };
+  const ancestor = () => findAncestor(o.rpc, head.number, o.known);
 
   /** One poll. False when the tick learned nothing usable and should wait. */
   const tick = async (): Promise<boolean> => {
@@ -78,6 +83,7 @@ export async function follow(o: FollowOptions): Promise<void> {
     const from = Math.min(head.number + 1, tip.block_number);
     const to = Math.min(tip.block_number, head.number + maxBlocks);
     const numbers = Array.from({ length: to - from + 1 }, (_, i) => from + i);
+    await o.prepare?.(to);
     const [headers, events] = await Promise.all([getHeaders(o.rpc, numbers, 100), eventsIn(o, from, to)]);
 
     const first = headers[0]!;

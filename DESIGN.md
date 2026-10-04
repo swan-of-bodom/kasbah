@@ -165,7 +165,11 @@ Built (`src/sync/live.ts`). What a tick does when the answers don't agree:
   tick.
 - Each live block is one transaction: its writes, its undo journal, its hash and the checkpoint. A crash leaves the
   last committed block; the restart re-checks it against the chain on its first tick.
-- Not handled yet: a class upgrade while following the head (class history is read at startup).
+- Class upgrades while live: before each tick's blocks are fetched, one batched `getClassHashAt(to)` per tracked
+  contract; on a change, bisect between the last checked block and `to`, fetch the new ABI, extend the decoder
+  and the key filter, then index. Not every contract emits an upgrade event, so this doesn't rely on one.
+- Restart after downtime: if the last indexed block is inside the window, its hash is checked first and a reorg
+  that happened while stopped is reverted before backfilling (backfill trusts its start block).
 
 ### 6.2 WebSocket (opt-in, when the probe passes)
 
