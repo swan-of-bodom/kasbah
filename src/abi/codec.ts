@@ -98,6 +98,90 @@ const PRIMITIVES: Record<string, Reader> = {
   "()": unit,
 };
 
+/** Encodes one value as felts (calldata). The inverse of `Reader`. */
+export type Writer = (value: unknown, out: string[]) => void;
+
+const toFelt = (v: unknown): bigint => {
+  if (typeof v === "bigint") return v;
+  if (typeof v === "number" && Number.isSafeInteger(v)) return BigInt(v);
+  if (typeof v === "string" && v !== "") return BigInt(v);
+  if (typeof v === "boolean") return v ? 1n : 0n;
+  throw new TypeError(`not a number: ${String(v)}`);
+};
+const hexOf = (v: bigint) => `0x${v.toString(16)}`;
+const W128 = (1n << U128) - 1n;
+
+const wFelt: Writer = (v, out) => {
+  const x = toFelt(v);
+  if (x < 0n || x >= P) throw new TypeError(`${x} is not a felt`);
+  out.push(hexOf(x));
+};
+const wUint = (bits: number): Writer => (v, out) => {
+  const x = toFelt(v);
+  if (x < 0n || x >= 1n << BigInt(bits)) throw new TypeError(`${x} does not fit u${bits}`);
+  out.push(hexOf(x));
+};
+const wInt = (bits: number): Writer => (v, out) => {
+  const x = toFelt(v);
+  const half = 1n << BigInt(bits - 1);
+  if (x < -half || x >= half) throw new TypeError(`${x} does not fit i${bits}`);
+  out.push(hexOf(x < 0n ? P + x : x));
+};
+const wBool: Writer = (v, out) => {
+  if (typeof v !== "boolean") throw new TypeError(`not a boolean: ${String(v)}`);
+  out.push(v ? "0x1" : "0x0");
+};
+const wLimbs = (limbs: number): Writer => (v, out) => {
+  let x = toFelt(v);
+  if (x < 0n || x >= 1n << (U128 * BigInt(limbs))) throw new TypeError(`${x} does not fit ${limbs * 128} bits`);
+  for (let i = 0; i < limbs; i++, x >>= U128) out.push(hexOf(x & W128));
+};
+const wByteArray: Writer = (v, out) => {
+  if (typeof v !== "string") throw new TypeError(`not a string: ${String(v)}`);
+  const bytes = new TextEncoder().encode(v);
+  const full = Math.floor(bytes.length / 31);
+  const word = (from: number, to: number) => {
+    let x = 0n;
+    for (let i = from; i < to; i++) x = (x << 8n) | BigInt(bytes[i]!);
+    return hexOf(x);
+  };
+  out.push(hexOf(BigInt(full)));
+  for (let w = 0; w < full; w++) out.push(word(w * 31, w * 31 + 31));
+  out.push(word(full * 31, bytes.length), hexOf(BigInt(bytes.length - full * 31)));
+};
+const wUnit: Writer = () => {};
+
+const WRITE_PRIMITIVES: Record<string, Writer> = {
+  "core::felt252": wFelt,
+  felt: wFelt,
+  "core::bool": wBool,
+  "core::integer::u8": wUint(8),
+  "core::integer::u16": wUint(16),
+  "core::integer::u32": wUint(32),
+  "core::integer::usize": wUint(32),
+  "core::integer::u64": wUint(64),
+  "core::integer::u128": wUint(128),
+  "core::integer::u256": wLimbs(2),
+  "core::integer::u512": wLimbs(4),
+  "core::integer::i8": wInt(8),
+  "core::integer::i16": wInt(16),
+  "core::integer::i32": wInt(32),
+  "core::integer::i64": wInt(64),
+  "core::integer::i128": wInt(128),
+  "core::starknet::contract_address::ContractAddress": wFelt,
+  "core::starknet::class_hash::ClassHash": wFelt,
+  "core::starknet::storage_access::StorageAddress": wFelt,
+  "core::starknet::eth_address::EthAddress": wUint(160),
+  "core::bytes_31::bytes31": wUint(248),
+  "core::byte_array::ByteArray": wByteArray,
+  "()": wUnit,
+};
+
+const record = (v: unknown, type: string): Record<string, unknown> => {
+  if (typeof v !== "object" || v === null) throw new TypeError(`${type}: expected an object`);
+  return v as Record<string, unknown>;
+};
+
 /** Splits `A, B<C, D>, (E, F)` on top-level commas. */
 export function splitTopLevel(s: string): string[] {
   const parts: string[] = [];
@@ -126,6 +210,7 @@ export class Codec {
   readonly #structs = new Map<string, AbiStruct>();
   readonly #enums = new Map<string, AbiEnum>();
   readonly #readers = new Map<string, Reader>();
+  readonly #writers = new Map<string, Writer>();
 
   constructor(abi: Abi) {
     for (const item of abi) {
@@ -168,6 +253,122 @@ export class Codec {
       }
       return out;
     };
+  }
+
+  writer(type: string): Writer {
+    let w = this.#writers.get(type);
+    if (w === undefined) {
+      // Set before compiling so recursive types resolve to the finished writer.
+      let compiled: Writer | undefined;
+      this.#writers.set(type, (v, out) => compiled!(v, out));
+      compiled = this.#compileWriter(type);
+      w = compiled;
+      this.#writers.set(type, w);
+    }
+    return w;
+  }
+
+  /** Writer for a member list, from an object. Cairo 0 `x_len` is written from the length of `x`. */
+  membersWriter(members: readonly AbiMember[]): Writer {
+    const fields = members.map((m, i) => {
+      const nextMember = members[i + 1];
+      const lengthOf = nextMember !== undefined && nextMember.type.endsWith("*") && m.name === `${nextMember.name}_len` ? nextMember.name : undefined;
+      const pointer = m.type.endsWith("*");
+      return { name: m.name, lengthOf, pointer, write: this.writer(pointer ? m.type.slice(0, -1) : m.type) };
+    });
+    return (v, out) => {
+      const o = record(v, "arguments");
+      for (const f of fields) {
+        if (f.lengthOf !== undefined) {
+          const items = o[f.lengthOf];
+          if (!Array.isArray(items)) throw new TypeError(`${f.lengthOf}: expected an array`);
+          out.push(hexOf(BigInt(items.length)));
+        } else if (f.pointer) {
+          for (const item of o[f.name] as unknown[]) f.write(item, out);
+        } else {
+          if (!(f.name in o)) throw new TypeError(`missing ${f.name}`);
+          f.write(o[f.name], out);
+        }
+      }
+    };
+  }
+
+  #compileWriter(raw: string): Writer {
+    const type = raw.startsWith("@") ? raw.slice(1) : raw;
+    const primitive = WRITE_PRIMITIVES[type];
+    if (primitive !== undefined) return primitive;
+
+    const item = generic(type, "core::array::Array") ?? generic(type, "core::array::Span");
+    if (item !== undefined) {
+      const w = this.writer(item);
+      return (v, out) => {
+        if (!Array.isArray(v)) throw new TypeError(`${type}: expected an array`);
+        out.push(hexOf(BigInt(v.length)));
+        for (const x of v) w(x, out);
+      };
+    }
+    const some = generic(type, "core::option::Option");
+    if (some !== undefined) {
+      const w = this.writer(some);
+      return (v, out) => {
+        if (v === null || v === undefined) out.push("0x1");
+        else {
+          out.push("0x0");
+          w(v, out);
+        }
+      };
+    }
+    const res = generic(type, "core::result::Result");
+    if (res !== undefined) {
+      const [ok, err] = splitTopLevel(res).map((t) => this.writer(t));
+      return (v, out) => {
+        const r = record(v, type);
+        if ("ok" in r) {
+          out.push("0x0");
+          ok!(r.ok, out);
+        } else {
+          out.push("0x1");
+          err!(r.err, out);
+        }
+      };
+    }
+    const nonZero = generic(type, "core::zeroable::NonZero");
+    if (nonZero !== undefined) return this.writer(nonZero);
+    if (type.startsWith("core::internal::bounded_int::BoundedInt::<")) return wFelt;
+
+    if (type.startsWith("(") && type.endsWith(")")) {
+      const parts = splitTopLevel(type.slice(1, -1));
+      const named = parts.length > 0 && parts.every((p) => p.includes(":") && !p.includes("::"));
+      if (named) {
+        return this.membersWriter(parts.map((p) => {
+          const at = p.indexOf(":");
+          return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
+        }));
+      }
+      const items = parts.map((p) => this.writer(p));
+      return (v, out) => {
+        if (!Array.isArray(v) || v.length !== items.length) throw new TypeError(`${type}: expected ${items.length} items`);
+        items.forEach((w, i) => w(v[i], out));
+      };
+    }
+
+    if (type === "Uint256") return wLimbs(2);
+    const struct = this.#structs.get(type);
+    if (struct !== undefined) return this.membersWriter(struct.members);
+
+    const en = this.#enums.get(type);
+    if (en !== undefined) {
+      const variants = new Map(en.variants.map((v, i) => [v.name, { index: i, write: this.writer(v.type) }]));
+      return (v, out) => {
+        const [name, value] = typeof v === "string" ? [v, undefined] : [record(v, type).variant as string, record(v, type).value];
+        const variant = variants.get(name);
+        if (variant === undefined) throw new TypeError(`${type}: no variant ${name}`);
+        out.push(hexOf(BigInt(variant.index)));
+        variant.write(value, out);
+      };
+    }
+
+    throw new TypeError(`unsupported type ${raw}`);
   }
 
   #compile(raw: string): Reader {

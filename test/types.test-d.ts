@@ -57,3 +57,12 @@ if (decoded?.name === "Swapped") {
   void sqrt;
   void token;
 }
+
+// Functions.
+import type { FunctionArgs, FunctionName, FunctionResult } from "../src/index.ts";
+
+assert<Equal<"get_pool_liquidity" extends FunctionName<typeof ekubo> ? true : false, true>>();
+assert<Equal<FunctionArgs<typeof ekubo, "get_pool_liquidity">, { pool_key: PoolKey }>>();
+assert<Equal<FunctionResult<typeof ekubo, "get_pool_liquidity">, bigint>>();
+assert<Equal<FunctionResult<typeof cairo0Pair, "getReserves">, { reserve0: bigint; reserve1: bigint; blockTimestampLast: bigint }>>();
+assert<Equal<FunctionArgs<typeof cairo0Pair, "getReserves">, {}>>();

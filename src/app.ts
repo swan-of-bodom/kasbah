@@ -7,6 +7,7 @@ import { classHistory } from "./abi/history.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import { Api } from "./api/server.ts";
 import { EventCache } from "./cache.ts";
+import { CallClient, type Client } from "./client.ts";
 import { Store, type Db } from "./db/store.ts";
 import { createTableSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
@@ -80,7 +81,8 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
 
 export type Handler<C extends Config, N extends HandlerName<C>> = (arg: {
   event: IndexedEvent<C, N>;
-  context: { db: Db };
+  /** `client` reads contract state at the end of the block being indexed (cached once the block is final). */
+  context: { db: Db; client: Client };
 }) => void | Promise<void>;
 
 export type RunOptions = {
@@ -207,6 +209,10 @@ export function kasbah<const C extends Config>(config: C) {
       // Classes are looked up to the tip when following it: live blocks decode with the class active now.
       const classTo = live ? tip : backfillTo;
       const cache = config.cache ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", [])) : undefined;
+      /** Blocks at or below this can't be reorged: backfill's end, then the head minus the reorg window. */
+      let finalThrough = backfillTo;
+      const client = new CallClient(rpc, { isFinal: (b) => b <= finalThrough, cache });
+      const context = { db: store.db, client };
 
       const handledOf = (name: string) => new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
       const sources = new Sources(
@@ -271,8 +277,9 @@ export function kasbah<const C extends Config>(config: C) {
           transaction: { hash: e.transaction_hash, index: e.transaction_index },
           index: e.event_index,
         };
+        client.current = event.block;
         try {
-          await handler({ event: event as never, context: { db: store.db } });
+          await handler({ event: event as never, context });
         } catch (err) {
           throw new Error(`${w.contract}:${decoded.name} at block ${e.block_number}, tx ${e.transaction_hash}: ${(err as Error).message}`, { cause: err });
         }
@@ -282,8 +289,9 @@ export function kasbah<const C extends Config>(config: C) {
       const fireBlock = async (source: string, block: IndexedBlock["block"]) => {
         const handler = handlers.get(`${source}:block`);
         if (handler === undefined) return;
+        client.current = block;
         try {
-          await handler({ event: { source, block } as never, context: { db: store.db } });
+          await handler({ event: { source, block } as never, context });
         } catch (err) {
           throw new Error(`${source}:block at block ${block.number}: ${(err as Error).message}`, { cause: err });
         }
@@ -418,7 +426,8 @@ export function kasbah<const C extends Config>(config: C) {
         checkpoint = through;
         if (signal.aborted) return;
         const c = cache?.stats;
-        log(`backfill done: ${indexed} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}`);
+        const calls = client.stats.calls + client.stats.cached;
+        log(`backfill done: ${indexed} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}${calls === 0 ? "" : `, ${calls} contract reads (${client.stats.cached} cached)`}`);
       }
       if (!live) return;
 
@@ -466,12 +475,14 @@ export function kasbah<const C extends Config>(config: C) {
         pollMs: config.pollMs ?? 2_000,
         prepare,
         onBlock: async (block) => {
+          finalThrough = Math.max(finalThrough, block.number - window);
           for (const e of block.events) await handle(e);
           for (const b of blockSources) if (firesAt(b, block.number)) await fireBlock(b.name, { number: block.number, hash: block.hash, timestamp: block.timestamp });
           const prune = block.number - window;
           const children = newChildren.get(block.number) ?? [];
           await transaction(async (tx) => {
             await store.flush(tx, block.number);
+            await cache?.persist(tx, -1);
             for (const c of children) await tx.query(`INSERT INTO _kasbah_children VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [c.address, c.contract, block.number]);
             for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, block.number);
             await saveHash(tx, block);

@@ -46,6 +46,8 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE TABLE IF NOT EXISTS ${s}.events (block integer NOT NULL, tx integer NOT NULL, idx integer NOT NULL, address bytea NOT NULL,
      selector bytea NOT NULL, block_hash bytea NOT NULL, tx_hash bytea NOT NULL, keys bytea NOT NULL, data bytea NOT NULL, PRIMARY KEY (block, tx, idx))`,
   `CREATE TABLE IF NOT EXISTS ${s}.coverage (address bytea NOT NULL, selector bytea NOT NULL, ranges int8multirange NOT NULL, PRIMARY KEY (address, selector))`,
+  `CREATE TABLE IF NOT EXISTS ${s}.calls (address bytea NOT NULL, entrypoint bytea NOT NULL, calldata bytea NOT NULL, block integer NOT NULL,
+     result bytea NOT NULL, PRIMARY KEY (address, entrypoint, calldata, block))`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
 ];
 
@@ -63,6 +65,7 @@ export class EventCache {
   #pending: EmittedEvent[] = [];
   #pendingFrom: number | undefined;
   #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
+  #calls: { address: Buffer; entrypoint: Buffer; calldata: Buffer; block: number; result: Buffer }[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
 
   private constructor(pool: pg.Pool, schema: string) {
@@ -152,8 +155,30 @@ export class EventCache {
     this.stats.fetchedEvents += events.length;
   }
 
-  /** Writes the tracked events and marks `[from, through]` covered, inside the caller's transaction. */
+  /** A cached `starknet_call` result at a final block. */
+  async getCall(address: string, entrypoint: string, calldata: string[], block: number): Promise<string[] | undefined> {
+    const { rows } = await this.#pool.query<{ result: string }>(
+      `SELECT encode(result, 'hex') AS result FROM ${this.#schema}.calls WHERE address = $1 AND entrypoint = $2 AND calldata = $3 AND block = $4`,
+      [hexBytes(address), hexBytes(entrypoint), packFelts(calldata), block],
+    );
+    return rows[0] === undefined ? undefined : unpackHex(rows[0].result);
+  }
+
+  /** Keeps a call result until the next `persist`. */
+  rememberCall(address: string, entrypoint: string, calldata: string[], block: number, result: string[]) {
+    this.#calls.push({ address: hexBytes(address), entrypoint: hexBytes(entrypoint), calldata: packFelts(calldata), block, result: packFelts(result) });
+  }
+
+  /** Writes the tracked events and calls, and marks `[from, through]` covered, inside the caller's transaction. */
   async persist(tx: pg.PoolClient, through: number) {
+    if (this.#calls.length > 0) {
+      const c = this.#calls;
+      this.#calls = [];
+      await tx.query(
+        `INSERT INTO ${this.#schema}.calls SELECT * FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::int[], $5::bytea[]) ON CONFLICT DO NOTHING`,
+        [c.map((x) => x.address), c.map((x) => x.entrypoint), c.map((x) => x.calldata), c.map((x) => x.block), c.map((x) => x.result)],
+      );
+    }
     const from = this.#pendingFrom;
     const pairs = this.#pendingPairs;
     if (from === undefined || pairs === undefined || through < from) return;

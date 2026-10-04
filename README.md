@@ -13,7 +13,8 @@ cache and the read API.
 - `src/sync/fetch.ts`: backfill as an ordered event stream with a memory cap; `src/sync/live.ts`: head following
   with reorg detection.
 - `src/sources.ts`: watched addresses, their classes and decoders, factory children.
-- `src/cache.ts`: raw-event cache with coverage per (address, selector).
+- `src/cache.ts`: raw-event cache with coverage per (address, selector), and cached call results.
+- `src/client.ts`: `context.client`, contract reads pinned to the block being indexed.
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window.
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status` (config `api: { port }`).
 - `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`.

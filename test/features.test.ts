@@ -14,6 +14,7 @@ const UPGRADE_AT = 350;
 const factoryAbi = [
   { type: "event", name: "f::Created", kind: "struct", members: [{ name: "pool", type: "core::starknet::contract_address::ContractAddress", kind: "data" }] },
   { type: "event", name: "f::Event", kind: "enum", variants: [{ name: "Created", type: "f::Created", kind: "nested" }] },
+  { type: "function", name: "last_child", inputs: [], outputs: [{ type: "core::starknet::contract_address::ContractAddress" }], state_mutability: "view" },
 ] as const;
 const amount = { name: "amount", type: "core::integer::u128", kind: "data" } as const;
 const childA = [
@@ -27,7 +28,7 @@ const childB = [
 ] as const;
 
 const pools = pgTable("pools", { address: text().primaryKey(), total: bignum().notNull(), events: integer().notNull(), created: integer().notNull() });
-const ticks = pgTable("ticks", { block: integer().primaryKey(), timestamp: integer().notNull() });
+const ticks = pgTable("ticks", { block: integer().primaryKey(), timestamp: integer().notNull(), last: text().notNull() });
 
 type Block = { number: number; hash: string; parent: string; events: EmittedEvent[]; created: string[] };
 
@@ -107,6 +108,13 @@ function fakeNode() {
         const created = createdAt.get(a);
         if (created === undefined || n < created) throw { code: 20, message: "Contract not found" };
         return a === upgraded && n >= UPGRADE_AT ? "0xcb" : "0xca";
+      }
+      case "starknet_call": {
+        const id = params.block_id;
+        const b = id.block_hash !== undefined ? blocks.find((x) => x.hash === id.block_hash) : blocks[id.block_number];
+        if (b === undefined) throw notFound;
+        if (BigInt(params.request.contract_address) !== BigInt(FACTORY) || params.request.entry_point_selector !== selector("last_child")) throw { code: 21, message: "Entrypoint not found" };
+        return [blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0"];
       }
       case "starknet_getClass":
         return { abi: JSON.stringify(params.class_hash === "0xfa" ? factoryAbi : params.class_hash === "0xca" ? childA : childB) };
@@ -189,7 +197,8 @@ function app(schema: string, cache = false) {
     await context.db.update(pools, { address: event.address }).set((r) => ({ total: r.total * 2n, events: r.events + 1 }));
   });
   a.on("Every10:block", async ({ event, context }) => {
-    await context.db.insert(ticks).values({ block: event.block.number, timestamp: event.block.timestamp });
+    const last = await context.client.read({ abi: factoryAbi, address: FACTORY, functionName: "last_child" });
+    await context.db.insert(ticks).values({ block: event.block.number, timestamp: event.block.timestamp, last });
   });
   return a;
 }
@@ -233,12 +242,13 @@ function expected(to: number) {
   }
   return {
     pools: [...totals].map(([address, t]) => ({ address, total: t.total.toString(), events: t.events, created: t.created })).sort((x, y) => x.address.localeCompare(y.address)),
-    ticks: node.blocks.slice(0, to + 1).filter((b) => b.number % 10 === 0).map((b) => ({ block: b.number, timestamp: 1_000 + b.number * 2 })),
+    ticks: node.blocks.slice(0, to + 1).filter((b) => b.number % 10 === 0)
+      .map((b) => ({ block: b.number, timestamp: 1_000 + b.number * 2, last: `0x${BigInt(node.blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0").toString(16).padStart(64, "0")}` })),
   };
 }
 const actual = async (schema: string) => ({
   pools: await query(`SELECT address, total::text, events, created FROM ${schema}.pools ORDER BY address COLLATE "C"`),
-  ticks: await query(`SELECT block, timestamp FROM ${schema}.ticks ORDER BY block`),
+  ticks: await query(`SELECT block, timestamp, last FROM ${schema}.ticks ORDER BY block`),
 });
 
 test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade through the state diff", async () => {
@@ -254,7 +264,7 @@ test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade
     if (i % 10 === 0) await new Promise((r) => setTimeout(r, 10));
     if (i % 50 === 49) {
       await caughtUp();
-      node.reorg(3 + (i % 4));
+      node.reorg(8 + (i % 4));
       await caughtUp();
     }
   }
@@ -288,11 +298,13 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
 
   const before = node.calls.get("starknet_getEvents") ?? 0;
   const headersBefore = node.calls.get("starknet_getBlockWithTxHashes") ?? 0;
+  const callsBefore = node.calls.get("starknet_call") ?? 0;
   const logs: string[] = [];
   await app(schema, true).run({ reset: true, to, log: (l) => logs.push(l) });
   expect(await actual(schema)).toEqual(expected(to));
   expect(node.calls.get("starknet_getEvents")).toBe(before);
   expect(node.calls.get("starknet_getBlockWithTxHashes")).toBe(headersBefore);
+  expect(node.calls.get("starknet_call")).toBe(callsBefore);
   expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
 
   // Past the cached range, only the new blocks are fetched.

@@ -322,10 +322,18 @@ unknown. So a "latest ABI only" indexer loses data without any error.
   ≈24 GB). Indexing from RPC while writing the cache 232 s; re-index from the cache 132 s, zero `getEvents`.
   Possible later: block hashes and addresses as ids instead of 32 bytes per row.
 
-**Call cache** (`context.call`, the readContract equivalent): key = `(block, address, selector, calldata)`,
+**Call cache** (`context.client`, the readContract equivalent): key = `(block, address, selector, calldata)`,
 immutable once the block is final. Ponder never prunes its `eth_call` cache, which is where your 38 GB came from.
-Here: per-call `cache: "block" | "latest" | "none"`, an explicit size cap with oldest-first pruning, and
-`indexer prune` as a command.
+Built (`src/client.ts`, `src/abi/functions.ts`):
+- `context.client.read({ abi, address, functionName, args, block? })`, typed from the ABI (arguments as an object
+  keyed by input name; result: one Cairo 1 output as its value, several as a tuple, Cairo 0 named outputs as an
+  object). `client.call` for raw calldata. Default block: the one being indexed, state at its end.
+- Final blocks: cached in memory (100k results, oldest dropped) and, with `cache: true`, in the cache schema's
+  `calls` table, written in the commit transactions. Recent blocks: never cached, and pinned by block hash so a
+  lagging or reorged node can't answer for another block at that height.
+- Checked on mainnet: Ekubo `get_pool_liquidity` / `get_pool_price` at block 700k equal what the indexer computed
+  from events up to that block.
+- Not yet: a size cap on the `calls` table, a `prune` command, and batching reads made in parallel by a handler.
 
 ## 10. What we drop from Ponder, with its size
 

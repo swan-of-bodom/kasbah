@@ -146,3 +146,25 @@ export type EventArgs<TAbi extends Abi, N extends EventName<TAbi>> =
 export type DecodedEvent<TAbi extends Abi> = EventName<TAbi> extends infer N
   ? N extends EventName<TAbi> ? { name: N; args: EventArgs<TAbi, N> } : never
   : never;
+
+// Functions, mirroring functions.ts.
+
+type FunctionItem<TAbi extends Abi> =
+  | Extract<TAbi[number], { type: "function" }>
+  | (Extract<TAbi[number], { type: "interface" }> extends infer I ? I extends { items: readonly (infer F)[] } ? Extract<F, { type: "function" }> : never : never);
+
+/** Names of every function in the ABI, interfaces included. */
+export type FunctionName<TAbi extends Abi> = FunctionItem<TAbi> extends infer F ? F extends { name: infer N extends string } ? N : never : never;
+
+/** Arguments of a function, as an object keyed by input name. */
+export type FunctionArgs<TAbi extends Abi, N extends string> =
+  Extract<FunctionItem<TAbi>, { name: N }> extends { inputs: infer I extends readonly AbiMember[] } ? MembersOf<TAbi, I> : never;
+
+/** What a call returns: Cairo 0 named outputs as an object, one Cairo 1 output as its value, several as a tuple. */
+export type FunctionResult<TAbi extends Abi, N extends string> =
+  Extract<FunctionItem<TAbi>, { name: N }> extends { outputs: infer O extends readonly { type: string }[] }
+    ? O extends readonly [] ? undefined
+    : O[number] extends { name: string } ? MembersOf<TAbi, O & readonly AbiMember[]>
+    : O extends readonly [{ type: infer T extends string }] ? TypeOf<TAbi, T>
+    : { [I in keyof O]: O[I] extends { type: infer T extends string } ? TypeOf<TAbi, T> : never }
+    : never;
