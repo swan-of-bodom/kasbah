@@ -19,8 +19,8 @@ export type FollowOptions = {
   maxBlocks?: number;
   signal: AbortSignal;
   onBlock: (block: LiveBlock) => Promise<void>;
-  /** Runs before blocks up to `to` are fetched and indexed (the caller may change `keys` in place). */
-  prepare?: (to: number) => Promise<void>;
+  /** Runs before blocks `from..to` are fetched and indexed (the caller may change `address` and `keys` in place). */
+  prepare?: (from: number, to: number) => Promise<void>;
   /** Called with the newest block both chains share; everything after it must be undone. */
   onReorg: (ancestor: BlockRef) => Promise<void>;
   log?: (line: string) => void;
@@ -44,6 +44,8 @@ const sleep = (ms: number, signal: AbortSignal) =>
 const lagging = (e: unknown) => e instanceof RpcError && e.code === BLOCK_NOT_FOUND;
 
 async function eventsIn(o: FollowOptions, from: number, to: number): Promise<EmittedEvent[]> {
+  // An empty address or key list would match every event on the chain.
+  if ((Array.isArray(o.address) && o.address.length === 0) || (o.keys !== undefined && o.keys[0]?.length === 0)) return [];
   const filter = { from_block: { block_number: from }, to_block: { block_number: to }, address: o.address, keys: o.keys };
   const out: EmittedEvent[] = [];
   let token: string | undefined;
@@ -83,7 +85,7 @@ export async function follow(o: FollowOptions): Promise<void> {
     const from = Math.min(head.number + 1, tip.block_number);
     const to = Math.min(tip.block_number, head.number + maxBlocks);
     const numbers = Array.from({ length: to - from + 1 }, (_, i) => from + i);
-    await o.prepare?.(to);
+    await o.prepare?.(from, to);
     const [headers, events] = await Promise.all([getHeaders(o.rpc, numbers, 100), eventsIn(o, from, to)]);
 
     const first = headers[0]!;

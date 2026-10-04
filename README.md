@@ -4,13 +4,16 @@ A minimal, fast Starknet indexer in TypeScript. Design and decisions: [DESIGN.md
 
 ## Status
 
-Steps 0, 1, 2, 4 and 5 of the build order (DESIGN §11): backfill, head following and the read API end to end.
+Steps 0–5 of the build order (DESIGN §11): backfill, head following, factories, block handlers, the raw-event
+cache and the read API.
 
 - `src/abi/`: ABI model, event decoder and types for Cairo 0 and Cairo 1; class history, so each event decodes with
   the class its contract had at that block.
 - `src/rpc/`: JSON-RPC client (adaptive concurrency, retries, zstd), endpoint probe.
 - `src/sync/fetch.ts`: backfill as an ordered event stream with a memory cap; `src/sync/live.ts`: head following
   with reorg detection.
+- `src/sources.ts`: watched addresses, their classes and decoders, factory children.
+- `src/cache.ts`: raw-event cache with coverage per (address, selector).
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window.
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status` (config `api: { port }`).
 - `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`.

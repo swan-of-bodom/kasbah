@@ -45,9 +45,14 @@ export async function classHistory(rpc: RpcClient, address: string, from: number
   return [...start, ...changes.sort((a, b) => a.from - b.from)];
 }
 
-/** Decodes each event with the ABI of the class the contract had at that event's block. */
-export function createHistoricalDecoder(spans: (ClassSpan & { abi: Abi })[]) {
-  const decoders = spans.map((s) => ({ from: s.from, decode: createDecoder(s.abi) }));
+export type Decode = (keys: readonly string[], data: readonly string[]) => DecodedEvent<Abi> | undefined;
+
+/**
+ * Decodes each event with the ABI of the class the contract had at that event's block. `decoderFor` lets contracts
+ * that share classes (factory children) share decoders.
+ */
+export function createHistoricalDecoder(spans: (ClassSpan & { abi: Abi })[], decoderFor: (abi: Abi) => Decode = createDecoder) {
+  const decoders = spans.map((s) => ({ from: s.from, decode: decoderFor(s.abi) }));
   return (block: number, keys: readonly string[], data: readonly string[]): DecodedEvent<Abi> | undefined => {
     let lo = 0;
     let hi = decoders.length - 1;

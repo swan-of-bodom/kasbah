@@ -6,6 +6,8 @@ import { fetchEvents } from "../src/sync/fetch.ts";
 /** A Pathfinder-like node: pages of `chunk` events, at most `scanLimit` blocks per call, token `"<block>-<matched skipped>"`. */
 function fakeNode(events: EmittedEvent[], scanLimit: number) {
   let calls = 0;
+  const byBlock = new Map<number, EmittedEvent[]>();
+  for (const e of events) byBlock.set(e.block_number!, [...(byBlock.get(e.block_number!) ?? []), e]);
   const rpc = {
     async request(_method: string, params: { filter: EventFilter & { chunk_size: number; continuation_token?: string } }) {
       calls++;
@@ -19,7 +21,7 @@ function fakeNode(events: EmittedEvent[], scanLimit: number) {
       const scanEnd = Math.min(to, block + scanLimit - 1);
       const out: EmittedEvent[] = [];
       for (let b = block; b <= scanEnd; b++) {
-        const inBlock = events.filter((e) => e.block_number === b).slice(b === block ? skip : 0);
+        const inBlock = (byBlock.get(b) ?? []).slice(b === block ? skip : 0);
         for (const [i, e] of inBlock.entries()) {
           if (out.length === f.chunk_size) {
             const done = (b === block ? skip : 0) + i;

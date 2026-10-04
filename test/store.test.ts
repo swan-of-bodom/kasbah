@@ -20,8 +20,7 @@ let pool: pg.Pool;
 
 beforeAll(async () => {
   if (url === undefined) return;
-  pool = new pg.Pool({ connectionString: url, max: 4 });
-  pool.on("connect", (c) => void c.query(`SET search_path TO ${schema}`));
+  pool = new pg.Pool({ connectionString: url, max: 4, options: `-c search_path=${schema}` });
   await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; CREATE SCHEMA ${schema}`);
 });
 

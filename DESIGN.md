@@ -122,6 +122,17 @@ later interval missing if any factory interval is missing; the pre-pass removes 
 During live following, a new child is added at its block, and child events from that same block are fetched in
 the same step.
 
+Built (`src/sources.ts`, config `factory: { address, abi, event, parameter }`):
+- Pre-pass over the factory's events up to the backfill end; children stored in `_kasbah_children` with their
+  creation block, and `discovered:<contract>` in `_kasbah_meta`, so a restart only scans what's new.
+- A child's classes: probed at its creation block and at the tip, bisected only if they differ (2 calls per child
+  instead of a full history). Children with the same class share one decoder.
+- Live: each tick first reads the factory's events for the tick's blocks, adds the children, then fetches child
+  events with them included. A reorg forgets children created after the ancestor (memory and table).
+- Class checks while live: up to 100 addresses, one batched `getClassHashAt` per tick; above, each block's
+  `getStateUpdate` and its `replaced_classes` (one call per block, whatever the number of contracts).
+- Not yet: splitting address lists above a few thousand (§5.1).
+
 ### 5.3 Class-hash factories (later)
 
 `getStateUpdate(block).state_diff.deployed_contracts` lists every deployment with its class hash, including
@@ -295,13 +306,21 @@ unknown. So a "latest ABI only" indexer loses data without any error.
 
 ## 9. Storage and caches
 
-**Raw-event cache** (for re-index without RPC), schema `cache`:
-- `events(block_number int8, tx_index int4, event_index int4, from_address bytea, keys bytea[], data bytea[],
-  tx_hash bytea)`, primary key = the three ints. Felts as bytea (about half the size of hex text).
-- `headers(block_number, block_hash, parent_hash, timestamp)` for blocks with events only.
+**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, opt-in (`cache: true`) (`src/cache.ts`):
+- `events(block, tx, idx, address, selector, block_hash, tx_hash, keys, data)`, primary key = the three ints.
+  `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
+  small numbers).
+- `headers(block, hash, parent, timestamp)` for the blocks whose headers were fetched (block handlers).
 - `coverage(address, selector, ranges int8multirange)`: which (address, selector) pairs are complete for which
   blocks. Ponder's fragment idea, without its EVM topic cross-products.
 - Only data below the safety window is cached, so the cache never needs reorg handling.
+- A backfill reads the prefix of its range that every (address, selector) pair covers from the cache, then fetches
+  the rest; fetched events and coverage are written in the same transaction as the app's checkpoint.
+- Reads page by position (`LIMIT` 50k, a batch never ends inside a block) and get hex text from Postgres
+  (`encode(.., 'hex')`), skipping the Buffer round trip.
+- Measured, Ekubo to block 700k (7.68M events): 3.3 GB (≈430 bytes per event; full history would be
+  ≈24 GB). Indexing from RPC while writing the cache 232 s; re-index from the cache 132 s, zero `getEvents`.
+  Possible later: block hashes and addresses as ids instead of 32 bytes per row.
 
 **Call cache** (`context.call`, the readContract equivalent): key = `(block, address, selector, calldata)`,
 immutable once the block is final. Ponder never prunes its `eth_call` cache, which is where your 38 GB came from.
@@ -334,6 +353,9 @@ Target size: under 10k lines for v1.
 2. Decoder, config, schema, handlers, buffered store with COPY. Backfill end to end.
    Done.
 3. Raw-event cache + coverage; re-index with zero RPC calls. (Moved after 5: a full Ekubo refetch costs $0.57.)
+   Done, with factories (§5.2) and block-interval handlers: config `blocks: { Name: { interval,
+   startBlock, endBlock? } }`, handler `"Name:block"` with the block's number, hash and timestamp, run after that
+   block's events; headers are fetched only for the blocks it fires on.
 4. Live polling, undo journal, crash recovery. Done.
 5. Read API. Done (`src/api/`):
    - `POST /sql` `{ sql, params }` → `{ columns, rows }`. Runs as `<schema>_reader`, a login role kasbah creates
