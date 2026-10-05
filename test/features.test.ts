@@ -2,6 +2,7 @@ import { createServer, type Server } from "node:http";
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { WebSocketServer } from "ws";
 import { selector } from "../src/abi/selector.ts";
 import { bignum, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
@@ -175,7 +176,7 @@ afterAll(async () => {
   await p.end();
 });
 
-function app(schema: string, cache = false) {
+function app(schema: string, cache = false, extra: { ws?: string; pollMs?: number } = {}) {
   const a = kasbah({
     rpc: rpcUrl,
     database: url!,
@@ -187,6 +188,7 @@ function app(schema: string, cache = false) {
     pollMs: 5,
     concurrency: 4,
     cache,
+    ...extra,
   });
   a.on("Pool:Counted", async ({ event, context }) => {
     const v = event.args.amount;
@@ -311,3 +313,32 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
   await app(schema, true).run({ to: node.blocks.length - 1, log: () => {} });
   expect(await actual(schema)).toEqual(expected(node.blocks.length - 1));
 }, 120_000);
+
+test.skipIf(url === undefined)("with a head subscription, new blocks are indexed without waiting for the poll", async () => {
+  const schema = "kasbah_test_features";
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((r) => wss.on("listening", r));
+  wss.on("connection", (s) => s.on("message", (m) => s.send(JSON.stringify({ jsonrpc: "2.0", id: JSON.parse(String(m)).id, result: "0x7" }))));
+  const announce = () => {
+    for (const s of wss.clients) s.send(JSON.stringify({ jsonrpc: "2.0", method: "starknet_subscriptionNewHeads", params: { subscription_id: "0x7", result: {} } }));
+  };
+  const stop = new AbortController();
+  const logs: string[] = [];
+  const run = app(schema, false, { ws: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, pollMs: 60_000 }).run({ signal: stop.signal, log: (l) => logs.push(l) });
+  try {
+    await until(async () => (await checkpoint(schema)) === node.blocks.length - 1);
+    for (let i = 0; i < 5; i++) {
+      node.add();
+      const started = Date.now();
+      announce();
+      await until(async () => (await checkpoint(schema)) === node.blocks.length - 1, 5_000);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    }
+  } finally {
+    stop.abort();
+    await run;
+    wss.close();
+  }
+  expect(await actual(schema)).toEqual(expected(node.blocks.length - 1));
+  expect(logs).toContain("WebSocket: following new heads");
+}, 60_000);

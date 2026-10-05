@@ -15,6 +15,7 @@ import { blockNumber, type EmittedEvent, getEvents, getHeaders } from "./rpc/met
 import { probe } from "./rpc/probe.ts";
 import { canonical, type FactorySource, factoryReader, Sources } from "./sources.ts";
 import { type Batch, eventStream } from "./sync/fetch.ts";
+import { HeadSubscription } from "./sync/heads.ts";
 import { type BlockRef, findAncestor, follow } from "./sync/live.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
@@ -39,6 +40,11 @@ export type Config = {
   reorgWindow?: number;
   /** Head polling interval. Default 2 s. */
   pollMs?: number;
+  /**
+   * WebSocket endpoint for `starknet_subscribeNewHeads` (`true`: the `rpc` URL with `ws` for `http`). Heads only
+   * wake the follower, which then fetches as when polling; while the socket is down it polls every `pollMs`.
+   */
+  ws?: string | true;
   /** Serve the read API (SQL over HTTP, GraphQL) while indexing. */
   api?: { port: number; host?: string; readDatabase?: string };
   /** Keep final raw events in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches nothing. */
@@ -160,6 +166,7 @@ export function kasbah<const C extends Config>(config: C) {
       q.query(`INSERT INTO _kasbah_blocks VALUES ($1, $2) ON CONFLICT (number) DO UPDATE SET hash = EXCLUDED.hash`, [block.number, block.hash]);
 
     let api: Api | undefined;
+    let heads: HeadSubscription | undefined;
     try {
       const buildId = createHash("sha256")
         .update(JSON.stringify({
@@ -470,9 +477,17 @@ export function kasbah<const C extends Config>(config: C) {
         await sources.checkClasses(from, to);
       };
 
+      const pollMs = config.pollMs ?? 2_000;
+      if (config.ws !== undefined) {
+        heads = new HeadSubscription(config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws, log);
+        log("WebSocket: following new heads");
+      }
+      const h = heads;
       await follow({
         rpc, address: sources.addresses, keys: sources.keys, chunkSize: endpoint.maxChunk, head, known, signal, log,
-        pollMs: config.pollMs ?? 2_000,
+        pollMs,
+        // With a socket up, a missed head costs at most 15 s; without, poll as usual.
+        wait: h === undefined ? undefined : (signal) => h.wait(h.healthy ? Math.max(pollMs, 15_000) : pollMs, signal),
         prepare,
         onBlock: async (block) => {
           finalThrough = Math.max(finalThrough, block.number - window);
@@ -494,12 +509,14 @@ export function kasbah<const C extends Config>(config: C) {
           known.set(block.number, block.hash);
           for (const n of known.keys()) if (n < prune) known.delete(n);
           if (block.events.length > 0 || children.length > 0) {
-            log(`block ${block.number}: ${block.events.length} events${children.length > 0 ? `, ${children.length} new children` : ""}`);
+            const behind = Date.now() / 1000 - block.timestamp;
+            log(`block ${block.number}: ${block.events.length} events${children.length > 0 ? `, ${children.length} new children` : ""}, ${behind.toFixed(1)}s after its timestamp`);
           }
         },
         onReorg: revert,
       });
     } finally {
+      heads?.close();
       await api?.close();
       await pool.end();
     }

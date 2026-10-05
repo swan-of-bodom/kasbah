@@ -23,8 +23,10 @@
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
+    "@types/ws": "^8.18.2",
     "starknet": "^10.8.0",
     "typescript": "^5.9.0",
-    "vitest": "^4.0.0"
+    "vitest": "^4.0.0",
+    "ws": "^8.22.0"
   }
 }

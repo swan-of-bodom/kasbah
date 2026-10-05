@@ -24,6 +24,8 @@ export type FollowOptions = {
   /** Called with the newest block both chains share; everything after it must be undone. */
   onReorg: (ancestor: BlockRef) => Promise<void>;
   log?: (line: string) => void;
+  /** Waits between ticks that found nothing new (a head subscription); default: sleep `pollMs`. */
+  wait?: (signal: AbortSignal) => Promise<void>;
 };
 
 const BLOCK_NOT_FOUND = 24;
@@ -126,6 +128,6 @@ export async function follow(o: FollowOptions): Promise<void> {
       if (!lagging(e)) throw e;
       progressed = false;
     }
-    if (!progressed) await sleep(o.pollMs, o.signal);
+    if (!progressed) await (o.wait?.(o.signal) ?? sleep(o.pollMs, o.signal));
   }
 }

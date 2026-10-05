@@ -182,12 +182,17 @@ Built (`src/sync/live.ts`). What a tick does when the answers don't agree:
 - Restart after downtime: if the last indexed block is inside the window, its hash is checked first and a reorg
   that happened while stopped is reverted before backfilling (backfill trusts its start block).
 
-### 6.2 WebSocket (opt-in, when the probe passes)
+### 6.2 WebSocket (opt-in)
 
-`subscribeNewHeads` for tip and headers (no polling), then `getEvents` by block hash for each head. Not
-`subscribeEvents`: it would need a resubscribe for every new factory child. Handle `starknet_subscriptionReorg`.
-Read the socket in a tight loop and queue work (Pathfinder drops a client that doesn't read within 1 s). On
-reconnect, fill gaps with `getEvents` (WS backfill is capped at 1,024 blocks).
+Built (`src/sync/heads.ts`, config `ws: url | true`): `subscribeNewHeads` only wakes the follower,
+which then does exactly what a poll does (tip, headers, parent-hash links, `getEvents`). So a dropped, silent or
+lying socket can make it slower, never wrong. Reorg notices also just wake it. While the socket is up the
+fallback poll is every max(`pollMs`, 15 s); while it's down, every `pollMs`, reconnecting with backoff (0.5 s to
+30 s). A refused subscription logs once and stays on polling. Not `subscribeEvents`: it would need a resubscribe
+for every new factory child, and its backfill is capped at 1,024 blocks.
+
+Measured on Alchemy (which serves it fine): heads arrive ≈3 s after the block's timestamp. Ekubo
+live, steady state, time from block timestamp to committed: polling every 2 s ≈5.4 s, WebSocket ≈4.5 s.
 
 ### 6.3 Pre-confirmed overlay (later)
 

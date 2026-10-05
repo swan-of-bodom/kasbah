@@ -1,5 +1,5 @@
 // Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
-//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--reset]
+//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--ws] [--reset]
 // Without --to it backfills, then follows the head until Ctrl-C.
 import { parseArgs } from "node:util";
 import { createConfig, kasbah } from "../../src/index.ts";
@@ -7,7 +7,7 @@ import abi from "./abi.ts";
 import { pools } from "./schema.ts";
 
 const { values } = parseArgs({
-  options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, reset: { type: "boolean" } },
+  options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, ws: { type: "boolean" }, reset: { type: "boolean" } },
 });
 
 const config = createConfig({
@@ -20,6 +20,7 @@ const config = createConfig({
   tables: { pools },
   ...(values.port === undefined ? {} : { api: { port: Number(values.port) } }),
   cache: values.cache ?? false,
+  ...(values.ws ? { ws: true as const } : {}),
 });
 
 const app = kasbah(config);
