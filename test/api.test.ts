@@ -125,3 +125,75 @@ test.skipIf(url === undefined)("GraphQL: bad input is a client error, not an int
   expect((await gql(`{ nothing }`)).errors[0].message).toMatch(/Cannot query field/);
   expect((await gql(`{ _meta { checkpoint phase } }`)).data._meta).toEqual({ checkpoint: 42, phase: "live" });
 });
+
+/** Reads server-sent events from `/live` until `count` arrive. */
+async function live(query: string, count: number, during: () => Promise<void>) {
+  const controller = new AbortController();
+  const r = await fetch(`${base}/live?${query}`, { signal: controller.signal });
+  expect(r.status).toBe(200);
+  const reader = r.body!.getReader();
+  const events: { event: string; data: any }[] = [];
+  let buffer = "";
+  const timer = setTimeout(() => controller.abort(), 4_000);
+  void during();
+  while (events.length < count) {
+    const { value, done } = await reader.read().catch(() => ({ value: undefined, done: true as const }));
+    if (done) break;
+    buffer += new TextDecoder().decode(value);
+    let at: number;
+    while ((at = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, at);
+      buffer = buffer.slice(at + 2);
+      const event = /^event: (.*)$/m.exec(block)?.[1];
+      const data = /^data: (.*)$/m.exec(block)?.[1];
+      if (event !== undefined) events.push({ event, data: JSON.parse(data!) });
+    }
+  }
+  clearTimeout(timer);
+  controller.abort();
+  return events;
+}
+
+/** A commit the way the indexer makes one: change rows, notify in the same transaction. */
+async function commit(sql: string, checkpoint: number) {
+  const owner = new pg.Pool({ connectionString: url, max: 1 });
+  const c = await owner.connect();
+  await c.query(`BEGIN; SET LOCAL search_path TO ${schema}`);
+  await c.query(sql);
+  await c.query(`SELECT pg_notify($1, $2)`, [`kasbah_${schema}`, JSON.stringify({ checkpoint })]);
+  await c.query("COMMIT");
+  c.release();
+  await owner.end();
+}
+
+test.skipIf(url === undefined)("live SQL: the result now, then again only when a commit changed it", async () => {
+  const events = await live(`sql=${encodeURIComponent("select id, swaps from pools where id = $1")}&params=${encodeURIComponent('["p01"]')}`, 4, async () => {
+    await commit(`UPDATE pools SET note = 'other column' WHERE id = 'p01'`, 43);
+    await commit(`UPDATE pools SET swaps = 100 WHERE id = 'p01'`, 44);
+  });
+  expect(events).toEqual([
+    { event: "result", data: { columns: ["id", "swaps"], rows: [["p01", 2]] } },
+    { event: "checkpoint", data: { checkpoint: 43 } },
+    { event: "checkpoint", data: { checkpoint: 44 } },
+    { event: "result", data: { columns: ["id", "swaps"], rows: [["p01", 100]] } },
+  ]);
+});
+
+test.skipIf(url === undefined)("live GraphQL, and a bad live query is a plain 400", async () => {
+  const events = await live(`query=${encodeURIComponent('{ pool(id: "p02") { swaps } }')}`, 3, async () => {
+    await commit(`UPDATE pools SET swaps = 7 WHERE id = 'p02'`, 45);
+  });
+  expect(events.filter((e) => e.event === "result").map((e) => e.data)).toEqual([{ data: { pool: { swaps: 4 } } }, { data: { pool: { swaps: 7 } } }]);
+  const bad = await fetch(`${base}/live?sql=${encodeURIComponent("delete from pools")}`);
+  expect(bad.status).toBe(400);
+  expect((await fetch(`${base}/live?sql=x&params=nope`)).status).toBe(400);
+});
+
+test.skipIf(url === undefined)("a reader can't notify live clients itself", async () => {
+  // The spoofed notification would arrive before the real one.
+  const events = await live("", 1, async () => {
+    await post("/sql", { sql: `select pg_notify('kasbah_${schema}', '{"checkpoint": 999}')` });
+    await commit(`SELECT 1`, 46);
+  });
+  expect(events).toEqual([{ event: "checkpoint", data: { checkpoint: 46 } }]);
+});

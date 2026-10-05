@@ -44,12 +44,14 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
  */
 export class Reader {
   readonly #pool: pg.Pool;
+  readonly #url: string;
   readonly #schema: string;
   readonly timeoutMs: number;
   readonly maxRows: number;
 
-  private constructor(pool: pg.Pool, o: ReaderOptions) {
-    this.#pool = pool;
+  private constructor(url: string, o: ReaderOptions) {
+    this.#url = url;
+    this.#pool = new pg.Pool({ connectionString: url, max: 8 });
     this.#schema = o.schema;
     this.timeoutMs = o.timeoutMs ?? 10_000;
     this.maxRows = o.maxRows ?? 10_000;
@@ -78,7 +80,7 @@ export class Reader {
     } finally {
       await owner.end();
     }
-    return new Reader(new pg.Pool({ connectionString: url, max: 8 }), o);
+    return new Reader(url, o);
   }
 
   /** Runs `body` in a read-only transaction on the app's schema, then rolls it back. */
@@ -112,6 +114,32 @@ export class Reader {
     );
     if (result.rows.length > this.maxRows) throw new QueryError(`more than ${this.maxRows} rows: add a LIMIT`);
     return { columns: result.fields.map((f) => f.name), rows: result.rows as unknown[][] };
+  }
+
+  /** `LISTEN`s on `channel` on its own connection, reconnecting after errors. Returns a function that stops it. */
+  async listen(channel: string, onPayload: (payload: string) => void): Promise<() => Promise<void>> {
+    let client: pg.Client | undefined;
+    let stopped = false;
+    const connect = async (): Promise<void> => {
+      const c = new pg.Client({ connectionString: this.#url });
+      c.on("notification", (n) => n.channel === channel && onPayload(n.payload ?? ""));
+      c.on("error", () => {
+        if (stopped) return;
+        client = undefined;
+        void c.end().catch(() => {});
+        setTimeout(() => void connect().catch(() => {}), 1_000);
+      });
+      await c.connect();
+      await c.query(`LISTEN ${quote(channel)}`);
+      client = c;
+      // Commits during the reconnect were missed: tell listeners to look again.
+      onPayload("");
+    };
+    await connect();
+    return async () => {
+      stopped = true;
+      await client?.end();
+    };
   }
 
   async close() {

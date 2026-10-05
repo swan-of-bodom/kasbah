@@ -131,7 +131,9 @@ Built (`src/sources.ts`, config `factory: { address, abi, event, parameter }`):
   events with them included. A reorg forgets children created after the ancestor (memory and table).
 - Class checks while live: up to 100 addresses, one batched `getClassHashAt` per tick; above, each block's
   `getStateUpdate` and its `replaced_classes` (one call per block, whatever the number of contracts).
-- Not yet: splitting address lists above a few thousand (§5.1).
+- Address lists are not split. Measured on Alchemy, `getEvents` over 10k blocks with N addresses:
+  1k → 96 ms, 10k (237 KB body) → 356 ms, 50k (1.2 MB) → 1.3 s, all accepted. The stream already fetches block
+  windows in parallel, so splitting would add a merge for nothing. Revisit only for a node that caps the list.
 
 ### 5.3 Class-hash factories (later)
 
@@ -380,7 +382,15 @@ Target size: under 10k lines for v1.
      keyset paging on non-null columns with the primary key as tiebreak; filters `x`, `x_not`, `x_in`,
      `x_not_in`, `x_gt/gte/lt/lte`, `AND`, `OR`. Numbers past 32 bits are `BigInt` decimal strings. `_meta`.
    - `GET /status`: checkpoint and phase (backfill or live).
-   - Not yet: live queries (push on new blocks), relations between tables.
+   - Live queries: `GET /live` streams server-sent events. Every commit (backfill batch, live
+     block, reorg revert) runs `pg_notify('kasbah_<schema>', {"checkpoint": n})` inside its transaction, so
+     the notice only arrives once the data is visible, and an API process anywhere on the same database gets it
+     via `LISTEN`. Plain `/live` sends `event: checkpoint`; with `?sql=…&params=[…]` or
+     `?query=…&variables={…}` (GraphQL), the query runs at once and after each commit, and `event: result` is
+     sent only when the result changed (one run at a time per stream, commits during a run coalesce). A bad query
+     is a plain 400 before the stream opens. Readers can't fake a notice: their transactions always roll back,
+     and Postgres delivers notices only on commit (mutation-checked). Checked on mainnet with Ekubo live.
+   - Not yet: relations between tables in GraphQL; sharing one run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)

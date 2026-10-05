@@ -5,7 +5,7 @@ import pg from "pg";
 import type { Abi } from "./abi/abi.ts";
 import { classHistory } from "./abi/history.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
-import { Api } from "./api/server.ts";
+import { Api, liveChannel } from "./api/server.ts";
 import { EventCache } from "./cache.ts";
 import { CallClient, type Client } from "./client.ts";
 import { Store, type Db } from "./db/store.ts";
@@ -162,6 +162,8 @@ export function kasbah<const C extends Config>(config: C) {
     };
     const setMeta = (q: pg.PoolClient | pg.Pool, key: string, value: unknown) =>
       q.query(`INSERT INTO _kasbah_meta VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(value)]);
+    /** Delivered when the transaction commits: API servers re-run live queries. */
+    const notify = (tx: pg.PoolClient, checkpoint: number) => tx.query(`SELECT pg_notify($1, $2)`, [liveChannel(schema), JSON.stringify({ checkpoint })]);
     const saveHash = (q: pg.PoolClient | pg.Pool, block: BlockRef) =>
       q.query(`INSERT INTO _kasbah_blocks VALUES ($1, $2) ON CONFLICT (number) DO UPDATE SET hash = EXCLUDED.hash`, [block.number, block.hash]);
 
@@ -204,7 +206,7 @@ export function kasbah<const C extends Config>(config: C) {
 
       if (config.api !== undefined) {
         api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
-        log(`API on http://${config.api.host ?? "127.0.0.1"}:${api.port} (POST /sql, POST /graphql, GET /status)`);
+        log(`API on http://${config.api.host ?? "127.0.0.1"}:${api.port} (POST /sql, POST /graphql, GET /status, GET /live)`);
       }
 
       const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined });
@@ -334,6 +336,7 @@ export function kasbah<const C extends Config>(config: C) {
           await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [ancestor.number]);
           for (const f of factories) if (f.discovered > ancestor.number) await setMeta(tx, `discovered:${f.contract}`, ancestor.number);
           await setMeta(tx, "checkpoint", ancestor.number);
+          await notify(tx, ancestor.number);
         });
         for (const f of factories) f.discovered = Math.min(f.discovered, ancestor.number);
         const forgotten = sources.removeChildrenAfter(ancestor.number);
@@ -401,6 +404,7 @@ export function kasbah<const C extends Config>(config: C) {
             await store.flush(tx);
             await cache?.persist(tx, through);
             await setMeta(tx, "checkpoint", through);
+            await notify(tx, through);
           });
         for await (const batch of fetchRange(sources.addresses, sources.keys, first, backfillTo)) {
           const fires = firesIn(through + 1, batch.through);
@@ -504,6 +508,7 @@ export function kasbah<const C extends Config>(config: C) {
             await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [prune]);
             await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [prune]);
             await setMeta(tx, "checkpoint", block.number);
+            await notify(tx, block.number);
           });
           for (const f of factories) f.discovered = block.number;
           known.set(block.number, block.hash);
