@@ -393,11 +393,11 @@ Target size: under 10k lines for v1.
    - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables`
      takes both, so `import * as schema` works, as in Ponder). A to-one field is the related row, batched: all
      lookups of one level go out as one `WHERE (cols) IN (…)`. A to-many field is a page with the top-level
-     list's arguments (`where`, `orderBy`, `orderDirection`, `limit`, `after`), one statement per parent. Each
+     list's arguments (`where`, `orderBy`, `orderDirection`, `limit`, `after`), also one statement per level:
+     the page query runs per parent in a `LATERAL` subquery over `VALUES` of the parents' keys. Each
      request has a budget: 500 statements and the query timeout in total. A relation named like a column is
      refused at startup.
-   - Not yet: batching to-many fields (a lateral join per level); sharing one live run between streams with the
-     same query.
+   - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)

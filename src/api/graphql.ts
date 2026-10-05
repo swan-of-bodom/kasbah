@@ -45,19 +45,19 @@ async function rows(ctx: GraphqlContext, text: string, params: unknown[]): Promi
   }
 }
 
-/** Collects keys asked for in one tick and fetches them with one statement. */
-type Loader = (key: unknown[]) => Promise<Row | null>;
+/** Collects keys asked for in one tick and fetches them with one statement (per 1,000 keys). */
+type Loader = (key: unknown[]) => Promise<unknown>;
 
-function createLoader(fetch: (keys: unknown[][]) => Promise<Row[]>, keyOf: (r: Row) => unknown[]): Loader {
-  let pending: Map<string, { key: unknown[]; waiters: ((r: Row | null) => void)[]; fail: ((e: unknown) => void)[] }> | undefined;
+function createLoader(fetch: (keys: unknown[][]) => Promise<Map<string, unknown>>, missing: () => unknown): Loader {
+  let pending: Map<string, { key: unknown[]; resolve: ((v: unknown) => void)[]; reject: ((e: unknown) => void)[] }> | undefined;
   const flush = async (batch: NonNullable<typeof pending>) => {
     try {
       const keys = [...batch.values()].map((b) => b.key);
-      const found = new Map<string, Row>();
-      for (let i = 0; i < keys.length; i += 1_000) for (const r of await fetch(keys.slice(i, i + 1_000))) found.set(JSON.stringify(keyOf(r)), r);
-      for (const [k, b] of batch) for (const w of b.waiters) w(found.get(k) ?? null);
+      const found = new Map<string, unknown>();
+      for (let i = 0; i < keys.length; i += 1_000) for (const [k, v] of await fetch(keys.slice(i, i + 1_000))) found.set(k, v);
+      for (const [k, b] of batch) for (const r of b.resolve) r(found.has(k) ? found.get(k) : missing());
     } catch (e) {
-      for (const b of batch.values()) for (const f of b.fail) f(e);
+      for (const b of batch.values()) for (const r of b.reject) r(e);
     }
   };
   return (key) =>
@@ -71,9 +71,9 @@ function createLoader(fetch: (keys: unknown[][]) => Promise<Row[]>, keyOf: (r: R
         });
       }
       const k = JSON.stringify(key);
-      const entry = pending.get(k) ?? { key, waiters: [], fail: [] };
-      entry.waiters.push(resolve);
-      entry.fail.push(reject);
+      const entry = pending.get(k) ?? { key, resolve: [], reject: [] };
+      entry.resolve.push(resolve);
+      entry.reject.push(reject);
       pending.set(k, entry);
     });
 }
@@ -242,7 +242,9 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>, relations
     type: GraphQLObjectType;
     page: GraphQLObjectType;
     listArgs: Record<string, { type: GraphQLInputType; defaultValue?: unknown }>;
-    list: (ctx: GraphqlContext, args: ListArgs, match?: { columns: string[]; values: unknown[] }) => Promise<unknown>;
+    list: (ctx: GraphqlContext, args: ListArgs) => Promise<unknown>;
+    pagesFor: (ctx: GraphqlContext, args: ListArgs, match: string[], parents: unknown[][]) => Promise<Map<string, unknown>>;
+    emptyPage: () => unknown;
     byColumns: (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => Promise<Row[]>;
     fields: GraphQLFieldConfigMap<unknown, GraphqlContext>;
   }>();
@@ -317,35 +319,53 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>, relations
       limit: { type: GraphQLInt, defaultValue: 100 },
       after: { type: GraphQLString },
     };
-    const list = async (ctx: GraphqlContext, args: ListArgs, match?: { columns: string[]; values: unknown[] }) => {
-        if (args.limit < 1 || args.limit > MAX_LIMIT) throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
-        const params: unknown[] = [];
-        const keys = [...new Set([...(args.orderBy == null ? [] : [args.orderBy]), ...info.primaryKey.map((c) => c.key)])];
-        const columns = keys.map((k) => quote(info.columns.find((c) => c.key === k)!.column.name));
-        const dir = args.orderDirection === "desc" ? "DESC" : "ASC";
-        let where = whereSql(info, args.where ?? undefined, params);
-        if (match !== undefined) {
-          const eq = match.columns.map((k, i) => {
-            params.push(match.values[i]);
-            return `${columnName(k)} = $${params.length}`;
-          });
-          where = `(${where}) AND ${eq.join(" AND ")}`;
-        }
-        if (args.after != null) {
-          const values = decodeCursor(args.after, keys.length);
-          const placeholders = values.map((v) => {
-            params.push(v);
-            return `$${params.length}`;
-          });
-          where = `(${where}) AND (${columns.join(", ")}) ${dir === "ASC" ? ">" : "<"} (${placeholders.join(", ")})`;
-        }
-        const order = columns.map((c) => `${c} ${dir}`).join(", ");
-        const found = await rows(ctx, `SELECT ${select} FROM ${table} WHERE ${where} ORDER BY ${order} LIMIT ${args.limit + 1}`, params);
-        const hasNextPage = found.length > args.limit;
-        const items = found.slice(0, args.limit);
-        const last = items.at(-1) as Record<string, unknown> | undefined;
-        return { items, pageInfo: { hasNextPage, endCursor: last === undefined ? null : encodeCursor(keys.map((k) => last[k])) } };
+    /** The page query's parts: `extra` adds conditions (a relation's match) before the cursor. */
+    const pageParts = (args: ListArgs, params: unknown[], extra?: string) => {
+      if (args.limit < 1 || args.limit > MAX_LIMIT) throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
+      const keys = [...new Set([...(args.orderBy == null ? [] : [args.orderBy]), ...info.primaryKey.map((c) => c.key)])];
+      const columns = keys.map(columnName);
+      const dir = args.orderDirection === "desc" ? "DESC" : "ASC";
+      let where = whereSql(info, args.where ?? undefined, params);
+      if (extra !== undefined) where = `(${where}) AND ${extra}`;
+      if (args.after != null) {
+        const placeholders = decodeCursor(args.after, keys.length).map((v) => {
+          params.push(v);
+          return `$${params.length}`;
+        });
+        where = `(${where}) AND (${columns.join(", ")}) ${dir === "ASC" ? ">" : "<"} (${placeholders.join(", ")})`;
+      }
+      return { keys, sql: `SELECT ${select} FROM ${table} WHERE ${where} ORDER BY ${columns.map((c) => `${c} ${dir}`).join(", ")} LIMIT ${args.limit + 1}` };
     };
+    const toPage = (found: Row[], args: ListArgs, keys: string[]) => {
+      const items = found.slice(0, args.limit);
+      const last = items.at(-1);
+      return { items, pageInfo: { hasNextPage: found.length > args.limit, endCursor: last === undefined ? null : encodeCursor(keys.map((k) => last[k])) } };
+    };
+    const list = async (ctx: GraphqlContext, args: ListArgs) => {
+      const params: unknown[] = [];
+      const { keys, sql } = pageParts(args, params);
+      return toPage(await rows(ctx, sql, params), args, keys);
+    };
+    /** One page per parent key, in one statement: the page query runs per key in a LATERAL subquery. */
+    const pagesFor = async (ctx: GraphqlContext, args: ListArgs, match: string[], parents: unknown[][]) => {
+      const params: unknown[] = [];
+      const types = match.map((k) => info.columns.find((c) => c.key === k)!.column.getSQLType());
+      const tuples = parents.map((p, i) => `(${p.map((v, j) => {
+        params.push(v);
+        return `$${params.length}::${types[j]}`;
+      }).join(", ")}, ${i})`);
+      const { keys, sql } = pageParts(args, params, match.map((k, j) => `${columnName(k)} = _k.c${j}`).join(" AND "));
+      const found = await rows(ctx, `SELECT _k._i AS "__parent", _t.* FROM (VALUES ${tuples.join(", ")}) AS _k(${match.map((_, j) => `c${j}`).join(", ")}, _i)
+        CROSS JOIN LATERAL (${sql}) AS _t`, params);
+      const byParent = new Map<number, Row[]>();
+      for (const r of found) {
+        const i = r.__parent as number;
+        delete r.__parent;
+        byParent.set(i, [...(byParent.get(i) ?? []), r]);
+      }
+      return new Map(parents.map((p, i) => [JSON.stringify(p), toPage(byParent.get(i) ?? [], args, keys)]));
+    };
+    const emptyPage = () => ({ items: [], pageInfo: { hasNextPage: false, endCursor: null } });
     const byColumns = (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => {
       const params: unknown[] = [];
       const tuples = keys.map((k) => `(${k.map((v) => {
@@ -355,7 +375,7 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>, relations
       return rows(ctx, `SELECT ${select} FROM ${table} WHERE (${columns.map(columnName).join(", ")}) IN (${tuples.join(", ")})`, params);
     };
     query[many] = { type: new GraphQLNonNull(page), args: listArgs, resolve: (_, args: ListArgs, ctx) => list(ctx, args) };
-    built.set(key, { type, page, listArgs, list, byColumns, fields });
+    built.set(key, { type, page, listArgs, list, pagesFor, emptyPage, byColumns, fields });
   }
 
   for (const r of relations) {
@@ -373,7 +393,10 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>, relations
           const b = (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
           let load = b.loaders.get(id);
           if (load === undefined) {
-            load = createLoader((keys) => to.byColumns(ctx, r.references, keys), (row) => r.references.map((k) => row[k]));
+            load = createLoader(
+              async (keys) => new Map((await to.byColumns(ctx, r.references, keys)).map((row) => [JSON.stringify(r.references.map((k) => row[k])), row])),
+              () => null,
+            );
             b.loaders.set(id, load);
           }
           return load(values);
@@ -383,7 +406,19 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>, relations
       from.fields[r.name] = {
         type: new GraphQLNonNull(to.page),
         args: to.listArgs,
-        resolve: (parent, args: ListArgs, ctx) => to.list(ctx, args, { columns: r.references, values: r.fields.map((k) => (parent as Row)[k]) }),
+        resolve: (parent, args: ListArgs, ctx) => {
+          const values = r.fields.map((k) => (parent as Row)[k]);
+          if (values.some((v) => v === null || v === undefined)) return to.emptyPage();
+          // Parents asking with the same arguments share one statement.
+          const id = `${r.from}.${r.name}:${JSON.stringify(args)}`;
+          const b = (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
+          let load = b.loaders.get(id);
+          if (load === undefined) {
+            load = createLoader((keys) => to.pagesFor(ctx, args, r.references, keys), to.emptyPage);
+            b.loaders.set(id, load);
+          }
+          return load(values);
+        },
       };
     }
   }

@@ -220,7 +220,7 @@ test.skipIf(url === undefined)("GraphQL relations: to-one in a list, to-many wit
   expect((await gql(`{ pool(id: "p09") { positions { items { owner } } } }`)).data.pool.positions.items).toEqual([]);
 });
 
-test.skipIf(url === undefined)("GraphQL relations: to-one lookups are batched, and a request has a statement budget", async () => {
+test.skipIf(url === undefined)("GraphQL relations: to-one and to-many are batched per level, and a request has a statement budget", async () => {
   const owner = new pg.Pool({ connectionString: url, max: 1 });
   await owner.query(`INSERT INTO ${schema}.positions SELECT 'o' || i, 'p' || lpad((i % 17)::text, 2, '0'), i FROM generate_series(1, 600) i`);
   await owner.end();
@@ -229,7 +229,22 @@ test.skipIf(url === undefined)("GraphQL relations: to-one lookups are batched, a
   expect(r.errors).toBeUndefined();
   expect(r.data.positions.items).toHaveLength(600);
   expect(r.data.positions.items.every((p: any) => p.poolInfo.id === `p${String(Number(p.owner.slice(1)) % 17).padStart(2, "0")}`)).toBe(true);
-  // A to-many per parent can't be batched: 17 pools × their positions × their pool's positions goes over.
-  const deep = await gql(`{ pools(limit: 17) { items { positions(limit: 1000) { items { poolInfo { positions(limit: 1) { items { owner } } } } } } } }`);
-  expect(deep.errors?.[0]?.message).toMatch(/more than 500 SQL statements/);
+  // To-many fields are batched per level too: 17 pools, 600 positions, their pools, each pool's first position.
+  const deep = await gql(`{ pools(limit: 17) { items { id positions(limit: 1000, orderBy: liquidity) { items { liquidity poolInfo { positions(limit: 2, orderBy: liquidity, orderDirection: desc) { items { owner } pageInfo { hasNextPage } } } } } } } }`);
+  expect(deep.errors).toBeUndefined();
+  const check = new pg.Pool({ connectionString: url, max: 1 });
+  for (const pool of deep.data.pools.items) {
+    const all = (await check.query(`SELECT owner, liquidity::text AS l FROM ${schema}.positions p WHERE pool = $1 ORDER BY p.liquidity, owner`, [pool.id])).rows;
+    expect(pool.positions.items.map((x: any) => x.liquidity)).toEqual(all.map((r) => r.l));
+    const top = [...all].sort((a, b) => Number(b.l) - Number(a.l) || (a.owner < b.owner ? 1 : -1));
+    for (const x of pool.positions.items) {
+      expect(x.poolInfo.positions.items).toEqual(top.slice(0, 2).map((r) => ({ owner: r.owner })));
+      expect(x.poolInfo.positions.pageInfo.hasNextPage).toBe(all.length > 2);
+    }
+  }
+  await check.end();
+
+  // What can't be batched still has a budget: 501 separate lookups.
+  const many = await gql(`{ ${Array.from({ length: 501 }, (_, i) => `a${i}: pool(id: "p01") { id }`).join(" ")} }`);
+  expect(many.errors?.[0]?.message).toMatch(/more than 500 SQL statements/);
 });
