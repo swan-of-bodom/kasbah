@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { drizzle } from "drizzle-orm/node-postgres";
-import type { PgTable } from "drizzle-orm/pg-core";
+import { is, type Relations } from "drizzle-orm";
+import { PgTable } from "drizzle-orm/pg-core";
 import pg from "pg";
 import type { Abi } from "./abi/abi.ts";
 import { classHistory } from "./abi/history.ts";
@@ -33,7 +34,8 @@ export type Config = {
   schema?: string;
   contracts: Record<string, ContractConfig>;
   blocks?: Record<string, BlockConfig>;
-  tables: Record<string, PgTable>;
+  /** The app's tables, and optionally Drizzle `relations()` for GraphQL: `import * as schema` works as is. */
+  tables: Record<string, PgTable | Relations>;
   /** Parallel `getEvents` windows. */
   concurrency?: number;
   /** Blocks behind the tip that can still be reorged: indexed live, with an undo journal. Default 64. */
@@ -134,7 +136,7 @@ export function kasbah<const C extends Config>(config: C) {
     const signal = options.signal ?? new AbortController().signal;
     const schema = config.schema ?? "kasbah";
     const window = config.reorgWindow ?? 64;
-    const tables = Object.values(config.tables);
+    const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
     const blockSources = Object.entries(config.blocks ?? {}).map(([name, b]) => ({ name, ...b }));
     for (const b of blockSources) {
       if (config.contracts[b.name] !== undefined) throw new Error(`${b.name} is both a contract and a block source`);

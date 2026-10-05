@@ -1,3 +1,4 @@
+import { relations } from "drizzle-orm";
 import { integer, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
@@ -19,6 +20,9 @@ const positions = pgTable("positions", { owner: text().notNull(), pool: text().n
   primaryKey({ columns: [t.owner, t.pool] }),
 ]);
 
+const poolsRelations = relations(pools, ({ many }) => ({ positions: many(positions) }));
+const positionsRelations = relations(positions, ({ one }) => ({ poolInfo: one(pools, { fields: [positions.pool], references: [pools.id] }) }));
+
 let api: Api;
 let base: string;
 const rows = Array.from({ length: 17 }, (_, i) => ({ id: `p${String(i).padStart(2, "0")}`, swaps: (i * 7) % 5, volume: 10n ** 40n + BigInt(i), note: i % 3 === 0 ? null : `n${i}` }));
@@ -36,7 +40,7 @@ beforeAll(async () => {
   await c.query(`INSERT INTO positions VALUES ('0xa', 'p01', 5), ('0xa', 'p02', 6), ('0xb', 'p01', 7)`);
   c.release();
   await owner.end();
-  api = await Api.start({ database: url, schema, tables: { pools, positions }, port: 0, timeoutMs: 300, maxRows: 10 });
+  api = await Api.start({ database: url, schema, tables: { pools, positions, poolsRelations, positionsRelations }, port: 0, timeoutMs: 300, maxRows: 10 });
   base = `http://127.0.0.1:${api.port}`;
 });
 
@@ -196,4 +200,36 @@ test.skipIf(url === undefined)("a reader can't notify live clients itself", asyn
     await commit(`SELECT 1`, 46);
   });
   expect(events).toEqual([{ event: "checkpoint", data: { checkpoint: 46 } }]);
+});
+
+test.skipIf(url === undefined)("GraphQL relations: to-one in a list, to-many with filters and paging", async () => {
+  expect(await gql(`{ positions(orderBy: liquidity) { items { owner liquidity poolInfo { id swaps } } } }`)).toEqual({
+    data: { positions: { items: [
+      // Swaps as the live-query tests above left them.
+      { owner: "0xa", liquidity: "5", poolInfo: { id: "p01", swaps: 100 } },
+      { owner: "0xa", liquidity: "6", poolInfo: { id: "p02", swaps: 7 } },
+      { owner: "0xb", liquidity: "7", poolInfo: { id: "p01", swaps: 100 } },
+    ] } },
+  });
+  const first = await gql(`{ pool(id: "p01") { positions(orderBy: liquidity, orderDirection: desc, limit: 1) { items { owner } pageInfo { hasNextPage endCursor } } } }`);
+  expect(first.data.pool.positions.items).toEqual([{ owner: "0xb" }]);
+  expect(first.data.pool.positions.pageInfo.hasNextPage).toBe(true);
+  const next = await gql(`query ($after: String) { pool(id: "p01") { positions(orderBy: liquidity, orderDirection: desc, after: $after) { items { owner } pageInfo { hasNextPage } } } }`, { after: first.data.pool.positions.pageInfo.endCursor });
+  expect(next.data.pool.positions).toEqual({ items: [{ owner: "0xa" }], pageInfo: { hasNextPage: false } });
+  expect((await gql(`{ pool(id: "p01") { positions(where: { liquidity_gt: "5" }) { items { owner } } } }`)).data.pool.positions.items).toEqual([{ owner: "0xb" }]);
+  expect((await gql(`{ pool(id: "p09") { positions { items { owner } } } }`)).data.pool.positions.items).toEqual([]);
+});
+
+test.skipIf(url === undefined)("GraphQL relations: to-one lookups are batched, and a request has a statement budget", async () => {
+  const owner = new pg.Pool({ connectionString: url, max: 1 });
+  await owner.query(`INSERT INTO ${schema}.positions SELECT 'o' || i, 'p' || lpad((i % 17)::text, 2, '0'), i FROM generate_series(1, 600) i`);
+  await owner.end();
+  // 600 parents, one statement for their pools: without batching this is 601 statements, over the budget.
+  const r = await gql(`{ positions(limit: 1000, where: { owner_not_in: ["0xa", "0xb"] }) { items { owner poolInfo { id } } } }`);
+  expect(r.errors).toBeUndefined();
+  expect(r.data.positions.items).toHaveLength(600);
+  expect(r.data.positions.items.every((p: any) => p.poolInfo.id === `p${String(Number(p.owner.slice(1)) % 17).padStart(2, "0")}`)).toBe(true);
+  // A to-many per parent can't be batched: 17 pools × their positions × their pool's positions goes over.
+  const deep = await gql(`{ pools(limit: 17) { items { positions(limit: 1000) { items { poolInfo { positions(limit: 1) { items { owner } } } } } } } }`);
+  expect(deep.errors?.[0]?.message).toMatch(/more than 500 SQL statements/);
 });

@@ -1,12 +1,14 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { GraphQLError, graphql, type GraphQLSchema } from "graphql";
-import type { PgTable } from "drizzle-orm/pg-core";
+import { is, Relations } from "drizzle-orm";
+import { PgTable } from "drizzle-orm/pg-core";
 import { tableInfo } from "../db/table.ts";
-import { createGraphqlSchema } from "./graphql.ts";
+import { createGraphqlSchema, relationsOf } from "./graphql.ts";
 import { QueryError, Reader, type ReaderOptions } from "./reader.ts";
 
 export type ApiOptions = Omit<ReaderOptions, "tables"> & {
-  tables: Record<string, PgTable>;
+  /** Tables, and Drizzle `relations()` between them (GraphQL relation fields): a schema module works as is. */
+  tables: Record<string, PgTable | Relations>;
   port: number;
   host?: string;
   /** Open `GET /live` streams allowed at once. Default 1,000. */
@@ -82,9 +84,9 @@ export class Api {
   }
 
   static async start(o: ApiOptions): Promise<Api> {
-    const infos = Object.fromEntries(Object.entries(o.tables).map(([k, t]) => [k, tableInfo(t)]));
+    const infos = Object.fromEntries(Object.entries(o.tables).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])));
     const reader = await Reader.connect({ ...o, tables: Object.values(infos) });
-    const api = new Api(reader, createGraphqlSchema(infos), o.maxLive ?? 1_000);
+    const api = new Api(reader, createGraphqlSchema(infos, relationsOf(o.tables, infos)), o.maxLive ?? 1_000);
     api.#unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
       let checkpoint: number | undefined;
       try {

@@ -17,18 +17,99 @@ import {
   Kind,
   type ValueNode,
 } from "graphql";
+import { createTableRelationsHelpers, extractTablesRelationalConfig, Many, normalizeRelation, One, type Relation } from "drizzle-orm";
 import type pg from "pg";
 import { quote, type TableInfo } from "../db/table.ts";
 import { asQueryError, QueryError } from "./reader.ts";
 
-export type GraphqlContext = { client: pg.PoolClient; timeoutMs: number };
+export type GraphqlContext = {
+  client: pg.PoolClient;
+  timeoutMs: number;
+  /** Set by the schema on first use: the request's statement count, start time and batch loaders. */
+  budget?: { statements: number; started: number; loaders: Map<string, Loader> };
+};
 
-async function rows(ctx: GraphqlContext, text: string, params: unknown[]): Promise<Record<string, unknown>[]> {
+/** SQL statements one GraphQL request may run (nested relations run one per level, or per parent for lists). */
+const MAX_STATEMENTS = 500;
+
+type Row = Record<string, unknown>;
+
+async function rows(ctx: GraphqlContext, text: string, params: unknown[]): Promise<Row[]> {
+  const b = (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
+  if (++b.statements > MAX_STATEMENTS) throw new QueryError(`query needs more than ${MAX_STATEMENTS} SQL statements: nest less or page smaller`);
+  if (performance.now() - b.started > ctx.timeoutMs) throw new QueryError(`query cancelled after ${ctx.timeoutMs} ms`);
   try {
     return (await ctx.client.query(text, params)).rows;
   } catch (e) {
     throw asQueryError(e, ctx.timeoutMs);
   }
+}
+
+/** Collects keys asked for in one tick and fetches them with one statement. */
+type Loader = (key: unknown[]) => Promise<Row | null>;
+
+function createLoader(fetch: (keys: unknown[][]) => Promise<Row[]>, keyOf: (r: Row) => unknown[]): Loader {
+  let pending: Map<string, { key: unknown[]; waiters: ((r: Row | null) => void)[]; fail: ((e: unknown) => void)[] }> | undefined;
+  const flush = async (batch: NonNullable<typeof pending>) => {
+    try {
+      const keys = [...batch.values()].map((b) => b.key);
+      const found = new Map<string, Row>();
+      for (let i = 0; i < keys.length; i += 1_000) for (const r of await fetch(keys.slice(i, i + 1_000))) found.set(JSON.stringify(keyOf(r)), r);
+      for (const [k, b] of batch) for (const w of b.waiters) w(found.get(k) ?? null);
+    } catch (e) {
+      for (const b of batch.values()) for (const f of b.fail) f(e);
+    }
+  };
+  return (key) =>
+    new Promise((resolve, reject) => {
+      if (pending === undefined) {
+        const batch = (pending = new Map());
+        // After the resolvers of this tick have asked for their keys.
+        setImmediate(() => {
+          pending = undefined;
+          void flush(batch);
+        });
+      }
+      const k = JSON.stringify(key);
+      const entry = pending.get(k) ?? { key, waiters: [], fail: [] };
+      entry.waiters.push(resolve);
+      entry.fail.push(reject);
+      pending.set(k, entry);
+    });
+}
+
+/** A relation between two tables of the schema, by record key and column key. */
+export type RelationInfo = {
+  from: string;
+  name: string;
+  to: string;
+  kind: "one" | "many";
+  /** Columns of `from` matched against `references` of `to`. */
+  fields: string[];
+  references: string[];
+};
+
+/** Relations declared with Drizzle's `relations()` among `schema`'s values (tables and relations, like a schema module). */
+export function relationsOf(schema: Record<string, unknown>, tables: Record<string, TableInfo>): RelationInfo[] {
+  const { tables: config, tableNamesMap } = extractTablesRelationalConfig(schema, createTableRelationsHelpers);
+  const keyOfTable = new Map(Object.entries(tables).map(([k, t]) => [t.table, k]));
+  const columnKey = (key: string, column: unknown) => {
+    const c = tables[key]!.columns.find((x) => x.column === column);
+    if (c === undefined) throw new Error(`relation on ${key}: column not in the table`);
+    return c.key;
+  };
+  const out: RelationInfo[] = [];
+  for (const t of Object.values(config)) {
+    for (const [name, relation] of Object.entries(t.relations) as [string, Relation][]) {
+      const from = keyOfTable.get(relation.sourceTable as never);
+      const to = keyOfTable.get(relation.referencedTable as never);
+      if (from === undefined || to === undefined) throw new Error(`relation ${name}: both tables must be in the schema`);
+      const n = normalizeRelation(config, tableNamesMap, relation);
+      if (!(relation instanceof One) && !(relation instanceof Many)) continue;
+      out.push({ from, name, to, kind: relation instanceof One ? "one" : "many", fields: n.fields.map((c) => columnKey(from, c)), references: n.references.map((c) => columnKey(to, c)) });
+    }
+  }
+  return out;
 }
 
 const INTEGER = /^-?\d+$/;
@@ -147,13 +228,24 @@ function decodeCursor(cursor: string, length: number): unknown[] {
   throw new QueryError("invalid cursor");
 }
 
+type ListArgs = { where?: Filter | null; orderBy?: string | null; orderDirection: "asc" | "desc"; limit: number; after?: string | null };
+
 /**
  * A read-only GraphQL schema over the app's tables. Per table: `pool(id: ...)` by primary key, and
  * `pools(where, orderBy, orderDirection, limit, after)` with keyset paging. Numbers past 32 bits are `BigInt`
- * strings.
+ * strings. Relations add fields: a to-one is the related object (batched, one statement per level), a to-many
+ * a page with the same arguments as the top-level list.
  */
-export function createGraphqlSchema(tables: Record<string, TableInfo>): GraphQLSchema {
+export function createGraphqlSchema(tables: Record<string, TableInfo>, relations: RelationInfo[] = []): GraphQLSchema {
   const query: GraphQLFieldConfigMap<unknown, GraphqlContext> = {};
+  const built = new Map<string, {
+    type: GraphQLObjectType;
+    page: GraphQLObjectType;
+    listArgs: Record<string, { type: GraphQLInputType; defaultValue?: unknown }>;
+    list: (ctx: GraphqlContext, args: ListArgs, match?: { columns: string[]; values: unknown[] }) => Promise<unknown>;
+    byColumns: (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => Promise<Row[]>;
+    fields: GraphQLFieldConfigMap<unknown, GraphqlContext>;
+  }>();
 
   for (const [key, info] of Object.entries(tables)) {
     const { one, many } = fieldNames(key);
@@ -167,7 +259,8 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>): GraphQLS
       const s = scalars.get(c.key)!;
       fields[c.key] = { type: (notNull(c) ? new GraphQLNonNull(s) : s) as GraphQLOutputType };
     }
-    const type = new GraphQLObjectType({ name: typeName, fields });
+    // Relation fields are added below, once every table's type exists.
+    const type = new GraphQLObjectType({ name: typeName, fields: () => fields });
 
     const filterFields: GraphQLInputFieldConfigMap = {};
     const filter: GraphQLInputObjectType = new GraphQLInputObjectType({
@@ -216,22 +309,28 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>): GraphQLS
       },
     };
 
-    query[many] = {
-      type: new GraphQLNonNull(page),
-      args: {
-        where: { type: filter },
-        orderBy: { type: orderBy },
-        orderDirection: { type: OrderDirection, defaultValue: "asc" },
-        limit: { type: GraphQLInt, defaultValue: 100 },
-        after: { type: GraphQLString },
-      },
-      resolve: async (_, args: { where?: Filter | null; orderBy?: string | null; orderDirection: "asc" | "desc"; limit: number; after?: string | null }, ctx) => {
+    const columnName = (k: string) => quote(info.columns.find((c) => c.key === k)!.column.name);
+    const listArgs = {
+      where: { type: filter },
+      orderBy: { type: orderBy },
+      orderDirection: { type: OrderDirection, defaultValue: "asc" },
+      limit: { type: GraphQLInt, defaultValue: 100 },
+      after: { type: GraphQLString },
+    };
+    const list = async (ctx: GraphqlContext, args: ListArgs, match?: { columns: string[]; values: unknown[] }) => {
         if (args.limit < 1 || args.limit > MAX_LIMIT) throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
         const params: unknown[] = [];
         const keys = [...new Set([...(args.orderBy == null ? [] : [args.orderBy]), ...info.primaryKey.map((c) => c.key)])];
         const columns = keys.map((k) => quote(info.columns.find((c) => c.key === k)!.column.name));
         const dir = args.orderDirection === "desc" ? "DESC" : "ASC";
         let where = whereSql(info, args.where ?? undefined, params);
+        if (match !== undefined) {
+          const eq = match.columns.map((k, i) => {
+            params.push(match.values[i]);
+            return `${columnName(k)} = $${params.length}`;
+          });
+          where = `(${where}) AND ${eq.join(" AND ")}`;
+        }
         if (args.after != null) {
           const values = decodeCursor(args.after, keys.length);
           const placeholders = values.map((v) => {
@@ -246,8 +345,47 @@ export function createGraphqlSchema(tables: Record<string, TableInfo>): GraphQLS
         const items = found.slice(0, args.limit);
         const last = items.at(-1) as Record<string, unknown> | undefined;
         return { items, pageInfo: { hasNextPage, endCursor: last === undefined ? null : encodeCursor(keys.map((k) => last[k])) } };
-      },
     };
+    const byColumns = (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => {
+      const params: unknown[] = [];
+      const tuples = keys.map((k) => `(${k.map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      }).join(", ")})`);
+      return rows(ctx, `SELECT ${select} FROM ${table} WHERE (${columns.map(columnName).join(", ")}) IN (${tuples.join(", ")})`, params);
+    };
+    query[many] = { type: new GraphQLNonNull(page), args: listArgs, resolve: (_, args: ListArgs, ctx) => list(ctx, args) };
+    built.set(key, { type, page, listArgs, list, byColumns, fields });
+  }
+
+  for (const r of relations) {
+    const from = built.get(r.from)!;
+    const to = built.get(r.to)!;
+    if (from.fields[r.name] !== undefined) throw new Error(`relation ${r.from}.${r.name} has the name of a column: rename one (e.g. column ${r.name}Id)`);
+    if (r.kind === "one") {
+      const id = `${r.from}.${r.name}`;
+      const notNull = r.fields.every((k) => tables[r.from]!.columns.find((c) => c.key === k)!.column.notNull);
+      from.fields[r.name] = {
+        type: notNull ? new GraphQLNonNull(to.type) : to.type,
+        resolve: (parent, _, ctx) => {
+          const values = r.fields.map((k) => (parent as Row)[k]);
+          if (values.some((v) => v === null || v === undefined)) return null;
+          const b = (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
+          let load = b.loaders.get(id);
+          if (load === undefined) {
+            load = createLoader((keys) => to.byColumns(ctx, r.references, keys), (row) => r.references.map((k) => row[k]));
+            b.loaders.set(id, load);
+          }
+          return load(values);
+        },
+      };
+    } else {
+      from.fields[r.name] = {
+        type: new GraphQLNonNull(to.page),
+        args: to.listArgs,
+        resolve: (parent, args: ListArgs, ctx) => to.list(ctx, args, { columns: r.references, values: r.fields.map((k) => (parent as Row)[k]) }),
+      };
+    }
   }
 
   query._meta = {

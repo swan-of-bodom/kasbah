@@ -390,7 +390,14 @@ Target size: under 10k lines for v1.
      sent only when the result changed (one run at a time per stream, commits during a run coalesce). A bad query
      is a plain 400 before the stream opens. Readers can't fake a notice: their transactions always roll back,
      and Postgres delivers notices only on commit (mutation-checked). Checked on mainnet with Ekubo live.
-   - Not yet: relations between tables in GraphQL; sharing one run between streams with the same query.
+   - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables`
+     takes both, so `import * as schema` works, as in Ponder). A to-one field is the related row, batched: all
+     lookups of one level go out as one `WHERE (cols) IN (…)`. A to-many field is a page with the top-level
+     list's arguments (`where`, `orderBy`, `orderDirection`, `limit`, `after`), one statement per parent. Each
+     request has a budget: 500 statements and the query timeout in total. A relation named like a column is
+     refused at startup.
+   - Not yet: batching to-many fields (a lateral join per level); sharing one live run between streams with the
+     same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
