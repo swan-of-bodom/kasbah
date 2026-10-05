@@ -340,7 +340,10 @@ Built (`src/client.ts`, `src/abi/functions.ts`):
   lagging or reorged node can't answer for another block at that height.
 - Checked on mainnet: Ekubo `get_pool_liquidity` / `get_pool_price` at block 700k equal what the indexer computed
   from events up to that block.
-- Not yet: a size cap on the `calls` table, a `prune` command, and batching reads made in parallel by a handler.
+- Capped: `cache: { maxCalls }`, default 1M rows; past it the oldest inserted are dropped down to
+  90% (insertion order, `seq`, not last use: a hit costs no write). Checked at open, so lowering the cap prunes at
+  once. `kasbah cache info` / `kasbah cache clear` (§11) show and empty each chain's cache.
+- Not yet: batching reads made in parallel by a handler.
 
 ## 10. What we drop from Ponder, with its size
 

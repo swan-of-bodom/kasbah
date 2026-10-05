@@ -47,7 +47,9 @@ const SCHEMA_SQL = (s: string) => [
      selector bytea NOT NULL, block_hash bytea NOT NULL, tx_hash bytea NOT NULL, keys bytea NOT NULL, data bytea NOT NULL, PRIMARY KEY (block, tx, idx))`,
   `CREATE TABLE IF NOT EXISTS ${s}.coverage (address bytea NOT NULL, selector bytea NOT NULL, ranges int8multirange NOT NULL, PRIMARY KEY (address, selector))`,
   `CREATE TABLE IF NOT EXISTS ${s}.calls (address bytea NOT NULL, entrypoint bytea NOT NULL, calldata bytea NOT NULL, block integer NOT NULL,
-     result bytea NOT NULL, PRIMARY KEY (address, entrypoint, calldata, block))`,
+     result bytea NOT NULL, seq bigserial, PRIMARY KEY (address, entrypoint, calldata, block))`,
+  `ALTER TABLE ${s}.calls ADD COLUMN IF NOT EXISTS seq bigserial`,
+  `CREATE INDEX IF NOT EXISTS calls_seq ON ${s}.calls (seq)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
 ];
 
@@ -67,16 +69,60 @@ export class EventCache {
   #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
   #calls: { address: Buffer; entrypoint: Buffer; calldata: Buffer; block: number; result: Buffer }[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
+  readonly #maxCalls: number;
+  /** Rows in `calls`, counted at open and kept up to date by this process (other apps add to it too). */
+  #callRows = 0;
 
-  private constructor(pool: pg.Pool, schema: string) {
+  private constructor(pool: pg.Pool, schema: string, maxCalls: number) {
     this.#pool = pool;
     this.#schema = schema;
+    this.#maxCalls = maxCalls;
   }
 
-  static async open(pool: pg.Pool, chainId: string): Promise<EventCache> {
+  /** `maxCalls`: call results kept; past it the oldest are dropped down to 90%. Default 1M. */
+  static async open(pool: pg.Pool, chainId: string, o: { maxCalls?: number } = {}): Promise<EventCache> {
     const schema = quote(`kasbah_cache_${chainId.toLowerCase()}`);
     for (const sql of SCHEMA_SQL(schema)) await pool.query(sql);
-    return new EventCache(pool, schema);
+    const cache = new EventCache(pool, schema, o.maxCalls ?? 1_000_000);
+    cache.#callRows = Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${schema}.calls`)).rows[0]!.n);
+    await cache.#pruneCalls(pool);
+    return cache;
+  }
+
+  async #pruneCalls(q: pg.Pool | pg.PoolClient) {
+    if (this.#callRows <= this.#maxCalls) return;
+    const drop = this.#callRows - Math.floor(this.#maxCalls * 0.9);
+    const r = await q.query(`DELETE FROM ${this.#schema}.calls WHERE seq IN (SELECT seq FROM ${this.#schema}.calls ORDER BY seq LIMIT $1)`, [drop]);
+    this.#callRows -= r.rowCount ?? 0;
+  }
+
+  /** Every chain's cache in the database, with its size. */
+  static async info(pool: pg.Pool): Promise<{ schema: string; events: number; calls: number; headers: number; bytes: number }[]> {
+    const { rows } = await pool.query<{ schema: string; bytes: string }>(
+      `SELECT n.nspname AS schema, coalesce(sum(pg_total_relation_size(c.oid)), 0)::text AS bytes FROM pg_namespace n
+       LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind = 'r' WHERE n.nspname LIKE 'kasbah\\_cache\\_%' GROUP BY 1 ORDER BY 1`,
+    );
+    const out = [];
+    for (const r of rows) {
+      const s = quote(r.schema);
+      // A cache made by an older version may lack a table.
+      const n = async (t: string) => {
+        const exists = (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.${t}`])).rows[0].r !== null;
+        return exists ? Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${s}.${t}`)).rows[0]!.n) : 0;
+      };
+      out.push({ schema: r.schema, events: await n("events"), calls: await n("calls"), headers: await n("headers"), bytes: Number(r.bytes) });
+    }
+    return out;
+  }
+
+  /** Empties a chain's cache (or every chain's): events with their coverage and headers, call results, or both. */
+  static async clear(pool: pg.Pool, what: { events?: boolean; calls?: boolean }, chainId?: string) {
+    for (const { schema } of await EventCache.info(pool)) {
+      if (chainId !== undefined && schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
+      const s = quote(schema);
+      if (what.events) await pool.query(`TRUNCATE ${s}.events, ${s}.coverage, ${s}.headers`);
+      if (what.calls && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.calls`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.calls`);
+    }
   }
 
   /** First block from `from` not covered for every (address, selector) pair. */
@@ -174,10 +220,13 @@ export class EventCache {
     if (this.#calls.length > 0) {
       const c = this.#calls;
       this.#calls = [];
-      await tx.query(
-        `INSERT INTO ${this.#schema}.calls SELECT * FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::int[], $5::bytea[]) ON CONFLICT DO NOTHING`,
+      const r = await tx.query(
+        `INSERT INTO ${this.#schema}.calls (address, entrypoint, calldata, block, result)
+         SELECT * FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::int[], $5::bytea[]) ON CONFLICT DO NOTHING`,
         [c.map((x) => x.address), c.map((x) => x.entrypoint), c.map((x) => x.calldata), c.map((x) => x.block), c.map((x) => x.result)],
       );
+      this.#callRows += r.rowCount ?? 0;
+      await this.#pruneCalls(tx);
     }
     const from = this.#pendingFrom;
     const pairs = this.#pendingPairs;

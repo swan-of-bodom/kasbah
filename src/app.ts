@@ -49,8 +49,11 @@ export type Config = {
   ws?: string | true;
   /** Serve the read API (SQL over HTTP, GraphQL) while indexing. */
   api?: { port: number; host?: string; readDatabase?: string };
-  /** Keep final raw events in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches nothing. */
-  cache?: boolean;
+  /**
+   * Keep final raw events and call results in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches
+   * nothing. `maxCalls`: call results kept, oldest dropped first (default 1M).
+   */
+  cache?: boolean | { maxCalls?: number };
 };
 
 export const createConfig = <const C extends Config>(config: C): C => config;
@@ -219,7 +222,9 @@ export function kasbah<const C extends Config>(config: C) {
       const backfillTo = live ? tip - window : Math.min(options.to!, tip);
       // Classes are looked up to the tip when following it: live blocks decode with the class active now.
       const classTo = live ? tip : backfillTo;
-      const cache = config.cache ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", [])) : undefined;
+      const cache = config.cache
+        ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", []), config.cache === true ? {} : config.cache)
+        : undefined;
       /** Blocks at or below this can't be reorged: backfill's end, then the head minus the reorg window. */
       let finalThrough = backfillTo;
       const client = new CallClient(rpc, { isFinal: (b) => b <= finalThrough, cache });

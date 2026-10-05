@@ -67,3 +67,36 @@ test.skipIf(url === undefined)("reads back every event once, in order, never end
   for await (const batch of cache.read(["0xa"], ["0x51"], 150, 260, 4)) onlyA.push(...batch.events);
   expect(onlyA).toEqual(events.filter((e) => e.from_address === "0xa" && e.block_number! >= 150 && e.block_number! <= 260));
 });
+
+test.skipIf(url === undefined)("call results: kept up to the cap, oldest dropped first; info and clear", async () => {
+  pool ??= new pg.Pool({ connectionString: url, max: 2 });
+  await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+  let cache = await EventCache.open(pool, CHAIN, { maxCalls: 10 });
+  const persist = async () => {
+    const c = await pool!.connect();
+    await c.query("BEGIN");
+    await cache.persist(c, -1);
+    await c.query("COMMIT");
+    c.release();
+  };
+  for (let round = 0; round < 5; round++) {
+    for (let i = 0; i < 5; i++) cache.rememberCall("0xe", "0x5e1", [`0x${i}`], round, [`0x${round}${i}`]);
+    await persist();
+  }
+  // 25 written: past 10 it drops to 9, so rounds 3 and 4 are left with one of round 2.
+  const left = Number((await pool.query(`SELECT count(*) AS n FROM kasbah_cache_${CHAIN}.calls`)).rows[0].n);
+  expect(left).toBeLessThanOrEqual(10);
+  expect(await cache.getCall("0xe", "0x5e1", ["0x4"], 4)).toEqual(["0x44"]);
+  expect(await cache.getCall("0xe", "0x5e1", ["0x0"], 0)).toBeUndefined();
+
+  // A smaller cap at the next open prunes at once.
+  cache = await EventCache.open(pool, CHAIN, { maxCalls: 4 });
+  expect(Number((await pool.query(`SELECT count(*) AS n FROM kasbah_cache_${CHAIN}.calls`)).rows[0].n)).toBeLessThanOrEqual(4);
+  expect(await cache.getCall("0xe", "0x5e1", ["0x4"], 4)).toEqual(["0x44"]);
+
+  const info = (await EventCache.info(pool)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!;
+  expect(info.calls).toBeGreaterThan(0);
+  expect(info.bytes).toBeGreaterThan(0);
+  await EventCache.clear(pool, { calls: true }, CHAIN);
+  expect((await EventCache.info(pool)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!.calls).toBe(0);
+});
