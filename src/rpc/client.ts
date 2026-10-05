@@ -33,7 +33,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Errors worth retrying: transport failures, timeouts, throttling, node-side internal errors. */
 function retryable(status: number | undefined, code?: number): boolean {
-  if (status !== undefined) return status === 429 || status >= 500;
+  if (status !== undefined && (status === 429 || status >= 500)) return true;
   return code === -32603 || code === -32005 || code === 429;
 }
 
@@ -69,32 +69,54 @@ export class RpcClient {
     return result;
   }
 
-  /** Sends calls in one HTTP request. Resolves in call order; any call error rejects the whole batch. */
+  /**
+   * Sends calls in one HTTP request. Resolves in call order. Calls that fail with a retryable error (a throttled
+   * call inside an otherwise fine batch, for one) are sent again on their own; any other call error rejects.
+   */
   async batch<T extends unknown[]>(calls: Call[]): Promise<T> {
+    const results = new Array<unknown>(calls.length);
+    let pending = calls.map((_, i) => i);
     for (let attempt = 1; ; attempt++) {
       await this.#acquire();
       let status: number | undefined;
+      let failure: unknown;
       try {
-        const results = await this.#send(calls, (s) => (status = s));
-        this.#limit = Math.min(this.#maxConcurrency, this.#limit + 1 / this.#limit);
-        return results as T;
+        const answers = await this.#send(pending.map((i) => calls[i]!), (s) => (status = s));
+        const again: number[] = [];
+        answers.forEach((a, j) => {
+          if (!(a instanceof RpcError)) results[pending[j]!] = a;
+          else if (retryable(undefined, a.code)) {
+            again.push(pending[j]!);
+            failure = a;
+          } else throw a;
+        });
+        pending = again;
+        if (pending.length === 0) {
+          this.#limit = Math.min(this.#maxConcurrency, this.#limit + 1 / this.#limit);
+          return results as T;
+        }
       } catch (e) {
         const code = e instanceof RpcError ? e.code : undefined;
-        const transport = !(e instanceof RpcError);
-        const retry = transport || retryable(status, code);
-        if (!retry || attempt >= this.#maxAttempts) throw e;
-        if (status === 429 || code === 429 || code === -32005 || (e as Error).name === "TimeoutError") {
-          this.stats.throttled++;
-          this.#limit = Math.max(1, this.#limit / 2);
-        }
-        this.stats.retries++;
-        await sleep(Math.min(10_000, 200 * 2 ** (attempt - 1)) * (0.5 + Math.random()));
+        if (e instanceof RpcError && !retryable(status, code)) throw e;
+        failure = e;
       } finally {
         this.#release();
       }
+      const code = failure instanceof RpcError ? failure.code : undefined;
+      // Throttling only slows us down: it never uses up attempts, other failures do.
+      const throttled = status === 429 || code === 429 || code === -32005;
+      if (throttled || (failure as Error).name === "TimeoutError") {
+        this.stats.throttled++;
+        this.#limit = Math.max(1, this.#limit / 2);
+      }
+      if (throttled) attempt = Math.min(attempt, 6) - 1;
+      else if (attempt >= this.#maxAttempts) throw failure;
+      this.stats.retries++;
+      await sleep(Math.min(10_000, 200 * 2 ** Math.max(0, attempt - 1)) * (0.5 + Math.random()));
     }
   }
 
+  /** One HTTP request: per call its result or its `RpcError`. Throws for transport and HTTP errors. */
   async #send(calls: Call[], onStatus: (status: number) => void): Promise<unknown[]> {
     const first = this.#id;
     const body = calls.map((c, i) => ({ jsonrpc: "2.0", id: first + i, method: c.method, params: c.params }));
@@ -120,8 +142,8 @@ export class RpcClient {
     const byId = new Map(responses.map((r) => [r.id, r]));
     return calls.map((c, i) => {
       const r = byId.get(first + i);
-      if (r === undefined) throw new RpcError(c.method, -32603, "missing response in batch");
-      if (r.error !== undefined) throw new RpcError(c.method, r.error.code, r.error.message, r.error.data);
+      if (r === undefined) return new RpcError(c.method, -32603, "missing response in batch");
+      if (r.error !== undefined) return new RpcError(c.method, r.error.code, r.error.message, r.error.data);
       return r.result;
     });
   }

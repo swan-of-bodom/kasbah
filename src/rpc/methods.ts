@@ -57,3 +57,38 @@ export async function getHeaders(rpc: RpcClient, numbers: number[], batchSize: n
     status,
   }));
 }
+
+/** A transaction as `starknet_getTransactionByHash` returns it (spec 0.10). Felts stay hex strings. */
+export type Transaction = {
+  transaction_hash: string;
+  type: "INVOKE" | "DECLARE" | "DEPLOY_ACCOUNT" | "DEPLOY" | "L1_HANDLER";
+  version: string;
+  sender_address?: string;
+  contract_address?: string;
+  calldata?: string[];
+  signature?: string[];
+  nonce?: string;
+  tip?: string;
+  resource_bounds?: Record<string, { max_amount: string; max_price_per_unit: string }>;
+  paymaster_data?: string[];
+  account_deployment_data?: string[];
+  entry_point_selector?: string;
+  class_hash?: string;
+  [field: string]: unknown;
+};
+
+/** A receipt as `starknet_getTransactionReceipt` returns it. */
+export type Receipt = {
+  transaction_hash: string;
+  type: Transaction["type"];
+  actual_fee: { amount: string; unit: "WEI" | "FRI" };
+  execution_status: "SUCCEEDED" | "REVERTED";
+  finality_status: string;
+  revert_reason?: string;
+  events: { from_address: string; keys: string[]; data: string[] }[];
+  messages_sent: { from_address: string; to_address: string; payload: string[] }[];
+  execution_resources: Record<string, number>;
+  block_hash?: string;
+  block_number?: number;
+  [field: string]: unknown;
+};

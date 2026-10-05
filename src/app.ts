@@ -12,17 +12,23 @@ import { CallClient, type Client } from "./client.ts";
 import { Store, type Db } from "./db/store.ts";
 import { createTableSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
-import { blockNumber, type EmittedEvent, getEvents, getHeaders } from "./rpc/methods.ts";
+import { blockNumber, type EmittedEvent, getEvents, getHeaders, type Receipt, type Transaction } from "./rpc/methods.ts";
 import { probe } from "./rpc/probe.ts";
 import { canonical, type FactorySource, factoryReader, Sources } from "./sources.ts";
 import { type Batch, eventStream } from "./sync/fetch.ts";
 import { HeadSubscription } from "./sync/heads.ts";
+import { type Extras, fetchExtras, type Include } from "./sync/extras.ts";
 import { type BlockRef, findAncestor, follow } from "./sync/live.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
 
-export type ContractConfig = { abi: Abi; startBlock: number } & ({ address: string; factory?: undefined } | { factory: FactoryConfig; address?: undefined });
+export type ContractConfig = {
+  abi: Abi;
+  startBlock: number;
+  /** Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final). */
+  include?: Include;
+} & ({ address: string; factory?: undefined } | { factory: FactoryConfig; address?: undefined });
 
 /** A handler every `interval` blocks from `startBlock` (inclusive), after that block's events. */
 export type BlockConfig = { interval: number; startBlock: number; endBlock?: number };
@@ -69,6 +75,8 @@ export type HandlerName<C extends Config> = EventHandlerName<C> | `${keyof Block
 
 export type IndexedBlock<K extends string = string> = { source: K; block: { number: number; hash: string; timestamp: number } };
 
+type IncludeOf<C extends Config, K extends keyof Contracts<C>> = Contracts<C>[K] extends { include: infer I } ? I : {};
+
 export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends `${infer K}:${infer E}`
   ? K extends keyof Contracts<C> & string
     ? E extends EventName<Contracts<C>[K]["abi"]>
@@ -78,10 +86,11 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
           args: EventArgs<Contracts<C>[K]["abi"], E>;
           address: `0x${string}`;
           block: { number: number; hash: string | undefined };
-          transaction: { hash: string; index: number };
+          /** With `include.transaction`, also the transaction's fields as the RPC returns them. */
+          transaction: { hash: string; index: number } & (IncludeOf<C, K> extends { transaction: true } ? Transaction : {});
           /** Position of the event in its transaction. */
           index: number;
-        }
+        } & (IncludeOf<C, K> extends { receipt: true } ? { receipt: Receipt } : {})
       : never
     : K extends keyof Blocks<C> & string
       ? E extends "block"
@@ -104,6 +113,37 @@ export type RunOptions = {
   signal?: AbortSignal;
   log?: (line: string) => void;
 };
+
+/**
+ * Cuts batches into slices of about `max` events, always at a block boundary (a checkpoint never falls inside a
+ * block). Keeps memory small when every event brings its transaction and receipt.
+ */
+async function* slices(source: AsyncIterable<Batch>, max: number): AsyncGenerator<Batch> {
+  for await (const batch of source) {
+    let start = 0;
+    while (batch.events.length - start > max) {
+      let end = start + max;
+      const block = batch.events[end - 1]!.block_number!;
+      while (end < batch.events.length && batch.events[end]!.block_number === block) end++;
+      if (end === batch.events.length) break;
+      yield { events: batch.events.slice(start, end), through: batch.events[end]!.block_number! - 1 };
+      start = end;
+    }
+    yield { events: start === 0 ? batch.events : batch.events.slice(start), through: batch.through };
+  }
+}
+
+/** Yields each item with `prepare(item)`, preparing the next item while the caller handles this one. */
+async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Promise<U>): AsyncGenerator<[T, U]> {
+  let pending: Promise<[T, U]> | undefined;
+  for await (const item of source) {
+    const next = prepare(item).then((u): [T, U] => [item, u]);
+    next.catch(() => {});
+    if (pending !== undefined) yield await pending;
+    pending = next;
+  }
+  if (pending !== undefined) yield await pending;
+}
 
 const paddedCache = new Map<string, `0x${string}`>();
 const padded = (address: string) => {
@@ -277,20 +317,30 @@ export function kasbah<const C extends Config>(config: C) {
       }
 
       let indexed = 0;
-      const handle = async (e: EmittedEvent) => {
+      const includeOf = (e: EmittedEvent) => {
+        const w = sources.byAddress.get(e.from_address) ?? sources.byAddress.get(canonical(e.from_address));
+        return w === undefined ? undefined : config.contracts[w.contract]!.include;
+      };
+      const anyInclude = Object.values(config.contracts).some((c) => c.include?.transaction || c.include?.receipt);
+      const extrasFor = (events: EmittedEvent[]) =>
+        anyInclude ? fetchExtras(rpc, events, includeOf, { cache, isFinal: (b) => b <= finalThrough }) : Promise.resolve(new Map<string, Extras>());
+
+      const handle = async (e: EmittedEvent, extras: Map<string, Extras>) => {
         const w = sources.byAddress.get(e.from_address) ?? sources.byAddress.get(canonical(e.from_address));
         if (w === undefined || e.block_number! < w.from) return;
         const decoded = w.decode(e.block_number!, e.keys, e.data);
         if (decoded === undefined) return;
         const handler = handlers.get(`${w.contract}:${decoded.name}`);
         if (handler === undefined) return;
+        const x = extras.get(e.transaction_hash);
         const event = {
           contract: w.contract,
           name: decoded.name,
           args: decoded.args,
           address: padded(e.from_address),
           block: { number: e.block_number!, hash: e.block_hash },
-          transaction: { hash: e.transaction_hash, index: e.transaction_index },
+          transaction: { ...x?.transaction, hash: e.transaction_hash, index: e.transaction_index },
+          ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
           index: e.event_index,
         };
         client.current = event.block;
@@ -413,7 +463,9 @@ export function kasbah<const C extends Config>(config: C) {
             await setMeta(tx, "checkpoint", through);
             await notify(tx, through);
           });
-        for await (const batch of fetchRange(sources.addresses, sources.keys, first, backfillTo)) {
+        // Transactions and receipts of the next batch are fetched while this one is handled.
+        const batches = fetchRange(sources.addresses, sources.keys, first, backfillTo);
+        for await (const [batch, extras] of ahead(anyInclude ? slices(batches, 2_000) : batches, (b) => extrasFor(b.events))) {
           const fires = firesIn(through + 1, batch.through);
           const headers = fires.length > 0 ? await headersFor(fires.map((f) => f.number)) : undefined;
           let i = 0;
@@ -425,13 +477,13 @@ export function kasbah<const C extends Config>(config: C) {
           };
           for (const e of batch.events) {
             await fireUntil(e.block_number!);
-            await handle(e);
+            await handle(e, extras);
           }
           await fireUntil(batch.through + 1);
           sinceFlush += batch.events.length + fires.length;
           through = batch.through;
           if (signal.aborted) break;
-          if (sinceFlush >= FLUSH_EVENTS || through === backfillTo) {
+          if (sinceFlush >= FLUSH_EVENTS || through === backfillTo || (cache?.pendingBytes ?? 0) > 64 << 20) {
             await commit();
             sinceFlush = 0;
             const seconds = (performance.now() - started) / 1000;
@@ -502,7 +554,8 @@ export function kasbah<const C extends Config>(config: C) {
         prepare,
         onBlock: async (block) => {
           finalThrough = Math.max(finalThrough, block.number - window);
-          for (const e of block.events) await handle(e);
+          const extras = await extrasFor(block.events);
+          for (const e of block.events) await handle(e, extras);
           for (const b of blockSources) if (firesAt(b, block.number)) await fireBlock(b.name, { number: block.number, hash: block.hash, timestamp: block.timestamp });
           const prune = block.number - window;
           const children = newChildren.get(block.number) ?? [];

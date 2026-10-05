@@ -3,7 +3,7 @@ import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import { from as copyFrom } from "pg-copy-streams";
 import { quote } from "./db/table.ts";
-import type { EmittedEvent } from "./rpc/methods.ts";
+import type { EmittedEvent, Receipt, Transaction } from "./rpc/methods.ts";
 import type { Batch } from "./sync/fetch.ts";
 
 const hexBytes = (felt: string): Buffer => {
@@ -50,6 +50,7 @@ const SCHEMA_SQL = (s: string) => [
      result bytea NOT NULL, seq bigserial, PRIMARY KEY (address, entrypoint, calldata, block))`,
   `ALTER TABLE ${s}.calls ADD COLUMN IF NOT EXISTS seq bigserial`,
   `CREATE INDEX IF NOT EXISTS calls_seq ON ${s}.calls (seq)`,
+  `CREATE TABLE IF NOT EXISTS ${s}.transactions (hash bytea PRIMARY KEY, block integer NOT NULL, transaction jsonb, receipt jsonb)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
 ];
 
@@ -67,8 +68,11 @@ export class EventCache {
   #pending: EmittedEvent[] = [];
   #pendingFrom: number | undefined;
   #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
+  /** As JSON text: far smaller than the parsed objects while they wait for the commit. */
+  #transactions: { hash: Buffer; block: number; transaction: string | null; receipt: string | null }[] = [];
   #calls: { address: Buffer; entrypoint: Buffer; calldata: Buffer; block: number; result: Buffer }[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
+  #pendingBytes = 0;
   readonly #maxCalls: number;
   /** Rows in `calls`, counted at open and kept up to date by this process (other apps add to it too). */
   #callRows = 0;
@@ -121,6 +125,7 @@ export class EventCache {
       if (chainId !== undefined && schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
       const s = quote(schema);
       if (what.events) await pool.query(`TRUNCATE ${s}.events, ${s}.coverage, ${s}.headers`);
+      if (what.events && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.transactions`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.transactions`);
       if (what.calls && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.calls`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.calls`);
     }
   }
@@ -215,8 +220,47 @@ export class EventCache {
     this.#calls.push({ address: hexBytes(address), entrypoint: hexBytes(entrypoint), calldata: packFelts(calldata), block, result: packFelts(result) });
   }
 
+  /** Transaction and receipt JSON waiting for the next `persist`: the caller commits early past a limit. */
+  get pendingBytes(): number {
+    return this.#pendingBytes;
+  }
+
+  /** Cached transactions and receipts by hash (either may be missing). */
+  async transactions(hashes: string[]): Promise<Map<string, { transaction?: Transaction; receipt?: Receipt }>> {
+    const { rows } = await this.#pool.query<{ hash: string; transaction: Transaction | null; receipt: Receipt | null }>(
+      `SELECT encode(hash, 'hex') AS hash, transaction, receipt FROM ${this.#schema}.transactions WHERE hash = ANY($1)`,
+      [hashes.map(hexBytes)],
+    );
+    return new Map(rows.map((r) => [hexFelt(r.hash), { ...(r.transaction === null ? {} : { transaction: r.transaction }), ...(r.receipt === null ? {} : { receipt: r.receipt }) }]));
+  }
+
+  /** Keeps a fetched transaction and/or receipt until the next `persist`. */
+  rememberTransaction(hash: string, block: number, x: { transaction?: Transaction; receipt?: Receipt }) {
+    const transaction = x.transaction === undefined ? null : JSON.stringify(x.transaction);
+    const receipt = x.receipt === undefined ? null : JSON.stringify(x.receipt);
+    this.#pendingBytes += (transaction?.length ?? 0) + (receipt?.length ?? 0);
+    this.#transactions.push({
+      hash: hexBytes(hash),
+      block,
+      transaction,
+      receipt,
+    });
+  }
+
   /** Writes the tracked events and calls, and marks `[from, through]` covered, inside the caller's transaction. */
   async persist(tx: pg.PoolClient, through: number) {
+    const all = this.#transactions;
+    this.#transactions = [];
+    this.#pendingBytes = 0;
+    // In chunks: one statement's array parameters are built as one string.
+    for (let i = 0; i < all.length; i += 1_000) {
+      const t = all.slice(i, i + 1_000);
+      await tx.query(
+        `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
+         ON CONFLICT (hash) DO UPDATE SET transaction = coalesce(EXCLUDED.transaction, transactions.transaction), receipt = coalesce(EXCLUDED.receipt, transactions.receipt)`,
+        [t.map((x) => x.hash), t.map((x) => x.block), t.map((x) => x.transaction), t.map((x) => x.receipt)],
+      );
+    }
     if (this.#calls.length > 0) {
       const c = this.#calls;
       this.#calls = [];

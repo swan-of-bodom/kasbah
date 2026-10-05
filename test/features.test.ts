@@ -29,6 +29,7 @@ const childB = [
 ] as const;
 
 const pools = pgTable("pools", { address: text().primaryKey(), total: bignum().notNull(), events: integer().notNull(), created: integer().notNull() });
+const txs = pgTable("txs", { hash: text().primaryKey(), sender: text().notNull(), fee: bignum().notNull(), events: integer().notNull() });
 const ticks = pgTable("ticks", { block: integer().primaryKey(), timestamp: integer().notNull(), last: text().notNull() });
 
 type Block = { number: number; hash: string; parent: string; events: EmittedEvent[]; created: string[] };
@@ -117,6 +118,13 @@ function fakeNode() {
         if (BigInt(params.request.contract_address) !== BigInt(FACTORY) || params.request.entry_point_selector !== selector("last_child")) throw { code: 21, message: "Entrypoint not found" };
         return [blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0"];
       }
+      case "starknet_getTransactionByHash":
+      case "starknet_getTransactionReceipt": {
+        const e = blocks.flatMap((b) => b.events).find((x) => x.transaction_hash === params.transaction_hash);
+        if (e === undefined) throw { code: 29, message: "Transaction hash not found" };
+        if (method === "starknet_getTransactionByHash") return { transaction_hash: e.transaction_hash, type: "INVOKE", version: "0x3", sender_address: `0x5e${e.transaction_index}`, calldata: [] };
+        return { transaction_hash: e.transaction_hash, type: "INVOKE", actual_fee: { amount: `0x${(e.block_number! * 10 + e.transaction_index).toString(16)}`, unit: "FRI" }, execution_status: "SUCCEEDED", finality_status: "ACCEPTED_ON_L2", events: [e], messages_sent: [], execution_resources: {} };
+      }
       case "starknet_getClass":
         return { abi: JSON.stringify(params.class_hash === "0xfa" ? factoryAbi : params.class_hash === "0xca" ? childA : childB) };
       case "starknet_getEvents": {
@@ -181,9 +189,9 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
     rpc: rpcUrl,
     database: url!,
     schema,
-    contracts: { Pool: { abi: childB, factory: { address: FACTORY, abi: factoryAbi, event: "Created", parameter: "pool" }, startBlock: FACTORY_DEPLOYED } },
+    contracts: { Pool: { abi: childB, factory: { address: FACTORY, abi: factoryAbi, event: "Created", parameter: "pool" }, startBlock: FACTORY_DEPLOYED, include: { transaction: true, receipt: true } } },
     blocks: { Every10: { interval: 10, startBlock: 0 } },
-    tables: { pools, ticks },
+    tables: { pools, ticks, txs },
     reorgWindow: 16,
     pollMs: 5,
     concurrency: 4,
@@ -192,6 +200,8 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
   });
   a.on("Pool:Counted", async ({ event, context }) => {
     const v = event.args.amount;
+    const fee = BigInt(event.receipt.actual_fee.amount);
+    await context.db.insert(txs).values({ hash: event.transaction.hash, sender: event.transaction.sender_address!, fee, events: event.receipt.events.length }).onConflictDoNothing();
     await context.db.insert(pools).values({ address: event.address, total: v, events: 1, created: event.block.number })
       .onConflictDoUpdate((r) => ({ total: r.total + v, events: r.events + 1 }));
   });
@@ -242,13 +252,18 @@ function expected(to: number) {
       } else totals.set(a, { ...t!, total: t!.total * 2n, events: t!.events + 1 });
     }
   }
+  const txRows = node.blocks.slice(0, to + 1).flatMap((b) => b.events.filter((e) => BigInt(e.from_address) !== BigInt(FACTORY) && e.keys[0] === selector("Counted")))
+    .map((e) => ({ hash: e.transaction_hash, sender: `0x5e${e.transaction_index}`, fee: String(e.block_number! * 10 + e.transaction_index), events: 1 }))
+    .sort((x, y) => (x.hash < y.hash ? -1 : 1));
   return {
+    txs: txRows,
     pools: [...totals].map(([address, t]) => ({ address, total: t.total.toString(), events: t.events, created: t.created })).sort((x, y) => x.address.localeCompare(y.address)),
     ticks: node.blocks.slice(0, to + 1).filter((b) => b.number % 10 === 0)
       .map((b) => ({ block: b.number, timestamp: 1_000 + b.number * 2, last: `0x${BigInt(node.blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0").toString(16).padStart(64, "0")}` })),
   };
 }
 const actual = async (schema: string) => ({
+  txs: await query(`SELECT hash, sender, fee::text, events FROM ${schema}.txs ORDER BY hash COLLATE "C"`),
   pools: await query(`SELECT address, total::text, events, created FROM ${schema}.pools ORDER BY address COLLATE "C"`),
   ticks: await query(`SELECT block, timestamp, last FROM ${schema}.ticks ORDER BY block`),
 });
@@ -301,12 +316,14 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
   const before = node.calls.get("starknet_getEvents") ?? 0;
   const headersBefore = node.calls.get("starknet_getBlockWithTxHashes") ?? 0;
   const callsBefore = node.calls.get("starknet_call") ?? 0;
+  const extrasBefore = (node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0);
   const logs: string[] = [];
   await app(schema, true).run({ reset: true, to, log: (l) => logs.push(l) });
   expect(await actual(schema)).toEqual(expected(to));
   expect(node.calls.get("starknet_getEvents")).toBe(before);
   expect(node.calls.get("starknet_getBlockWithTxHashes")).toBe(headersBefore);
   expect(node.calls.get("starknet_call")).toBe(callsBefore);
+  expect((node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0)).toBe(extrasBefore);
   expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
 
   // Past the cached range, only the new blocks are fetched.
@@ -342,3 +359,22 @@ test.skipIf(url === undefined)("with a head subscription, new blocks are indexed
   expect(await actual(schema)).toEqual(expected(node.blocks.length - 1));
   expect(logs).toContain("WebSocket: following new heads");
 }, 60_000);
+
+// Compile-time only: transaction fields and the receipt exist only with `include`.
+function _types() {
+  const plain = kasbah({ rpc: "", database: "", contracts: { P: { abi: childA, address: "0x1", startBlock: 0 } }, tables: { pools } });
+  plain.on("P:Counted", ({ event }) => {
+    // @ts-expect-error no receipt without include.receipt
+    void event.receipt;
+    // @ts-expect-error no transaction fields without include.transaction
+    void event.transaction.sender_address;
+    void event.transaction.hash;
+  });
+  const both = kasbah({ rpc: "", database: "", contracts: { P: { abi: childA, address: "0x1", startBlock: 0, include: { receipt: true } } }, tables: { pools } });
+  both.on("P:Counted", ({ event }) => {
+    const status: "SUCCEEDED" | "REVERTED" = event.receipt.execution_status;
+    // @ts-expect-error only the receipt was asked for
+    void event.transaction.calldata;
+    return void status;
+  });
+}

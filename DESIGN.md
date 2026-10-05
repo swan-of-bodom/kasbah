@@ -225,6 +225,24 @@ is always rolled back before the next confirmed block. To decide when we get the
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
 
+### 7.1 Transactions and receipts (opt-in per contract)
+
+Built (`src/sync/extras.ts`): `include: { transaction?: true, receipt?: true }` on a contract gives its
+handlers `event.transaction` with the transaction's RPC fields and `event.receipt`, typed only when asked for.
+- One `getTransactionByHash` / `getTransactionReceipt` per transaction hash (deduplicated: 1,024 Ekubo events
+  come from ≈209 transactions), batched by 100. Not `getBlockWithReceipts`: for the same events it moves 13 MB of
+  whole blocks instead of ≈2 MB.
+- Backfill fetches the next slice's data while the current one is handled; with `include`, batches are cut into
+  slices of ≈2,000 events at block boundaries, so memory stays flat.
+- Cached (final blocks, `cache: true`) in `transactions(hash, block, transaction jsonb, receipt jsonb)`, written
+  in chunks with the commit; a commit also happens once 64 MB of it is waiting.
+- Measured, Ekubo blocks 2.00M–2.02M (56k events, 15k transactions): without `include` 4 s; with both
+  51–54 s from RPC (bound by Alchemy's compute units, ≈280 transactions/s) at 0.5–0.7 GB; again from the cache
+  2.7 s. ≈5.2 KB per transaction cached, so full Ekubo history with receipts would be ≈40 GB.
+- Found on the way: Alchemy throttles single calls inside a batch (HTTP 200, error 429 per call). The RPC client
+  now resends only the failed calls, and throttling never uses up retry attempts (it halves concurrency and
+  backs off instead).
+
 ## 8. ABIs, types and decoding
 
 starknet.js (10.8.0) is used for what it is good at: hashing (`sn_keccak`, Pedersen/Poseidon via

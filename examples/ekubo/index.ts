@@ -1,5 +1,5 @@
 // Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
-//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--ws] [--reset]
+//   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--ws] [--include] [--reset]
 // Without --to it backfills, then follows the head until Ctrl-C.
 import { parseArgs } from "node:util";
 import { createConfig, kasbah } from "../../src/index.ts";
@@ -7,7 +7,7 @@ import abi from "./abi.ts";
 import { pools } from "./schema.ts";
 
 const { values } = parseArgs({
-  options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, ws: { type: "boolean" }, reset: { type: "boolean" } },
+  options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, ws: { type: "boolean" }, include: { type: "boolean" }, reset: { type: "boolean" } },
 });
 
 const config = createConfig({
@@ -15,7 +15,7 @@ const config = createConfig({
   database: process.env.DATABASE_URL!,
   schema: "ekubo",
   contracts: {
-    Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: values.start === undefined ? 165_392 : Number(values.start) },
+    Core: { abi, address: "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b", startBlock: values.start === undefined ? 165_392 : Number(values.start), ...(values.include ? { include: { transaction: true, receipt: true } } : {}) },
   },
   tables: { pools },
   ...(values.port === undefined ? {} : { api: { port: Number(values.port) } }),
