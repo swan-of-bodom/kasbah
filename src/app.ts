@@ -110,6 +110,13 @@ export type RunOptions = {
   to?: number;
   /** Drop the app's schema first. */
   reset?: boolean;
+  /**
+   * The schema holds another build (config, tables or handlers changed): `"error"` (default) refuses to start,
+   * `"reset"` drops it and indexes from scratch (what `kasbah dev` does).
+   */
+  onBuildChange?: "error" | "reset";
+  /** Part of the build id: the CLI passes a hash of the app's source files, so a change in any helper counts. */
+  buildSalt?: string;
   signal?: AbortSignal;
   log?: (line: string) => void;
 };
@@ -224,12 +231,23 @@ export function kasbah<const C extends Config>(config: C) {
           ]),
           blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
           tables: tables.map((t) => createTableSql(tableInfo(t))),
-          handlers: [...handlers.keys()].sort(),
+          // Their code too: a changed handler means the stored results are stale.
+          handlers: [...handlers].map(([name, h]) => [name, h.toString()]).sort(),
+          source: options.buildSalt ?? null,
         }))
         .digest("hex")
         .slice(0, 16);
 
-      if (options.reset) await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
+      let reset = options.reset === true;
+      if (!reset && options.onBuildChange === "reset") {
+        const exists = (await pool.query(`SELECT to_regclass($1) AS r`, [`${quote(schema)}._kasbah_meta`])).rows[0].r !== null;
+        const stored = exists ? (await pool.query(`SELECT value FROM ${quote(schema)}._kasbah_meta WHERE key = 'build'`)).rows[0]?.value : undefined;
+        if (stored !== undefined && stored !== buildId) {
+          log("build changed (config, tables or handlers): indexing from scratch");
+          reset = true;
+        }
+      }
+      if (reset) await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
       await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quote(schema)}`);
       let checkpoint: number | undefined;
       let stored: Record<string, unknown> = {};

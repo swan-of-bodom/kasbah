@@ -1,12 +1,15 @@
 // Ekubo pools: one row per pool with swap count, volume and the latest price, tick and liquidity.
 //   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--ws] [--include] [--reset]
+//   pnpm kasbah dev examples/ekubo/index.ts       (the defaults, restarted on every change)
 // Without --to it backfills, then follows the head until Ctrl-C.
 import { parseArgs } from "node:util";
 import { createConfig, kasbah } from "../../src/index.ts";
 import abi from "./abi.ts";
 import { pools } from "./schema.ts";
 
+// Run directly it takes flags; imported by the CLI, the defaults.
 const { values } = parseArgs({
+  args: import.meta.main ? process.argv.slice(2) : [],
   options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, ws: { type: "boolean" }, include: { type: "boolean" }, reset: { type: "boolean" } },
 });
 
@@ -65,6 +68,10 @@ app.on("Core:Swapped", async ({ event, context }) => {
   }));
 });
 
-const stop = new AbortController();
-process.once("SIGINT", () => stop.abort());
-await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, signal: stop.signal });
+export default app;
+
+if (import.meta.main) {
+  const stop = new AbortController();
+  process.once("SIGINT", () => stop.abort());
+  await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, signal: stop.signal });
+}

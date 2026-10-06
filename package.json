@@ -10,7 +10,8 @@
   "scripts": {
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
     "typecheck": "tsc --noEmit",
-    "fixtures": "node --env-file=.env scripts/fetch-fixtures.ts"
+    "fixtures": "node --env-file=.env scripts/fetch-fixtures.ts",
+    "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli.ts"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.0",
@@ -28,5 +29,8 @@
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",
     "ws": "^8.22.0"
+  },
+  "bin": {
+    "kasbah": "./src/cli.ts"
   }
 }

@@ -421,6 +421,13 @@ Target size: under 10k lines for v1.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
+CLI (`src/cli.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info|clear`. The app
+module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
+on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the
+reliable reload), with `onBuildChange: "reset"`. The build id now includes each handler's source and the CLI's
+hash of the app's code files: before, a handler body edit kept stale results. Not yet: a compiled build for
+publishing to a registry.
+
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
 
 `scripts/bench.ts`. Every run of the same range gave the same event count and checksum, on every endpoint and in
