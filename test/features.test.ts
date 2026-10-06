@@ -17,6 +17,7 @@ const factoryAbi = [
   { type: "event", name: "f::Event", kind: "enum", variants: [{ name: "Created", type: "f::Created", kind: "nested" }] },
   { type: "function", name: "last_child", inputs: [], outputs: [{ type: "core::starknet::contract_address::ContractAddress" }], state_mutability: "view" },
 ] as const;
+const proxyAbi = [{ type: "event", name: "Upgraded", keys: [], data: [{ name: "implementation", type: "felt" }] }] as const;
 const amount = { name: "amount", type: "core::integer::u128", kind: "data" } as const;
 const childA = [
   { type: "event", name: "c::Counted", kind: "struct", members: [amount] },
@@ -126,7 +127,8 @@ function fakeNode() {
         return { transaction_hash: e.transaction_hash, type: "INVOKE", actual_fee: { amount: `0x${(e.block_number! * 10 + e.transaction_index).toString(16)}`, unit: "FRI" }, execution_status: "SUCCEEDED", finality_status: "ACCEPTED_ON_L2", events: [e], messages_sent: [], execution_resources: {} };
       }
       case "starknet_getClass":
-        return { abi: JSON.stringify(params.class_hash === "0xfa" ? factoryAbi : params.class_hash === "0xca" ? childA : childB) };
+        // The factory is a Cairo 0 style proxy: its class declares none of the events it emits.
+        return { abi: JSON.stringify(params.class_hash === "0xfa" ? proxyAbi : params.class_hash === "0xca" ? childA : childB) };
       case "starknet_getEvents": {
         const f = params.filter;
         const addresses = new Set([f.address].flat().map((x: string) => BigInt(x)));

@@ -97,6 +97,7 @@ export class Store {
     // A row inserted this batch never reached the database; one deleted or upserted this batch may be there.
     const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
     s.pending.set(k, { op, row });
+    s.cache.delete(k);
     s.cache.set(k, row);
   }
 
@@ -106,6 +107,13 @@ export class Store {
       const k = s.info.keyOf(values);
       const row = { ...values };
       const plain = async () => {
+        // Without every row in memory, checking would cost a query per insert (append-only tables, the common
+        // case): a duplicate is then caught by the primary key when the batch is written.
+        const known = s.cache.get(k);
+        if (known === undefined && !s.complete && !this.journal) {
+          this.#write(s, row, null);
+          return row;
+        }
         if (await this.#get(s, row)) throw new Error(`${s.info.name}: a row with key ${k} already exists`);
         this.#write(s, row, null);
         return row;
@@ -182,7 +190,14 @@ export class Store {
       const table = quote(s.info.name);
 
       if (deletes.length > 0) await this.#delete(client, s.info, deletes);
-      if (inserts.length > 0) await copyRows(client, s.info, table, inserts);
+      if (inserts.length > 0) {
+        try {
+          await copyRows(client, s.info, table, inserts);
+        } catch (e) {
+          if ((e as { code?: string }).code === "23505") throw new Error(`${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`, { cause: e });
+          throw e;
+        }
+      }
       if (upserts.length > 0) {
         const temp = quote(`_kasbah_${s.info.name}`);
         await client.query(`CREATE TEMP TABLE IF NOT EXISTS ${temp} (LIKE ${table}) ON COMMIT DELETE ROWS`);
@@ -196,7 +211,12 @@ export class Store {
       }
       s.pending.clear();
       if (s.cache.size > this.#maxCachedRows) {
-        s.cache.clear();
+        // Oldest written first (a write re-inserts its key at the end): the rows handlers keep touching stay.
+        let drop = s.cache.size - Math.floor(this.#maxCachedRows * 0.8);
+        for (const key of s.cache.keys()) {
+          if (drop-- <= 0) break;
+          s.cache.delete(key);
+        }
         s.complete = false;
       }
     }

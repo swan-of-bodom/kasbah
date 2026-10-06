@@ -67,14 +67,22 @@ export function abiEvents(abi: Abi): EventDef[] {
     }
   }
 
-  const seen = new Map<string, string>();
+  // Some Cairo 0 ABIs declare an event twice (JediSwap pairs: Transfer with `from_` and with `from_address`).
+  // The same layout decodes the same felts: keep the first. A different layout is ambiguous.
+  const layout = (e: EventDef) => `${e.keyMembers.map((m) => m.type).join(",")}|${e.dataMembers.map((m) => m.type).join(",")}`;
+  const seen = new Map<string, EventDef>();
+  const kept: EventDef[] = [];
   for (const e of out) {
     const id = e.selectors.join(",");
     const other = seen.get(id);
-    if (other !== undefined) throw new DecodeError(`events ${other} and ${e.name} have the same selectors`);
-    seen.set(id, e.name);
+    if (other === undefined) {
+      seen.set(id, e);
+      kept.push(e);
+    } else if (other.name !== e.name || layout(other) !== layout(e)) {
+      throw new DecodeError(`events ${other.name} and ${e.name} have the same selectors`);
+    }
   }
-  return out;
+  return kept;
 }
 
 type Compiled = { name: string; depth: number; keys: Reader; data: Reader };

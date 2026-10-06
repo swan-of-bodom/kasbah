@@ -100,14 +100,15 @@ export class EventCache {
     this.#callRows -= r.rowCount ?? 0;
   }
 
-  /** Every chain's cache in the database, with its size. */
-  static async info(pool: pg.Pool): Promise<{ schema: string; events: number; calls: number; transactions: number; headers: number; bytes: number }[]> {
+  /** Every chain's cache in the database (or one chain's), with its size. */
+  static async info(pool: pg.Pool, chainId?: string): Promise<{ schema: string; events: number; calls: number; transactions: number; headers: number; bytes: number }[]> {
     const { rows } = await pool.query<{ schema: string; bytes: string }>(
       `SELECT n.nspname AS schema, coalesce(sum(pg_total_relation_size(c.oid)), 0)::text AS bytes FROM pg_namespace n
        LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind = 'r' WHERE n.nspname LIKE 'kasbah\\_cache\\_%' GROUP BY 1 ORDER BY 1`,
     );
     const out = [];
     for (const r of rows) {
+      if (chainId !== undefined && r.schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
       const s = quote(r.schema);
       // A cache made by an older version may lack a table.
       const n = async (t: string) => {
@@ -121,8 +122,7 @@ export class EventCache {
 
   /** Empties a chain's cache (or every chain's): events with their coverage and headers, call results, or both. */
   static async clear(pool: pg.Pool, what: { events?: boolean; calls?: boolean }, chainId?: string) {
-    for (const { schema } of await EventCache.info(pool)) {
-      if (chainId !== undefined && schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
+    for (const { schema } of await EventCache.info(pool, chainId)) {
       const s = quote(schema);
       if (what.events) await pool.query(`TRUNCATE ${s}.events, ${s}.coverage, ${s}.headers`);
       if (what.events && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.transactions`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.transactions`);

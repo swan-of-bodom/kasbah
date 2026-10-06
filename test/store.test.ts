@@ -88,3 +88,39 @@ test.skipIf(url === undefined)("the undo journal reverts random writes to any ea
   // After a revert the cache is gone: reads come from the database again.
   expect(await store.db.find(balances, { owner: "0x0" })).toEqual({ owner: "0x0", amount: 10n ** 30n, updates: 0, note: "a\tb\\c\n" });
 });
+
+test.skipIf(url === undefined)("past the cache limit: plain inserts make no queries, duplicates fail at flush, updates still read", async () => {
+  await pool.query(`DROP TABLE IF EXISTS balances`);
+  await pool.query(createTableSql(tableInfo(balances)));
+  let queries = 0;
+  const counting = { ...pool, query: (...a: unknown[]) => (queries++, (pool.query as (...x: unknown[]) => unknown)(...a)) } as unknown as pg.Pool;
+  const store = new Store(drizzle(counting), [balances], { complete: true, maxCachedRows: 10 });
+  const row = (i: number) => ({ owner: `0x${i.toString(16).padStart(4, "0")}`, amount: BigInt(i), updates: 0 });
+
+  for (let i = 0; i < 30; i++) await store.db.insert(balances).values(row(i));
+  await inTransaction((c) => store.flush(c));
+  // Over the limit: the oldest rows are dropped, the table is no longer known in full.
+  queries = 0;
+  for (let i = 30; i < 60; i++) await store.db.insert(balances).values(row(i));
+  expect(queries).toBe(0);
+  // A key inserted twice in one batch is still caught at once.
+  await expect(store.db.insert(balances).values(row(59))).rejects.toThrow("already exists");
+  await inTransaction((c) => store.flush(c));
+
+  // An evicted row is read back for an update.
+  expect((await store.db.update(balances, { owner: row(1).owner }).set((r) => ({ updates: r.updates + 1 }))).updates).toBe(1);
+  expect(queries).toBeGreaterThan(0);
+  await inTransaction((c) => store.flush(c));
+  expect((await pool.query(`SELECT count(*)::int AS n, sum(updates)::int AS u FROM balances`)).rows[0]).toEqual({ n: 60, u: 1 });
+
+  // An evicted row inserted again: the primary key refuses it when the batch is written.
+  await store.db.insert(balances).values(row(2));
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await expect(store.flush(c)).rejects.toThrow(/balances: insert of a key that already exists \(Key \(owner\)=\(0x0002\)/);
+    await c.query("ROLLBACK");
+  } finally {
+    c.release();
+  }
+});

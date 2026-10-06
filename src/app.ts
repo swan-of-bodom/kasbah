@@ -502,10 +502,11 @@ export function kasbah<const C extends Config>(config: C) {
           through = batch.through;
           if (signal.aborted) break;
           if (sinceFlush >= FLUSH_EVENTS || through === backfillTo || (cache?.pendingBytes ?? 0) > 64 << 20) {
+            const committing = performance.now();
             await commit();
             sinceFlush = 0;
             const seconds = (performance.now() - started) / 1000;
-            log(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${indexed} handled, ${Math.round(indexed / seconds)}/s`);
+            log(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${indexed} handled, ${Math.round(indexed / seconds)}/s, commit ${Math.round(performance.now() - committing)} ms`);
           }
         }
         if (!signal.aborted) through = backfillTo;

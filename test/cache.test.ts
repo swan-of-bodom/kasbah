@@ -94,9 +94,9 @@ test.skipIf(url === undefined)("call results: kept up to the cap, oldest dropped
   expect(Number((await pool.query(`SELECT count(*) AS n FROM kasbah_cache_${CHAIN}.calls`)).rows[0].n)).toBeLessThanOrEqual(4);
   expect(await cache.getCall("0xe", "0x5e1", ["0x4"], 4)).toEqual(["0x44"]);
 
-  const info = (await EventCache.info(pool)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!;
+  const info = (await EventCache.info(pool, CHAIN)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!;
   expect(info.calls).toBeGreaterThan(0);
   expect(info.bytes).toBeGreaterThan(0);
   await EventCache.clear(pool, { calls: true }, CHAIN);
-  expect((await EventCache.info(pool)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!.calls).toBe(0);
+  expect((await EventCache.info(pool, CHAIN)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!.calls).toBe(0);
 });

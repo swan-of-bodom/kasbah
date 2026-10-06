@@ -217,6 +217,10 @@ is always rolled back before the next confirmed block. To decide when we get the
 
 - Handlers run sequentially in checkpoint order. Checkpoint = `(block_number, transaction_index, event_index)`;
   one chain means no timestamps or chain ids in it.
+- Past `maxCachedRows` (500k per table) the oldest-written rows are dropped and the table is no longer known in
+  full. Plain inserts then skip the existence check (a query per insert: JediSwap's 7M swaps went from 50k to
+  4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
+  the error. `onConflictDo…`, `find` and `update` still read a missing row from Postgres.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
 - On a fresh run, tables live fully in memory until a memory cap, so reads in handlers never hit the database.
@@ -328,6 +332,22 @@ unknown. So a "latest ABI only" indexer loses data without any error.
   in an older class decodes to that class's shape; config can declare older ABIs for an event so the handler gets
   a typed union. Events unknown to the config ABI but known to an older class are reported at startup, not dropped
   silently.
+
+### 8.5 Cairo 0 proxies (found on JediSwap)
+
+A Cairo 0 proxy's class (the one at its address) declares only the proxy's own events (`Upgraded`,
+`AdminChanged`); everything the implementation emits comes out under the proxy's address with no ABI there.
+JediSwap v1's factory and all 1,051 pairs are such proxies, as were Argent accounts and the bridged tokens.
+- The configured ABI is the fallback: an event the class active at that block doesn't declare is decoded with
+  it, and handled events of the configured ABI are always in the fetch filter. So for a proxy, configure the
+  implementation's ABI (`get_implementation_hash`, then `getClass`).
+- An event declared twice with the same layout (JediSwap pairs: `Transfer` with `from_` and with
+  `from_address`) is accepted, the first declaration wins; two layouts for one selector are refused.
+- A factory `parameter` that is a Cairo 0 `felt` (a bigint once decoded) is read as an address too.
+
+Checked on mainnet (`examples/jediswap`, `check.ts`): JediSwap v1 to block 400k, 15.9M events, 89
+pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves and tokens equal
+`get_reserves`/`token0`/`token1` read through the proxy at block 400k (0 mismatches). 885 s at 1.8 GB peak.
 
 ## 9. Storage and caches
 

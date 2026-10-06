@@ -138,6 +138,6 @@ test.skipIf(url === undefined)("dev: restarts on a change and re-indexes a chang
 }, 60_000);
 
 test.skipIf(url === undefined)("cache info runs", async () => {
-  const run = cli("cache", "info");
+  const run = cli("cache", "info", "--chain", "0x0");
   expect(await run.exited).toBe(0);
 });

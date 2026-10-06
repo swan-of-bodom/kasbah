@@ -194,3 +194,14 @@ describe("codec", () => {
     expect(decoded).toEqual({ name: "Batch", args: { ids: [5n, 6n], point: { x: 1n, y: 2n }, amount: 3n + (1n << 128n) } });
   });
 });
+
+test("an event declared twice with the same layout is accepted, with another layout refused", () => {
+  const twice = [
+    { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }, { name: "value", type: "Uint256" }] },
+    { type: "event", name: "Transfer", keys: [], data: [{ name: "from_address", type: "felt" }, { name: "amount", type: "Uint256" }] },
+  ] as const;
+  const decode = createDecoder(twice);
+  expect(decode([selector("Transfer")], ["0x1", "0x2", "0x0"])).toEqual({ name: "Transfer", args: { from_: 1n, value: 2n } });
+  const clash = [twice[0], { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }] }] as const;
+  expect(() => createDecoder(clash)).toThrow("same selectors");
+});

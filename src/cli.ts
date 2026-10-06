@@ -15,7 +15,7 @@ const USAGE = `usage:
   kasbah start <app.ts> [--to <block>] [--reset]   index, then follow the head (until --to, or Ctrl-C)
   kasbah dev <app.ts>                              the same, restarted on every file change; a changed
                                                    build re-indexes from scratch
-  kasbah cache info                                each chain's raw-event and call cache, with its size
+  kasbah cache info [--chain <id>]                 each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
 
@@ -104,7 +104,7 @@ async function cache(command: string | undefined, o: { database?: string; events
   const pool = new pg.Pool({ connectionString: database, max: 1 });
   try {
     if (command === "info") {
-      const info = await EventCache.info(pool);
+      const info = await EventCache.info(pool, o.chain);
       if (info.length === 0) console.log("no caches");
       for (const c of info) console.log(`${c.schema}: ${c.events} events, ${c.transactions} transactions, ${c.calls} calls, ${c.headers} headers, ${(c.bytes / 2 ** 20).toFixed(1)} MB`);
     } else if (command === "clear") {

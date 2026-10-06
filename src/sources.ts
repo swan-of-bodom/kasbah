@@ -49,10 +49,29 @@ export class Sources {
   readonly #reported = new Set<string>();
   readonly #log: (line: string) => void;
 
+  /** Per contract, the configured ABI's decoder: for events the class at the address doesn't declare. */
+  readonly #fallback = new Map<string, Decode>();
+
   constructor(rpc: RpcClient, contracts: ContractSource[], log: (line: string) => void) {
     this.#rpc = rpc;
-    for (const c of contracts) this.#contracts.set(c.name, c);
+    for (const c of contracts) {
+      this.#contracts.set(c.name, c);
+      this.#fallback.set(c.name, createDecoder(c.abi));
+      // Handled events of the configured ABI are always fetched, whatever the classes say (Cairo 0 proxies).
+      for (const e of abiEvents(c.abi)) if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
+    }
     this.#log = log;
+  }
+
+  /**
+   * Decodes with the class active at the block, and falls back to the configured ABI for an event that class
+   * doesn't declare. A Cairo 0 proxy's class only has the proxy's own events: its implementation's come from
+   * the configured ABI.
+   */
+  #decoder(contract: string, spans: (ClassSpan & { abi: Abi })[]) {
+    const byClass = createHistoricalDecoder(spans, this.#decoderFor);
+    const fallback = this.#fallback.get(contract)!;
+    return (block: number, keys: readonly string[], data: readonly string[]) => byClass(block, keys, data) ?? (block < (spans[0]?.from ?? Infinity) ? undefined : fallback(keys, data));
   }
 
   abiOf(classHash: string): Promise<Abi> {
@@ -95,7 +114,7 @@ export class Sources {
       }
       w.spans.push(s);
     }
-    w.decode = createHistoricalDecoder(w.spans, this.#decoderFor);
+    w.decode = this.#decoder(w.contract, w.spans);
   }
 
   /**
@@ -184,16 +203,21 @@ export type FactorySource = {
 
 /** Decodes a factory's creation events into children. */
 export function factoryReader(f: FactorySource, spans: (ClassSpan & { abi: Abi })[]) {
-  const decode = createHistoricalDecoder(spans);
+  const byClass = createHistoricalDecoder(spans);
+  // A proxy factory's class doesn't declare the creation event: the configured ABI does.
+  const fallback = createDecoder(f.abi);
+  const decode = (block: number, keys: readonly string[], data: readonly string[]) => byClass(block, keys, data) ?? fallback(keys, data);
   const selectors = new Set<string>();
-  for (const s of spans) for (const e of abiEvents(s.abi)) if (e.name === f.event) selectors.add(e.selectors[0]!);
-  if (selectors.size === 0) selectors.add(selector(f.event.split(".").at(-1)!));
+  for (const abi of [...spans.map((s) => s.abi), f.abi]) for (const e of abiEvents(abi)) if (e.name === f.event) selectors.add(e.selectors[0]!);
+  if (selectors.size === 0) throw new Error(`${f.contract}: the factory ABI has no event ${f.event}`);
   return {
     selectors: [...selectors],
     child(e: { block_number?: number; keys: string[]; data: string[] }): string | undefined {
       const decoded = decode(e.block_number!, e.keys, e.data);
       if (decoded === undefined || decoded.name !== f.event) return undefined;
       const value = (decoded.args as Record<string, unknown>)[f.parameter];
+      // A ContractAddress decodes to hex, a Cairo 0 `felt` to a bigint.
+      if (typeof value === "bigint") return `0x${value.toString(16)}`;
       if (typeof value !== "string") throw new Error(`${f.contract}: ${f.event}.${f.parameter} is not an address`);
       return canonical(value);
     },

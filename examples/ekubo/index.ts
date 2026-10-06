@@ -2,14 +2,16 @@
 //   node --env-file=.env --no-warnings examples/ekubo/index.ts [--start <block>] [--to <block>] [--port <n>] [--cache] [--ws] [--include] [--reset]
 //   pnpm kasbah dev examples/ekubo/index.ts       (the defaults, restarted on every change)
 // Without --to it backfills, then follows the head until Ctrl-C.
+import { resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { createConfig, kasbah } from "../../src/index.ts";
 import abi from "./abi.ts";
 import { pools } from "./schema.ts";
 
-// Run directly it takes flags; imported by the CLI, the defaults.
+// Run directly it takes flags; imported by the CLI, the defaults. (`import.meta.main` is false for .ts files on Node 24.2.)
+const main = resolve(process.argv[1] ?? "") === import.meta.filename;
 const { values } = parseArgs({
-  args: import.meta.main ? process.argv.slice(2) : [],
+  args: main ? process.argv.slice(2) : [],
   options: { start: { type: "string" }, to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, ws: { type: "boolean" }, include: { type: "boolean" }, reset: { type: "boolean" } },
 });
 
@@ -70,7 +72,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
 
 export default app;
 
-if (import.meta.main) {
+if (main) {
   const stop = new AbortController();
   process.once("SIGINT", () => stop.abort());
   await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, signal: stop.signal });
