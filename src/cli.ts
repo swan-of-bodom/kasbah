@@ -127,6 +127,11 @@ async function cache(command: string | undefined, o: { database?: string; events
   }
 }
 
+// Like `node --env-file-if-exists=.env`: variables already set win.
+try {
+  process.loadEnvFile(".env");
+} catch {}
+
 const { positionals, values } = parseArgs({
   allowPositionals: true,
   allowNegative: true,

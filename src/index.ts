@@ -23,3 +23,4 @@ export type { Db } from "./db/store.ts";
 export type { Receipt, Transaction } from "./rpc/methods.ts";
 export type { Include } from "./sync/extras.ts";
 export { bignum, hex } from "./schema.ts";
+export { Status } from "./status.ts";

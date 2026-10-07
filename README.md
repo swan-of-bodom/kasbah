@@ -42,8 +42,19 @@ pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--
 ```
 
 The build id covers config, tables, handler code and a hash of the code files in the app's directory.
-Not published yet: the package runs from its TypeScript sources (Node strips types, but not inside
-`node_modules`), so link it (`pnpm link`) rather than install it from a registry.
+## In another project
+
+Not on a registry (the repo is private): pack it and install the tarball. Node 22.18+ (the app's `.ts` files
+run with Node's type stripping; kasbah itself is compiled to `dist/`).
+
+```
+cd ~/Desktop/kasbah && pnpm pack                          # builds dist/ and writes kasbah-0.0.0.tgz
+cd my-indexer && pnpm add ~/Desktop/kasbah/kasbah-0.0.0.tgz drizzle-orm
+pnpm kasbah dev app.ts                                    # reads .env (KASBAH_RPC_URL, DATABASE_URL)
+```
+
+`drizzle-orm` is a peer dependency: the app's tables and kasbah's store use the same copy. After a change in
+kasbah, pack and `pnpm add` the tarball again. `test/package.test.ts` does all of this outside the repo.
 
 ## Commands
 

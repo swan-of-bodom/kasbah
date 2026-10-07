@@ -5,32 +5,47 @@
   "description": "Minimal, fast Starknet indexer",
   "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": ">=22.18"
   },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "kasbah": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
     "typecheck": "tsc --noEmit",
     "fixtures": "node --env-file=.env scripts/fetch-fixtures.ts",
-    "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli.ts"
+    "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "prepack": "pnpm build"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.0",
-    "drizzle-orm": "^0.45.4",
     "graphql": "^17.0.2",
     "pg": "^8.23.1",
     "pg-copy-streams": "^7.0.0"
+  },
+  "peerDependencies": {
+    "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/ws": "^8.18.2",
+    "drizzle-orm": "^0.45.4",
     "starknet": "^10.8.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",
     "ws": "^8.22.0"
-  },
-  "bin": {
-    "kasbah": "./src/cli.ts"
   }
 }

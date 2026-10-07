@@ -11,9 +11,6 @@ importers:
       '@noble/hashes':
         specifier: ^2.0.0
         version: 2.4.0
-      drizzle-orm:
-        specifier: ^0.45.4
-        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
       graphql:
         specifier: ^17.0.2
         version: 17.0.2
@@ -36,6 +33,9 @@ importers:
       '@types/ws':
         specifier: ^8.18.2
         version: 8.18.2
+      drizzle-orm:
+        specifier: ^0.45.4
+        version: 0.45.4(@types/pg@8.23.1)(pg@8.23.1)
       starknet:
         specifier: ^10.8.0
         version: 10.8.0(typescript@5.9.3)(zod@4.6.7)

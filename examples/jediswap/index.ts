@@ -33,7 +33,7 @@ const app = kasbah({
   cache: values.cache ?? false,
 });
 
-const hexOf = (felt: bigint) => `0x${felt.toString(16).padStart(64, "0")}`;
+const hexOf = (felt: bigint) => `0x${felt.toString(16).padStart(64, "0")}` as const;
 
 app.on("Factory:PairCreated", async ({ event, context }) => {
   await context.db.insert(pairs).values({
