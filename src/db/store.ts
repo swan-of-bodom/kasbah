@@ -1,9 +1,9 @@
-import { and, eq, type InferInsertModel, type InferSelectModel } from "drizzle-orm";
+import { and, eq, type InferInsertModel, type InferSelectModel, sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 import { copyRows } from "./copy.ts";
-import { quote, type Row, type TableInfo, tableInfo } from "./table.ts";
+import { primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
 /** How a buffered row reaches the database at flush. */
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
@@ -16,9 +16,19 @@ type State = {
   pending: Map<string, Pending>;
   /** In live mode: each row touched since the last flush, as it was before (null: it didn't exist). */
   before: Map<string, Row | null>;
+  /** The table has its primary key (see `StoreOptions.unkeyed`). */
+  keyed: boolean;
 };
 
-export type StoreOptions = { complete: boolean; maxCachedRows?: number };
+export type StoreOptions = {
+  complete: boolean;
+  maxCachedRows?: number;
+  /**
+   * Tables created without their primary key (backfill: a random key, like a transaction hash, made inserts four
+   * times slower). Each gets it when first needed: an upsert, a delete or a read from Postgres, or `addKeys`.
+   */
+  unkeyed?: ReadonlySet<string>;
+};
 
 type Key<T extends PgTable> = Partial<InferSelectModel<T>>;
 type Values<T extends PgTable> = InferInsertModel<T>;
@@ -63,7 +73,8 @@ export class Store {
     this.#orm = orm;
     this.#maxCachedRows = options.maxCachedRows ?? 500_000;
     for (const t of tables) {
-      this.#tables.set(t, { info: tableInfo(t), cache: new Map(), complete: options.complete, pending: new Map(), before: new Map() });
+      const info = tableInfo(t);
+      this.#tables.set(t, { info, cache: new Map(), complete: options.complete, pending: new Map(), before: new Map(), keyed: !options.unkeyed?.has(info.name) });
     }
     this.db = this.#createDb();
   }
@@ -79,6 +90,7 @@ export class Store {
     const cached = s.cache.get(k);
     if (cached !== undefined) return cached;
     if (s.complete) return null;
+    await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [row] = await this.#orm.select().from(s.info.table).where(where).limit(1);
     s.cache.set(k, (row as Row | undefined) ?? null);
@@ -189,6 +201,7 @@ export class Store {
       for (const p of s.pending.values()) (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
       const table = quote(s.info.name);
 
+      if (upserts.length > 0 || deletes.length > 0) await this.#addKey(s, (sql) => client.query(sql));
       if (deletes.length > 0) await this.#delete(client, s.info, deletes);
       if (inserts.length > 0) {
         try {
@@ -220,6 +233,22 @@ export class Store {
         s.complete = false;
       }
     }
+  }
+
+  /** Gives every table its primary key (before live mode: the journal and reverts need them). */
+  async addKeys(client: PoolClient): Promise<void> {
+    for (const s of this.#tables.values()) await this.#addKey(s, (sql) => client.query(sql));
+  }
+
+  async #addKey(s: State, query: (sql: string) => Promise<unknown>) {
+    if (s.keyed) return;
+    try {
+      await query(primaryKeySql(s.info));
+    } catch (e) {
+      if ((e as { code?: string }).code === "23505") throw new Error(`${s.info.name}: a key was inserted twice (${(e as { detail?: string }).detail ?? "duplicate key"})`, { cause: e });
+      throw e;
+    }
+    s.keyed = true;
   }
 
   async #writeJournal(client: PoolClient, block: number) {

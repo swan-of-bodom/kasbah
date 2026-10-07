@@ -225,7 +225,16 @@ is always rolled back before the next confirmed block. To decide when we get the
   events) and once per live block, in one transaction together with the checkpoint row.
 - On a fresh run, tables live fully in memory until a memory cap, so reads in handlers never hit the database.
 - Updates: COPY into a temp table, then `UPDATE … FROM`.
-- User indexes are created after the backfill.
+- Primary keys and user indexes come after the backfill (Ponder defers only user indexes). Measured on
+  JediSwap's 7M-row `swaps` (key: tx hash + index, random order): commits took 68 s with the key and 17 s
+  without, the run to block 150k 146 s → 94 s; building the key once at the end takes ~25 s. A table gets its
+  key early when the store first needs it: an upsert or delete (`ON CONFLICT` needs it) or a read from
+  Postgres (without it, a scan). So small updated tables are keyed at their first update and append-only ones
+  at the end. A restart finds unkeyed tables in `pg_constraint`; live mode always has every key (journal,
+  reverts). The price: a key inserted twice that the cache no longer knows is reported when the key is built,
+  not at that batch. Drizzle `index()`/`uniqueIndex()` on columns are built then too (`IF NOT EXISTS`, at every
+  start, so a new index needs no re-index); expression and partial indexes are refused.
+- `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
 

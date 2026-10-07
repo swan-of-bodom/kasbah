@@ -32,14 +32,36 @@ export function tableInfo(table: PgTable): TableInfo {
   return { table, name: config.name, columns, primaryKey, keyOf };
 }
 
-/** `CREATE TABLE IF NOT EXISTS` for the current `search_path`. Indexes come after the backfill. */
-export function createTableSql(info: TableInfo): string {
+/**
+ * `CREATE TABLE IF NOT EXISTS` for the current `search_path`. Without `primaryKey` the key is left for
+ * `primaryKeySql`: tables are filled faster without it.
+ */
+export function createTableSql(info: TableInfo, { primaryKey = true } = {}): string {
   const cols = info.columns.map(({ column }) => {
     const notNull = column.notNull || column.primary ? " NOT NULL" : "";
     return `${quote(column.name)} ${column.getSQLType()}${notNull}`;
   });
+  if (!primaryKey) return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")})`;
   const pk = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
   return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")}, PRIMARY KEY (${pk}))`;
+}
+
+export function primaryKeySql(info: TableInfo): string {
+  return `ALTER TABLE ${quote(info.name)} ADD PRIMARY KEY (${info.primaryKey.map((c) => quote(c.column.name)).join(", ")})`;
+}
+
+/** `CREATE [UNIQUE] INDEX IF NOT EXISTS` for each Drizzle `index()`/`uniqueIndex()` of the table (columns only). */
+export function indexSql(info: TableInfo): string[] {
+  return getTableConfig(info.table).indexes.map(({ config }) => {
+    const columns = config.columns.map((c) => {
+      if (!("name" in c) || typeof c.name !== "string") throw new Error(`${info.name}: indexes on expressions are not supported`);
+      return c.name;
+    });
+    if (config.where !== undefined) throw new Error(`${info.name}: partial indexes are not supported`);
+    const name = config.name ?? `${info.name}_${columns.join("_")}_index`;
+    const using = config.method === undefined || config.method === "btree" ? "" : ` USING ${config.method}`;
+    return `CREATE ${config.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote(name)} ON ${quote(info.name)}${using} (${columns.map(quote).join(", ")})`;
+  });
 }
 
 export { quote };

@@ -124,3 +124,45 @@ test.skipIf(url === undefined)("past the cache limit: plain inserts make no quer
     c.release();
   }
 });
+
+test.skipIf(url === undefined)("an unkeyed table gets its primary key when first needed, and a duplicate shows then", async () => {
+  await pool.query(`DROP TABLE IF EXISTS balances`);
+  const info = tableInfo(balances);
+  const hasKey = async () => (await pool.query(`SELECT 1 FROM pg_constraint WHERE conrelid = 'balances'::regclass AND contype = 'p'`)).rowCount === 1;
+  const row = (i: number) => ({ owner: `0x${i}`, amount: BigInt(i), updates: 0 });
+
+  // Inserts only: no key.
+  await pool.query(createTableSql(info, { primaryKey: false }));
+  let store = new Store(drizzle(pool), [balances], { complete: true, unkeyed: new Set(["balances"]) });
+  for (let i = 0; i < 5; i++) await store.db.insert(balances).values(row(i));
+  await inTransaction((c) => store.flush(c));
+  expect(await hasKey()).toBe(false);
+  // The first upsert adds it.
+  await store.db.update(balances, { owner: "0x1" }).set({ updates: 1 });
+  await inTransaction((c) => store.flush(c));
+  expect(await hasKey()).toBe(true);
+
+  // A read from Postgres adds it too.
+  await pool.query(`DROP TABLE balances`);
+  await pool.query(createTableSql(info, { primaryKey: false }));
+  await pool.query(`INSERT INTO balances VALUES ('0x9', 9, 0, null)`);
+  store = new Store(drizzle(pool), [balances], { complete: false, unkeyed: new Set(["balances"]) });
+  expect((await store.db.find(balances, { owner: "0x9" }))?.amount).toBe(9n);
+  expect(await hasKey()).toBe(true);
+
+  // A key inserted twice without the cache knowing: refused when the key is built.
+  await pool.query(`DROP TABLE balances`);
+  await pool.query(createTableSql(info, { primaryKey: false }));
+  await pool.query(`INSERT INTO balances VALUES ('0x3', 3, 0, null)`);
+  store = new Store(drizzle(pool), [balances], { complete: false, unkeyed: new Set(["balances"]) });
+  await store.db.insert(balances).values(row(3));
+  await inTransaction((c) => store.flush(c));
+  const c = await pool.connect();
+  try {
+    await c.query("BEGIN");
+    await expect(store.addKeys(c)).rejects.toThrow(/balances: a key was inserted twice \(Key \(owner\)=\(0x3\) is duplicated/);
+    await c.query("ROLLBACK");
+  } finally {
+    c.release();
+  }
+});

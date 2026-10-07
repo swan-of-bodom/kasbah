@@ -10,7 +10,7 @@ import { Api, liveChannel } from "./api/server.ts";
 import { EventCache } from "./cache.ts";
 import { CallClient, type Client } from "./client.ts";
 import { Store, type Db } from "./db/store.ts";
-import { createTableSql, quote, tableInfo } from "./db/table.ts";
+import { createTableSql, indexSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
 import { blockNumber, type EmittedEvent, getEvents, getHeaders, type Receipt, type Transaction } from "./rpc/methods.ts";
 import { probe } from "./rpc/probe.ts";
@@ -253,6 +253,7 @@ export function kasbah<const C extends Config>(config: C) {
       let stored: Record<string, unknown> = {};
       const known = new Map<number, string>();
       const storedChildren: { address: string; contract: string; block: number }[] = [];
+      const unkeyed = new Set<string>();
       await transaction(async (tx) => {
         for (const sql of META_SQL) await tx.query(sql);
         const meta = await tx.query<{ key: string; value: unknown }>(`SELECT key, value FROM _kasbah_meta`);
@@ -261,7 +262,15 @@ export function kasbah<const C extends Config>(config: C) {
           throw new Error(`schema "${schema}" holds another build of this app (config, tables or handlers changed); run with reset`);
         }
         checkpoint = stored.checkpoint as number | undefined;
-        for (const t of tables) await tx.query(createTableSql(tableInfo(t)));
+        // Keys and indexes come once the backfill is done, or when the store first needs a key.
+        for (const t of tables) await tx.query(createTableSql(tableInfo(t), { primaryKey: false }));
+        const names = tables.map((t) => tableInfo(t).name);
+        const missing = await tx.query<{ name: string }>(
+          `SELECT c.relname AS name FROM pg_class c
+           WHERE c.relnamespace = $1::regnamespace AND c.relname = ANY($2) AND NOT EXISTS (SELECT 1 FROM pg_constraint p WHERE p.conrelid = c.oid AND p.contype = 'p')`,
+          [quote(schema), names],
+        );
+        for (const r of missing.rows) unkeyed.add(r.name);
         await tx.query(`INSERT INTO _kasbah_meta VALUES ('build', $1) ON CONFLICT (key) DO NOTHING`, [JSON.stringify(buildId)]);
         for (const b of (await tx.query<{ number: number; hash: string }>(`SELECT number, hash FROM _kasbah_blocks`)).rows) known.set(b.number, b.hash);
         storedChildren.push(...(await tx.query(`SELECT address, contract, block FROM _kasbah_children ORDER BY block`)).rows);
@@ -272,7 +281,7 @@ export function kasbah<const C extends Config>(config: C) {
         log(`API on http://${config.api.host ?? "127.0.0.1"}:${api.port} (POST /sql, POST /graphql, GET /status, GET /live)`);
       }
 
-      const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined });
+      const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined, unkeyed });
       const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency ?? 32 });
       const endpoint = await probe(rpc);
       const tip = await blockNumber(rpc);
@@ -474,10 +483,16 @@ export function kasbah<const C extends Config>(config: C) {
         const started = performance.now();
         let sinceFlush = 0;
         let through = first - 1;
+        /** Time of the last commit's parts, for the progress line. */
+        const timing = { tables: 0, cache: 0 };
         const commit = () =>
           transaction(async (tx) => {
+            let t = performance.now();
             await store.flush(tx);
+            timing.tables = performance.now() - t;
+            t = performance.now();
             await cache?.persist(tx, through);
+            timing.cache = performance.now() - t;
             await setMeta(tx, "checkpoint", through);
             await notify(tx, through);
           });
@@ -506,7 +521,7 @@ export function kasbah<const C extends Config>(config: C) {
             await commit();
             sinceFlush = 0;
             const seconds = (performance.now() - started) / 1000;
-            log(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${indexed} handled, ${Math.round(indexed / seconds)}/s, commit ${Math.round(performance.now() - committing)} ms`);
+            log(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${indexed} handled, ${Math.round(indexed / seconds)}/s, commit ${Math.round(performance.now() - committing)} ms (tables ${Math.round(timing.tables)}${cache === undefined ? "" : `, cache ${Math.round(timing.cache)}`})`);
           }
         }
         if (!signal.aborted) through = backfillTo;
@@ -518,6 +533,14 @@ export function kasbah<const C extends Config>(config: C) {
         const calls = client.stats.calls + client.stats.cached;
         log(`backfill done: ${indexed} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}${calls === 0 ? "" : `, ${calls} contract reads (${client.stats.cached} cached)`}`);
       }
+      const indexing = performance.now();
+      const indexes = tables.flatMap((t) => indexSql(tableInfo(t)));
+      await transaction(async (tx) => {
+        await store.addKeys(tx);
+        for (const statement of indexes) await tx.query(statement);
+      });
+      if (unkeyed.size > 0) log(`primary keys and ${indexes.length} indexes built in ${((performance.now() - indexing) / 1000).toFixed(1)}s`);
+      unkeyed.clear();
       if (!live) return;
 
       // Live: one transaction per block with its undo journal and hash, kept for the reorg window.

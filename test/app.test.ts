@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { index, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { selector } from "../src/abi/selector.ts";
@@ -23,6 +23,8 @@ const classB = [
 ] as const;
 
 const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull(), events: integer().notNull() });
+/** Append-only, keyed by transaction hash: filled without its key during the backfill. */
+const log = pgTable("log", { id: text().primaryKey(), block: integer().notNull() }, (t) => [index().on(t.block)]);
 
 type Block = { number: number; hash: string; parent: string; events: EmittedEvent[] };
 
@@ -140,15 +142,17 @@ function app() {
     database: url!,
     schema,
     contracts: { C: { abi: classB, address: ADDRESS, startBlock: DEPLOYED } },
-    tables: { totals },
+    tables: { totals, log },
     reorgWindow: 16,
     pollMs: 5,
     concurrency: 4,
   });
   a.on("C:Counted", async ({ event, context }) => {
+    await context.db.insert(log).values({ id: `${event.transaction.hash}:${event.index}`, block: event.block.number });
     await context.db.insert(totals).values({ id: "t", total: event.args.amount, events: 1 }).onConflictDoUpdate((r) => ({ total: r.total + event.args.amount, events: r.events + 1 }));
   });
-  a.on("C:Doubled", async ({ context }) => {
+  a.on("C:Doubled", async ({ event, context }) => {
+    await context.db.insert(log).values({ id: `${event.transaction.hash}:${event.index}`, block: event.block.number });
     await context.db.update(totals, { id: "t" }).set((r) => ({ total: r.total * 2n, events: r.events + 1 }));
   });
   return a;
@@ -196,7 +200,11 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   stop.abort();
   await run;
 
-  // Down for a while: the chain moves on and reorgs 4 blocks below the last indexed one.
+  // Down for a while: the chain moves on and reorgs 4 blocks below the last indexed one. The log table lost its
+  // key, as when a backfill stops before the end: the restart finds out and builds it again.
+  const admin = new pg.Pool({ connectionString: url, max: 1 });
+  await admin.query(`ALTER TABLE ${schema}.log DROP CONSTRAINT log_pkey`);
+  await admin.end();
   for (let i = 0; i < 60; i++) node.add();
   node.reorg(64);
   stop = new AbortController();
@@ -216,8 +224,15 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   }
   const p = new pg.Pool({ connectionString: url, max: 1 });
   const { rows } = await p.query(`SELECT total::text, events FROM ${schema}.totals`);
+  const logged = (await p.query(`SELECT count(*)::int AS n, count(DISTINCT id)::int AS ids FROM ${schema}.log`)).rows[0];
+  const keys = (await p.query(`SELECT conrelid::regclass::text AS t FROM pg_constraint WHERE connamespace = '${schema}'::regnamespace AND contype = 'p' ORDER BY 1`)).rows.map((r) => r.t);
+  const indexes = (await p.query(`SELECT indexname FROM pg_indexes WHERE schemaname = '${schema}' AND tablename = 'log' ORDER BY 1`)).rows.map((r) => r.indexname);
   await p.end();
   expect(rows).toEqual([{ total: total.toString(), events }]);
+  expect(logged).toEqual({ n: events, ids: events });
+  expect(keys).toEqual(expect.arrayContaining([`${schema}.log`, `${schema}.totals`]));
+  expect(indexes).toEqual(["log_block_index", "log_pkey"]);
+  expect(logs.filter((l) => l.startsWith("primary keys")).length).toBe(2);
   expect(node.blocks.at(-1)!.number).toBeGreaterThan(UPGRADED);
   expect(logs.some((l) => l.includes(`class replaced at block ${UPGRADED}`))).toBe(true);
   expect(logs.filter((l) => l.startsWith("reorg:")).length).toBe(3);
