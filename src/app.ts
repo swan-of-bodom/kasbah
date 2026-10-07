@@ -11,6 +11,7 @@ import { EventCache } from "./cache.ts";
 import { CallClient, type Client } from "./client.ts";
 import { Store, type Db } from "./db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "./db/table.ts";
+import { Status } from "./status.ts";
 import { RpcClient } from "./rpc/client.ts";
 import { blockNumber, type EmittedEvent, getEvents, getHeaders, type Receipt, type Transaction } from "./rpc/methods.ts";
 import { probe } from "./rpc/probe.ts";
@@ -119,6 +120,8 @@ export type RunOptions = {
   buildSalt?: string;
   signal?: AbortSignal;
   log?: (line: string) => void;
+  /** Filled in as the run goes (the dev screen draws it). When given, progress lines aren't logged. */
+  status?: Status;
 };
 
 /**
@@ -183,8 +186,11 @@ export function kasbah<const C extends Config>(config: C) {
 
   const run = async (options: RunOptions = {}) => {
     const log = options.log ?? ((line: string) => console.log(`[kasbah] ${line}`));
+    const status = options.status ?? new Status();
+    const progress = options.status === undefined ? log : () => {};
     const signal = options.signal ?? new AbortController().signal;
     const schema = config.schema ?? "kasbah";
+    status.schema = schema;
     const window = config.reorgWindow ?? 64;
     const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
     const blockSources = Object.entries(config.blocks ?? {}).map(([name, b]) => ({ name, ...b }));
@@ -278,7 +284,8 @@ export function kasbah<const C extends Config>(config: C) {
 
       if (config.api !== undefined) {
         api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
-        log(`API on http://${config.api.host ?? "127.0.0.1"}:${api.port} (POST /sql, POST /graphql, GET /status, GET /live)`);
+        status.api = `http://${config.api.host ?? "127.0.0.1"}:${api.port}`;
+        log(`API on ${status.api} (POST /sql, POST /graphql, GET /status, GET /live)`);
       }
 
       const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined, unkeyed });
@@ -295,6 +302,10 @@ export function kasbah<const C extends Config>(config: C) {
       /** Blocks at or below this can't be reorged: backfill's end, then the head minus the reorg window. */
       let finalThrough = backfillTo;
       const client = new CallClient(rpc, { isFinal: (b) => b <= finalThrough, cache });
+      status.rpc = rpc.stats;
+      status.concurrency = () => rpc.concurrency;
+      status.cache = cache?.stats;
+      status.calls = client.stats;
       const context = { db: store.db, client };
 
       const handledOf = (name: string) => new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
@@ -319,6 +330,10 @@ export function kasbah<const C extends Config>(config: C) {
       await Promise.all(
         Object.entries(config.contracts).flatMap(([name, c]) => (c.address === undefined ? [] : [sources.add(name, c.address, c.startBlock, classTo, false)])),
       );
+      status.endpoint = `${endpoint.node} ${endpoint.spec}`;
+      status.tip = tip;
+      status.factories = factories.length;
+      status.contracts = sources.addresses.length;
       log(`${endpoint.node} endpoint, spec ${endpoint.spec}, tip ${tip}; ${sources.addresses.length + storedChildren.length} contracts${factories.length > 0 ? `, ${factories.length} factories` : ""}${blockSources.length > 0 ? `, ${blockSources.length} block sources` : ""}`);
 
       /** Ordered batches of `addresses` × `keys` in `[from, to]`: the cached prefix first, then RPC (tracked for the cache). */
@@ -343,7 +358,6 @@ export function kasbah<const C extends Config>(config: C) {
         }
       }
 
-      let indexed = 0;
       const includeOf = (e: EmittedEvent) => {
         const w = sources.byAddress.get(e.from_address) ?? sources.byAddress.get(canonical(e.from_address));
         return w === undefined ? undefined : config.contracts[w.contract]!.include;
@@ -371,24 +385,26 @@ export function kasbah<const C extends Config>(config: C) {
           index: e.event_index,
         };
         client.current = event.block;
+        const t = performance.now();
         try {
           await handler({ event: event as never, context });
         } catch (err) {
           throw new Error(`${w.contract}:${decoded.name} at block ${e.block_number}, tx ${e.transaction_hash}: ${(err as Error).message}`, { cause: err });
         }
-        indexed++;
+        status.record(`${w.contract}:${decoded.name}`, performance.now() - t);
       };
 
       const fireBlock = async (source: string, block: IndexedBlock["block"]) => {
         const handler = handlers.get(`${source}:block`);
         if (handler === undefined) return;
         client.current = block;
+        const t = performance.now();
         try {
           await handler({ event: { source, block } as never, context });
         } catch (err) {
           throw new Error(`${source}:block at block ${block.number}: ${(err as Error).message}`, { cause: err });
         }
-        indexed++;
+        status.record(`${source}:block`, performance.now() - t);
       };
       const firesAt = (b: (typeof blockSources)[number], n: number) =>
         n >= b.startBlock && (b.endBlock === undefined || n <= b.endBlock) && (n - b.startBlock) % b.interval === 0;
@@ -426,6 +442,7 @@ export function kasbah<const C extends Config>(config: C) {
         const forgotten = sources.removeChildrenAfter(ancestor.number);
         for (const n of known.keys()) if (n > ancestor.number) known.delete(n);
         checkpoint = ancestor.number;
+        status.live.reorgs++;
         log(`reverted to block ${ancestor.number}, ${undone} row changes undone${forgotten.length > 0 ? `, ${forgotten.length} children forgotten` : ""}`);
       };
 
@@ -451,6 +468,8 @@ export function kasbah<const C extends Config>(config: C) {
         const found: { address: string; contract: string; block: number }[] = [];
         const selectors = [...new Set(factories.flatMap((f) => f.reader.selectors))];
         let through = discoverFrom - 1;
+        status.enter("factories");
+        status.range = { first: discoverFrom, to: backfillTo, through };
         for await (const batch of fetchRange(factories.map((f) => f.address), [selectors], discoverFrom, backfillTo)) {
           for (const e of batch.events) {
             const f = factoryByAddress.get(canonical(e.from_address));
@@ -459,6 +478,7 @@ export function kasbah<const C extends Config>(config: C) {
             if (child !== undefined) found.push({ address: child, contract: f.contract, block: e.block_number! });
           }
           through = batch.through;
+          status.range.through = through;
           if (signal.aborted) break;
         }
         const added = (await Promise.all(found.map((c) => sources.add(c.contract, c.address, c.block, classTo, true)))).filter((w) => w !== undefined);
@@ -471,6 +491,8 @@ export function kasbah<const C extends Config>(config: C) {
           await cache?.persist(tx, through);
         });
         cache?.untrack();
+        status.children = added.length + storedChildren.length;
+        status.contracts = sources.addresses.length;
         log(`factories: ${added.length} children up to block ${through} in ${((performance.now() - started) / 1000).toFixed(1)}s`);
         if (signal.aborted) return;
       }
@@ -483,6 +505,9 @@ export function kasbah<const C extends Config>(config: C) {
         const started = performance.now();
         let sinceFlush = 0;
         let through = first - 1;
+        status.enter("backfill");
+        status.range = { first, to: backfillTo, through };
+        const handledBefore = status.handled;
         /** Time of the last commit's parts, for the progress line. */
         const timing = { tables: 0, cache: 0 };
         const commit = () =>
@@ -496,9 +521,19 @@ export function kasbah<const C extends Config>(config: C) {
             await setMeta(tx, "checkpoint", through);
             await notify(tx, through);
           });
+        const timedCommit = async () => {
+          const t = performance.now();
+          await commit();
+          const ms = performance.now() - t;
+          status.time.commit += ms;
+          status.lastCommit = { ms, tables: timing.tables, cache: timing.cache };
+          status.range.through = through;
+        };
         // Transactions and receipts of the next batch are fetched while this one is handled.
         const batches = fetchRange(sources.addresses, sources.keys, first, backfillTo);
+        let idle = performance.now();
         for await (const [batch, extras] of ahead(anyInclude ? slices(batches, 2_000) : batches, (b) => extrasFor(b.events))) {
+          status.time.fetch += performance.now() - idle;
           const fires = firesIn(through + 1, batch.through);
           const headers = fires.length > 0 ? await headersFor(fires.map((f) => f.number)) : undefined;
           let i = 0;
@@ -517,24 +552,27 @@ export function kasbah<const C extends Config>(config: C) {
           through = batch.through;
           if (signal.aborted) break;
           if (sinceFlush >= FLUSH_EVENTS || through === backfillTo || (cache?.pendingBytes ?? 0) > 64 << 20) {
-            const committing = performance.now();
-            await commit();
+            await timedCommit();
             sinceFlush = 0;
             const seconds = (performance.now() - started) / 1000;
-            log(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${indexed} handled, ${Math.round(indexed / seconds)}/s, commit ${Math.round(performance.now() - committing)} ms (tables ${Math.round(timing.tables)}${cache === undefined ? "" : `, cache ${Math.round(timing.cache)}`})`);
+            const handled = status.handled - handledBefore;
+            progress(`block ${through}/${backfillTo} (${(((through - first + 1) / (backfillTo - first + 1)) * 100).toFixed(1)}%), ${handled} handled, ${Math.round(handled / seconds)}/s, commit ${Math.round(status.lastCommit.ms)} ms (tables ${Math.round(timing.tables)}${cache === undefined ? "" : `, cache ${Math.round(timing.cache)}`})`);
           }
+          idle = performance.now();
         }
         if (!signal.aborted) through = backfillTo;
-        await commit();
+        await timedCommit();
         cache?.untrack();
         checkpoint = through;
         if (signal.aborted) return;
         const c = cache?.stats;
         const calls = client.stats.calls + client.stats.cached;
-        log(`backfill done: ${indexed} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}${calls === 0 ? "" : `, ${calls} contract reads (${client.stats.cached} cached)`}`);
+        log(`backfill done: ${status.handled - handledBefore} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}${calls === 0 ? "" : `, ${calls} contract reads (${client.stats.cached} cached)`}`);
       }
       const indexing = performance.now();
       const indexes = tables.flatMap((t) => indexSql(tableInfo(t)));
+      status.enter("keys");
+      status.keys = { tables: unkeyed.size, indexes: indexes.length };
       await transaction(async (tx) => {
         await store.addKeys(tx);
         for (const statement of indexes) await tx.query(statement);
@@ -556,6 +594,8 @@ export function kasbah<const C extends Config>(config: C) {
       }
       store.journal = true;
       await setMeta(pool, "phase", "live");
+      status.enter("live");
+      status.live.block = head.number;
       log(`following the head from block ${head.number}`);
 
       const factorySelectors = [[...new Set(factories.flatMap((f) => f.reader.selectors))]];
@@ -601,6 +641,7 @@ export function kasbah<const C extends Config>(config: C) {
           for (const b of blockSources) if (firesAt(b, block.number)) await fireBlock(b.name, { number: block.number, hash: block.hash, timestamp: block.timestamp });
           const prune = block.number - window;
           const children = newChildren.get(block.number) ?? [];
+          const committing = performance.now();
           await transaction(async (tx) => {
             await store.flush(tx, block.number);
             await cache?.persist(tx, -1);
@@ -612,17 +653,27 @@ export function kasbah<const C extends Config>(config: C) {
             await setMeta(tx, "checkpoint", block.number);
             await notify(tx, block.number);
           });
+          const done = performance.now();
+          status.time.commit += done - committing;
+          status.lastCommit = { ms: done - committing, tables: 0, cache: 0 };
+          status.live = { ...status.live, block: block.number, timestamp: block.timestamp, events: block.events.length, at: Date.now() };
+          status.tip = Math.max(status.tip, block.number);
+          if (children.length > 0) {
+            status.children += children.length;
+            status.contracts = sources.addresses.length;
+          }
           for (const f of factories) f.discovered = block.number;
           known.set(block.number, block.hash);
           for (const n of known.keys()) if (n < prune) known.delete(n);
           if (block.events.length > 0 || children.length > 0) {
             const behind = Date.now() / 1000 - block.timestamp;
-            log(`block ${block.number}: ${block.events.length} events${children.length > 0 ? `, ${children.length} new children` : ""}, ${behind.toFixed(1)}s after its timestamp`);
+            progress(`block ${block.number}: ${block.events.length} events${children.length > 0 ? `, ${children.length} new children` : ""}, ${behind.toFixed(1)}s after its timestamp`);
           }
         },
         onReorg: revert,
       });
     } finally {
+      status.enter("done");
       heads?.close();
       await api?.close();
       await pool.end();

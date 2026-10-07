@@ -358,6 +358,16 @@ Checked on mainnet (`examples/jediswap`, `check.ts`): JediSwap v1 to block 400k,
 pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves and tokens equal
 `get_reserves`/`token0`/`token1` read through the proxy at block 400k (0 mismatches). 885 s at 1.8 GB peak.
 
+### 8.6 Dev screen
+
+`kasbah dev` (in a terminal; `--ui` / `--no-ui` override) draws `Status` (`src/status.ts`, filled in by `run`) under
+the log and redraws it in place 4 times a second; log lines and handlers' `console` output print above it and
+stay in the scrollback. Against Ponder's: one chain, so no per-chain table; added a phase line (factories,
+backfill, keys, live), where the time goes (waiting for events, handlers, commits, and which one bounds the
+run: the measure that found the bottlenecks in §8.5), handlers by total time with their average, and the last
+commit's parts. Time left is from the last 30 s of progress, not the average since the start (event density
+varies a lot along a chain). `start` keeps plain log lines, better for Docker and log files.
+
 ## 9. Storage and caches
 
 **Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, opt-in (`cache: true`) (`src/cache.ts`):

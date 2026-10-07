@@ -35,6 +35,8 @@ export default app;
 
 ```
 pnpm kasbah dev app.ts       # index, follow the head, restart on every change (a changed build re-indexes)
+                             # with a progress screen in a terminal: phase, time left, where the time goes,
+                             # handlers by time spent, RPC and cache; --no-ui for plain logs, start --ui for it
 pnpm kasbah start app.ts     # the same without watching; refuses a schema holding another build
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`
 ```

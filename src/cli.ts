@@ -10,11 +10,14 @@ import { parseArgs } from "node:util";
 import pg from "pg";
 import type { RunOptions } from "./app.ts";
 import { EventCache } from "./cache.ts";
+import { Screen } from "./dashboard.ts";
+import { Status } from "./status.ts";
 
 const USAGE = `usage:
   kasbah start <app.ts> [--to <block>] [--reset]   index, then follow the head (until --to, or Ctrl-C)
   kasbah dev <app.ts>                              the same, restarted on every file change; a changed
                                                    build re-indexes from scratch
+  --ui / --no-ui                                   the progress screen (on for dev in a terminal)
   kasbah cache info [--chain <id>]                 each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
@@ -40,20 +43,27 @@ function sourceHash(file: string): string {
   return h.digest("hex").slice(0, 16);
 }
 
-async function start(file: string, o: { to?: number; reset?: boolean; dev?: boolean }) {
-  const app = await load(file);
-  const stop = new AbortController();
-  for (const s of ["SIGINT", "SIGTERM"] as const) process.once(s, () => stop.abort());
-  await app.run({ to: o.to, reset: o.reset, signal: stop.signal, onBuildChange: o.dev ? "reset" : "error", buildSalt: sourceHash(file) });
+async function start(file: string, o: { to?: number; reset?: boolean; dev?: boolean; ui?: boolean }) {
+  const status = (o.ui ?? (o.dev && process.stdout.isTTY)) ? new Status() : undefined;
+  const screen = status === undefined ? undefined : new Screen(status);
+  screen?.start();
+  try {
+    const app = await load(file);
+    const stop = new AbortController();
+    for (const s of ["SIGINT", "SIGTERM"] as const) process.once(s, () => stop.abort());
+    await app.run({ to: o.to, reset: o.reset, signal: stop.signal, onBuildChange: o.dev ? "reset" : "error", buildSalt: sourceHash(file), status, log: screen?.log });
+  } finally {
+    screen?.stop();
+  }
 }
 
 /** Runs `start --dev` in a child process and restarts it on changes under the app's directory. */
-function dev(file: string) {
+function dev(file: string, ui: boolean | undefined) {
   const log = (line: string) => console.log(`[kasbah dev] ${line}`);
   let child: ChildProcess | undefined;
   let exited: Promise<void> = Promise.resolve();
   const launch = () => {
-    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev"], { stdio: "inherit" });
+    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev", ...(ui === undefined ? [] : [ui ? "--ui" : "--no-ui"])], { stdio: "inherit" });
     child = c;
     exited = new Promise((r) =>
       c.once("exit", (code, signal) => {
@@ -119,10 +129,12 @@ async function cache(command: string | undefined, o: { database?: string; events
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,
+  allowNegative: true,
   options: {
     to: { type: "string" },
     reset: { type: "boolean" },
     dev: { type: "boolean" },
+    ui: { type: "boolean" },
     database: { type: "string" },
     events: { type: "boolean" },
     calls: { type: "boolean" },
@@ -133,8 +145,8 @@ const { positionals, values } = parseArgs({
 const [command, arg] = positionals;
 try {
   if (values.help || command === undefined) console.log(USAGE);
-  else if (command === "start" && arg !== undefined) await start(arg, { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev });
-  else if (command === "dev" && arg !== undefined) dev(arg);
+  else if (command === "start" && arg !== undefined) await start(arg, { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
+  else if (command === "dev" && arg !== undefined) dev(arg, values.ui);
   else if (command === "cache") await cache(arg, values);
   else {
     console.error(USAGE);
