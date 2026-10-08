@@ -172,7 +172,7 @@ export function render(status: Status, { width = 100, color = false, now = perfo
   if (status.calls !== undefined && status.calls.calls + status.calls.cached > 0) {
     label("reads", `${thousands(status.calls.calls + status.calls.cached)} contract reads · ${thousands(status.calls.cached)} cached`);
   }
-  if (status.api !== "") label("api", `${p.cyan(status.api)}  ${p.dim("POST /sql /graphql · GET /live /status")}`);
+  if (status.api !== "") label("api", `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · POST /sql · GET /live /status")}`);
 
   const title = ` ${p.bold("kasbah")}${status.schema === "" ? "" : ` ${p.dim("·")} ${status.schema}`} `;
   const badge = ` ${p.badge(status.phase)} `;

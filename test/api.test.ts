@@ -248,3 +248,16 @@ test.skipIf(url === undefined)("GraphQL relations: to-one and to-many are batche
   const many = await gql(`{ ${Array.from({ length: 501 }, (_, i) => `a${i}: pool(id: "p01") { id }`).join(" ")} }`);
   expect(many.errors?.[0]?.message).toMatch(/more than 500 SQL statements/);
 });
+
+test.skipIf(url === undefined)("GET /graphql: GraphiQL for a browser, ?query= for anything else", async () => {
+  const page = await fetch(`${base}/graphql`, { headers: { accept: "text/html,application/xhtml+xml" } });
+  expect(page.headers.get("content-type")).toContain("text/html");
+  expect(await page.text()).toContain("GraphiQL.createFetcher");
+  const viaGet = (await (await fetch(`${base}/graphql?query=${encodeURIComponent(`query ($id: String!) { pool(id: $id) { id } }`)}&variables=${encodeURIComponent(JSON.stringify({ id: "p01" }))}`)).json()) as any;
+  expect(viaGet).toEqual(await gql(`query ($id: String!) { pool(id: $id) { id } }`, { id: "p01" }));
+  expect(viaGet.data.pool.id).toBe("p01");
+  const bare = await fetch(`${base}/graphql`);
+  expect(bare.status).toBe(400);
+  expect(((await bare.json()) as any).error).toContain("?query=");
+  expect(((await (await fetch(`${base}/`)).json()) as any).endpoints.length).toBe(5);
+});

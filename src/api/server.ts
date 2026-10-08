@@ -63,8 +63,31 @@ const parseJson = (text: string | null, name: string): unknown => {
   }
 };
 
+/** GraphiQL for browsers, from unpkg (pinned): the API itself stays dependency-free. */
+const GRAPHIQL = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>kasbah GraphQL</title>
+  <link rel="stylesheet" href="https://unpkg.com/graphiql@3.8.3/graphiql.min.css" />
+  <style>body { margin: 0; height: 100vh; } #graphiql { height: 100vh; }</style>
+</head>
+<body>
+  <div id="graphiql">Loading GraphiQL…</div>
+  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/graphiql@3.8.3/graphiql.min.js"></script>
+  <script>
+    const fetcher = GraphiQL.createFetcher({ url: location.origin + location.pathname });
+    ReactDOM.createRoot(document.getElementById("graphiql")).render(React.createElement(GraphiQL, { fetcher, defaultEditorToolbarTabs: [] }));
+  </script>
+</body>
+</html>`;
+
 /**
- * The read API: `POST /sql` `{ sql, params? }` → `{ columns, rows }`, `POST /graphql` `{ query, variables? }`,
+ * The read API: `POST /sql` `{ sql, params? }` → `{ columns, rows }`, `POST /graphql` `{ query, variables? }`
+ * (`GET /graphql`: GraphiQL for a browser, or `?query=`),
  * `GET /status`, and `GET /live` (server-sent events on each commit; with `sql` or `query`, that query's result
  * whenever it changes). Everything runs through `Reader` (read-only role and transaction).
  */
@@ -131,6 +154,21 @@ export class Api {
         const body = await json(req);
         if (typeof body.query !== "string") throw new QueryError("`query` must be a string");
         return send(res, 200, await this.#graphql(body.query, body.variables));
+      }
+      if (path === "/graphql" && req.method === "GET") {
+        const q = new URL(req.url ?? "/", "http://x").searchParams;
+        const query = q.get("query");
+        if (query !== null) return send(res, 200, await this.#graphql(query, parseJson(q.get("variables"), "variables")));
+        if ((req.headers.accept ?? "").includes("text/html")) {
+          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+          return res.end(GRAPHIQL);
+        }
+        throw new QueryError("GET /graphql takes ?query= (and ?variables=), or open it in a browser for GraphiQL");
+      }
+      if (path === "/" && req.method === "GET") {
+        return send(res, 200, {
+          endpoints: ["POST /sql {sql, params?}", "POST /graphql {query, variables?}", "GET /graphql (GraphiQL in a browser, or ?query=)", "GET /live (?sql= or ?query=)", "GET /status"],
+        });
       }
       if (path === "/live" && req.method === "GET") return await this.#stream(req, res);
       send(res, 404, { error: "not found" });

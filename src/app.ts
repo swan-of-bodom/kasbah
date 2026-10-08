@@ -287,7 +287,7 @@ export function kasbah<const C extends Config>(config: C) {
       if (config.api !== undefined) {
         api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
         status.api = `http://${config.api.host ?? "127.0.0.1"}:${api.port}`;
-        log(`API on ${status.api} (POST /sql, POST /graphql, GET /status, GET /live)`);
+        log(`API on ${status.api}: GraphiQL at ${status.api}/graphql, POST /sql, POST /graphql, GET /live, GET /status`);
       }
 
       const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined, unkeyed });
