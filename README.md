@@ -37,7 +37,7 @@ export default app;
 pnpm kasbah dev app.ts       # index, follow the head, restart on every change (a changed build re-indexes);
                              # with `api`, GraphiQL at http://127.0.0.1:<port>/graphql in a browser
                              # with a progress screen in a terminal: phase, time left, where the time goes,
-                             # handlers by time spent, RPC and cache; --no-ui for plain logs, start --ui for it
+                             # handlers by time spent, RPC and cache; plain logs when piped, or with --no-ui
 pnpm kasbah start app.ts     # the same without watching; refuses a schema holding another build
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`
 ```
