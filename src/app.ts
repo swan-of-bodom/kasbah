@@ -286,7 +286,8 @@ export function kasbah<const C extends Config>(config: C) {
 
       if (config.api !== undefined) {
         api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
-        status.api = `http://${config.api.host ?? "127.0.0.1"}:${api.port}`;
+        // Listening on 127.0.0.1 unless told otherwise; shown as localhost, the same address.
+        status.api = `http://${config.api.host === undefined || config.api.host === "127.0.0.1" ? "localhost" : config.api.host}:${api.port}`;
         log(`API on ${status.api}: GraphiQL at ${status.api}/graphql, POST /sql, POST /graphql, GET /live, GET /status`);
       }
 
