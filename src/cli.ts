@@ -17,7 +17,7 @@ const USAGE = `usage:
   kasbah start <app.ts> [--to <block>] [--reset]   index, then follow the head (until --to, or Ctrl-C)
   kasbah dev <app.ts>                              the same, restarted on every file change; a changed
                                                    build re-indexes from scratch
-  --ui / --no-ui                                   the progress screen (default: on in a terminal, off when piped)
+  --ui / --no-ui                                   the progress screen (on for dev in a terminal)
   kasbah cache info [--chain <id>]                 each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
@@ -44,7 +44,7 @@ function sourceHash(file: string): string {
 }
 
 async function start(file: string, o: { to?: number; reset?: boolean; dev?: boolean; ui?: boolean }) {
-  const status = (o.ui ?? process.stdout.isTTY === true) ? new Status() : undefined;
+  const status = (o.ui ?? (o.dev && process.stdout.isTTY)) ? new Status() : undefined;
   const screen = status === undefined ? undefined : new Screen(status);
   screen?.start();
   try {

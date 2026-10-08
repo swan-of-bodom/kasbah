@@ -360,8 +360,7 @@ pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves 
 
 ### 8.6 Dev screen
 
-`kasbah dev` and `start` (in a terminal; piped output, as in Docker or a log file, gets plain lines; `--ui` /
-`--no-ui` override) draw `Status` (`src/status.ts`, filled in by `run`) under
+`kasbah dev` (in a terminal; `--ui` / `--no-ui` override) draws `Status` (`src/status.ts`, filled in by `run`) under
 the log and redraws it in place 4 times a second; log lines and handlers' `console` output print above it and
 stay in the scrollback. Against Ponder's: one chain, so no per-chain table; added a phase line (factories,
 backfill, keys, live), where the time goes (waiting for events, handlers, commits, and which one bounds the
@@ -369,7 +368,8 @@ run: the measure that found the bottlenecks in §8.5), handlers by total time wi
 commit's parts. Drawn as a box (phase badge, full-width progress bar, events/s sparkline over 2 minutes, the
 time split as one stacked bar, handlers as a table), plain ANSI codes, no dependency; `NO_COLOR` or a non-TTY
 turns colors off and leaves the layout. Time left: at the last 30 s's pace and at the phase's average; more than
-1.5× apart, both are shown as a range (on Ekubo a single estimate swung between 1h 43m and 4h). Skipped events are reported once per contract and event name
+1.5× apart, both are shown as a range (on Ekubo a single estimate swung between 1h 43m and 4h). `start` keeps
+plain log lines, better for Docker and log files. Skipped events are reported once per contract and event name
 (Ekubo Core's 20 upgrades printed 20 identical lines), and the CLI hides Node's type-stripping warning.
 
 ## 9. Storage and caches
