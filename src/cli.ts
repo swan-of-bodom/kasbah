@@ -127,6 +127,13 @@ async function cache(command: string | undefined, o: { database?: string; events
   }
 }
 
+// Node warns once that it strips the app's types: expected here, so only other warnings are shown.
+process.removeAllListeners("warning");
+process.on("warning", (w) => {
+  if (w.name === "ExperimentalWarning" && /type stripping/i.test(w.message)) return;
+  console.warn(`(node:${process.pid}) ${w.name}: ${w.message}`);
+});
+
 // Like `node --env-file-if-exists=.env`: variables already set win.
 try {
   process.loadEnvFile(".env");

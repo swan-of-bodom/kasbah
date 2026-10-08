@@ -108,9 +108,11 @@ export class Sources {
         if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
         if (!configured.has(e.name)) missing.push(e.name);
       }
-      if (missing.length > 0 && !this.#reported.has(`${c.name}:${s.classHash}`)) {
-        this.#reported.add(`${c.name}:${s.classHash}`);
-        this.#log(`${c.name}: class ${s.classHash} emits events not in the configured ABI, they are skipped: ${missing.join(", ")}`);
+      // Once per contract and event name: a contract upgraded 20 times reports the same event once.
+      const unreported = missing.filter((m) => !this.#reported.has(`${c.name}:${m}`));
+      if (unreported.length > 0) {
+        for (const m of unreported) this.#reported.add(`${c.name}:${m}`);
+        this.#log(`${c.name}: events not in the configured ABI are skipped: ${unreported.join(", ")} (first in class ${s.classHash})`);
       }
       w.spans.push(s);
     }

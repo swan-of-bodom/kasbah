@@ -155,6 +155,8 @@ async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Prom
   if (pending !== undefined) yield await pending;
 }
 
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
 const paddedCache = new Map<string, `0x${string}`>();
 const padded = (address: string) => {
   let p = paddedCache.get(address);
@@ -334,7 +336,7 @@ export function kasbah<const C extends Config>(config: C) {
       status.tip = tip;
       status.factories = factories.length;
       status.contracts = sources.addresses.length;
-      log(`${endpoint.node} endpoint, spec ${endpoint.spec}, tip ${tip}; ${sources.addresses.length + storedChildren.length} contracts${factories.length > 0 ? `, ${factories.length} factories` : ""}${blockSources.length > 0 ? `, ${blockSources.length} block sources` : ""}`);
+      log(`${endpoint.node} endpoint, spec ${endpoint.spec}, tip ${tip}; ${plural(sources.addresses.length + storedChildren.length, "contract")}${factories.length > 0 ? `, ${plural(factories.length, "factory", "factories")}` : ""}${blockSources.length > 0 ? `, ${plural(blockSources.length, "block source")}` : ""}`);
 
       /** Ordered batches of `addresses` × `keys` in `[from, to]`: the cached prefix first, then RPC (tracked for the cache). */
       async function* fetchRange(addresses: string[], keys: string[][], from: number, to: number): AsyncGenerator<Batch> {
@@ -469,7 +471,7 @@ export function kasbah<const C extends Config>(config: C) {
         const selectors = [...new Set(factories.flatMap((f) => f.reader.selectors))];
         let through = discoverFrom - 1;
         status.enter("factories");
-        status.range = { first: discoverFrom, to: backfillTo, through };
+        status.setRange(discoverFrom, backfillTo, through);
         for await (const batch of fetchRange(factories.map((f) => f.address), [selectors], discoverFrom, backfillTo)) {
           for (const e of batch.events) {
             const f = factoryByAddress.get(canonical(e.from_address));
@@ -506,7 +508,7 @@ export function kasbah<const C extends Config>(config: C) {
         let sinceFlush = 0;
         let through = first - 1;
         status.enter("backfill");
-        status.range = { first, to: backfillTo, through };
+        status.setRange(first, backfillTo, through);
         const handledBefore = status.handled;
         /** Time of the last commit's parts, for the progress line. */
         const timing = { tables: 0, cache: 0 };
