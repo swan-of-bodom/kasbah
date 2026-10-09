@@ -16,11 +16,15 @@ const UPGRADED = 300;
 const member = { name: "amount", type: "core::integer::u128", kind: "data" } as const;
 const counted = { type: "event", name: "t::Counted", kind: "struct", members: [member] } as const;
 const doubled = { type: "event", name: "t::Doubled", kind: "struct", members: [member] } as const;
-const classA = [counted, { type: "event", name: "t::Event", kind: "enum", variants: [{ name: "Counted", type: "t::Counted", kind: "nested" }] }] as const;
+/** Announces the upgrade: the class is read again only when it's emitted, not at every poll. */
+const upgraded = { type: "event", name: "t::Upgraded", kind: "struct", members: [{ name: "class_hash", type: "core::starknet::class_hash::ClassHash", kind: "data" }] } as const;
+const upgradedVariant = { name: "Upgraded", type: "t::Upgraded", kind: "nested" } as const;
+const classA = [counted, upgraded, { type: "event", name: "t::Event", kind: "enum", variants: [{ name: "Counted", type: "t::Counted", kind: "nested" }, upgradedVariant] }] as const;
 const classB = [
   counted,
   doubled,
-  { type: "event", name: "t::Event", kind: "enum", variants: [{ name: "Counted", type: "t::Counted", kind: "nested" }, { name: "Doubled", type: "t::Doubled", kind: "nested" }] },
+  upgraded,
+  { type: "event", name: "t::Event", kind: "enum", variants: [{ name: "Counted", type: "t::Counted", kind: "nested" }, { name: "Doubled", type: "t::Doubled", kind: "nested" }, upgradedVariant] },
 ] as const;
 
 const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull(), events: integer().notNull() });
@@ -45,6 +49,7 @@ function fakeNode() {
         events.push({ from_address: ADDRESS, keys: [selector(name)], data: [`0x${(1 + rand(9)).toString(16)}`], block_number: number, block_hash: hash, transaction_hash: `0x${number}${i}`, transaction_index: i, event_index: 0 });
       }
     }
+    if (number === UPGRADED) events.push({ from_address: ADDRESS, keys: [selector("Upgraded")], data: ["0xb"], block_number: number, block_hash: hash, transaction_hash: `0x${number}u`, transaction_index: 9, event_index: 0 });
     blocks.push({ number, hash, parent: blocks.at(-1)?.hash ?? "0x0", events });
   };
   const reorg = (depth: number) => {
@@ -58,7 +63,9 @@ function fakeNode() {
     if (b === undefined) throw { code: 24, message: "Block not found" };
     return { block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: n, status: "ACCEPTED_ON_L2", transactions: [] };
   };
+  const calls = new Map<string, number>();
   const call = (method: string, params: any): unknown => {
+    calls.set(method, (calls.get(method) ?? 0) + 1);
     switch (method) {
       case "starknet_specVersion":
         return "0.10.4";
@@ -116,7 +123,7 @@ function fakeNode() {
       res.end(JSON.stringify(Array.isArray(parsed) ? parsed.map(answer) : answer(parsed)));
     });
   });
-  return { blocks, add, reorg, server };
+  return { blocks, add, reorg, server, calls };
 }
 
 const node = fakeNode();
@@ -223,6 +230,7 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   let events = 0;
   for (const b of node.blocks) {
     for (const e of b.events) {
+      if (e.keys[0] === selector("Upgraded")) continue;
       if (e.keys[0] === selector("Counted")) total += BigInt(e.data[0]!);
       else total *= 2n;
       events++;
@@ -242,6 +250,8 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   expect(logs.filter((l) => / primary keys? built/.test(l)).map((l) => l.split(" ")[0])).toEqual(["2", "1"]);
   expect(node.blocks.at(-1)!.number).toBeGreaterThan(UPGRADED);
   expect(logs.some((l) => l.includes(`class replaced at block ${UPGRADED}`))).toBe(true);
+  // The class is read at startup (a bisection, twice) and at the Upgraded event, not at every poll (30 here).
+  expect(node.calls.get("starknet_getClassHashAt")).toBeLessThan(20);
   expect(logs.filter((l) => l.startsWith("reorg:")).length).toBe(3);
   expect(logs.some((l) => l.startsWith("reorg while stopped"))).toBe(true);
 }, 60_000);

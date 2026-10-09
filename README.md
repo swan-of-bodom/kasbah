@@ -43,6 +43,14 @@ pnpm kasbah start app.ts     # the same without watching; refuses a schema holdi
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`
 ```
 
+Per contract, optional:
+- `include: { transaction, receipt, block }`: the event's transaction, receipt, and block timestamp, typed only
+  when asked for (one extra call per transaction, or per block with events; cached once final, free for live
+  blocks' timestamps).
+- `upgradeEvents`: events that announce a class replacement, so the class is read again only when one is emitted.
+  `Upgraded`, `ClassHashReplaced` and `ImplementationReplaced` are found in the ABI by default; a contract with none
+  is checked at every poll, `[]` never.
+
 The build id covers config, tables, handler code and a hash of the code files in the app's directory.
 ## In another project
 

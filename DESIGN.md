@@ -129,8 +129,9 @@ Built (`src/sources.ts`, config `factory: { address, abi, event, parameter }`):
   instead of a full history). Children with the same class share one decoder.
 - Live: each tick first reads the factory's events for the tick's blocks, adds the children, then fetches child
   events with them included. A reorg forgets children created after the ancestor (memory and table).
-- Class checks while live: up to 100 addresses, one batched `getClassHashAt` per tick; above, each block's
-  `getStateUpdate` and its `replaced_classes` (one call per block, whatever the number of contracts).
+- Class checks while live: children of a contract with upgrade events need none (§6.1); otherwise up to 100
+  addresses, one batched `getClassHashAt` per tick; above, each block's `getStateUpdate` and its
+  `replaced_classes` (one call per block, whatever the number of contracts).
 - Address lists are not split. Measured on Alchemy, `getEvents` over 10k blocks with N addresses:
   1k → 96 ms, 10k (237 KB body) → 356 ms, 50k (1.2 MB) → 1.3 s, all accepted. The stream already fetches block
   windows in parallel, so splitting would add a merge for nothing. Revisit only for a node that caps the list.
@@ -148,9 +149,10 @@ Universal Deployer's `ContractDeployed` event (covers UDC deployments only) or a
 events themselves**: one `getBlockWithTxHashes` per block with events (there is no header-only HTTP method), versus
 one `getEvents` per 1,024–10,240 events. So headers are opt-in:
 - An event carries `block.number` and `block.hash` (both in `getEvents` results) for free.
-- `block.timestamp` / `parent_hash` / `status` need the header. A handler declares it (`include: { block: true }`),
-  or kasbah records which fields handlers read on the first batch (Ponder's column-access proxy) and fetches
-  headers only for contracts whose handlers read them.
+- `block.timestamp` needs the header. Built: a contract declares it (`include: { block: true }`, typed:
+  `event.block.timestamp` exists only then), the backfill fetches the headers of its blocks with events together
+  with the batch's transactions, through the shared cache when final; live blocks already have theirs, so it's
+  free there. (Not built: recording which fields handlers read, Ponder's column-access proxy.)
 - Headers are fetched in JSON-RPC batches of 100 (Alchemy: 835/s unbatched, 7,840/s batched). PublicNode
   throttles `getBlockWithTxHashes` to about 20/s whatever the batch size: header backfills go to a paid endpoint.
 
@@ -178,9 +180,15 @@ Built (`src/sync/live.ts`). What a tick does when the answers don't agree:
   tick.
 - Each live block is one transaction: its writes, its undo journal, its hash and the checkpoint. A crash leaves the
   last committed block; the restart re-checks it against the chain on its first tick.
-- Class upgrades while live: before each tick's blocks are fetched, one batched `getClassHashAt(to)` per tracked
-  contract; on a change, bisect between the last checked block and `to`, fetch the new ABI, extend the decoder
-  and the key filter, then index. Not every contract emits an upgrade event, so this doesn't rely on one.
+- Class upgrades while live: a contract's `upgradeEvents` (default: `Upgraded`, `ClassHashReplaced`
+  or `ImplementationReplaced` when its ABI declares them, as the OpenZeppelin, Ekubo and StarkWare components do)
+  join the event filter. When one arrives in a block, its address's class is read at that block (one
+  `getClassHashAt`), and the block decodes with the new class. A contract without any (not configured, none in
+  its ABI) keeps the old check: before each tick, one batched `getClassHashAt(to)` per address, bisecting on a
+  change. `upgradeEvents: []`: never checked. Measured on Ekubo (live, 30 min): 10.5k requests an hour,
+  ≈4.4 per block, one of them this check, which the `ClassHashReplaced` default now removes. A Cairo 0 proxy never
+  changes its own class (its implementation does), so neither way sees those upgrades: its events decode with the
+  configured ABI.
 - Restart after downtime: if the last indexed block is inside the window, its hash is checked first and a reorg
   that happened while stopped is reverted before backfilling (backfill trusts its start block).
 

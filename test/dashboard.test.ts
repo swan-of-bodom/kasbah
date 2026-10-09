@@ -25,6 +25,7 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   s.record("Pool:Created", 5);
   s.time.fetch = 8000;
   s.time.commit = 1000;
+  s.rpc = { requests: 30, calls: 900, retries: 0, throttled: 0, bytes: 0, methods: { starknet_getEvents: 400, starknet_blockNumber: 300, starknet_getClassHashAt: 100, starknet_getBlockWithTxHashes: 90, starknet_call: 10 } };
   const lines = render(s, { width: 100, now: t0 + 10_000 });
   // Every line is the box's width.
   for (const l of lines) expect(l.length).toBe(100);
@@ -36,6 +37,8 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   expect(text).toMatch(/40\.1%/);
   expect(text).toMatch(/fetch 89% {2}■ handlers 0% {2}■ commits 11%/);
   expect(text).toContain("bound by fetching");
+  // Calls per method, the most first: what the provider bills.
+  expect(text).toMatch(/getEvents 400 · blockNumber 300 · getClassHashAt 100 · \+2 more/);
   const rows = inside(lines).filter((l) => l.startsWith("Pool:"));
   expect(rows[0]).toMatch(/^Pool:Created\s+1\s+5\.0 ms\s+63%/);
   expect(rows[1]).toMatch(/^Pool:Swap\s+300\s+10 µs\s+37%/);

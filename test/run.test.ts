@@ -1,6 +1,10 @@
 import { expect, test } from "vitest";
 import type { Config } from "../src/app.ts";
 import { moves, planOf } from "../src/run.ts";
+import { upgradeEventsOf } from "../src/sources.ts";
+import cairo0Pair from "./fixtures/cairo0-0.abi.ts";
+import ekubo from "./fixtures/ekubo-core.abi.ts";
+import strk from "./fixtures/strk.abi.ts";
 import { type Notice, Status } from "../src/status.ts";
 
 const config = (reorgWindow?: number): Config => ({
@@ -53,4 +57,13 @@ test("Status: commits move the gauges and note progress when due; a throwing lis
   expect(notices.map((n) => n.text)).toEqual([expect.stringMatching(/^block 8: 2 events, 1 new children, \d+\.\ds after its timestamp$/)]);
   status.fail(new Error("boom"));
   expect([status.phase, status.error]).toEqual(["failed", "boom"]);
+});
+
+test("upgrade events: the common ones by name, the configured ones checked, none for a contract without", () => {
+  expect(upgradeEventsOf("Core", ekubo, undefined)).toEqual(new Set(["ClassHashReplaced"]));
+  expect([...upgradeEventsOf("STRK", strk, undefined)!].every((n) => n.endsWith("ImplementationReplaced"))).toBe(true);
+  // A Cairo 0 pair: no upgrade event, so its class is checked at every poll.
+  expect(upgradeEventsOf("Pair", cairo0Pair, undefined)).toBeUndefined();
+  expect(upgradeEventsOf("Core", ekubo, [])).toEqual(new Set());
+  expect(() => upgradeEventsOf("Core", ekubo, ["Upgraded"])).toThrow("Core: upgradeEvents: the ABI has no event Upgraded");
 });

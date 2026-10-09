@@ -33,6 +33,8 @@ test("throttled calls inside a batch are retried alone, the rest kept", async ()
     expect(await rpc.batch(calls)).toEqual(calls.map((c) => `r${c.params.n}`));
     expect(n.sent).toEqual([calls.map((c) => c.params.n), ["0", "3", "6", "9"]]);
     expect(rpc.stats.throttled).toBe(1);
+    // Billed per call: the 4 retried ones count again.
+    expect(rpc.stats.methods).toEqual({ m: 14 });
   } finally {
     n.server.close();
   }

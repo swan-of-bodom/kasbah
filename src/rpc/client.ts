@@ -17,7 +17,8 @@ export class RpcError extends Error {
   }
 }
 
-export type RpcStats = { requests: number; calls: number; retries: number; throttled: number; bytes: number };
+/** `methods`: calls per JSON-RPC method (what providers bill), retries included. */
+export type RpcStats = { requests: number; calls: number; retries: number; throttled: number; bytes: number; methods: Record<string, number> };
 
 export type RpcClientOptions = {
   timeoutMs?: number;
@@ -42,7 +43,7 @@ function retryable(status: number | undefined, code?: number): boolean {
  * on throttling or timeouts, so one client finds what an endpoint can take.
  */
 export class RpcClient {
-  readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, bytes: 0 };
+  readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, bytes: 0, methods: {} };
   readonly #url: string;
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
@@ -123,6 +124,7 @@ export class RpcClient {
     this.#id += calls.length;
     this.stats.requests++;
     this.stats.calls += calls.length;
+    for (const c of calls) this.stats.methods[c.method] = (this.stats.methods[c.method] ?? 0) + 1;
     const res = await fetch(this.#url, {
       method: "POST",
       headers: { "content-type": "application/json", "accept-encoding": "zstd, br, gzip" },

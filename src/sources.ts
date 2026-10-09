@@ -30,7 +30,26 @@ export type ContractSource = {
   startBlock: number;
   /** Events with a handler. */
   handled: Set<string>;
+  /** Events announcing a class replacement (see `upgradeEventsOf`): undefined, none known. */
+  upgrades: Set<string> | undefined;
 };
+
+/** Upgrade events of the common upgradeable components (OpenZeppelin, Ekubo, StarkWare), found by name. */
+const UPGRADE_EVENTS = ["Upgraded", "ClassHashReplaced", "ImplementationReplaced"];
+
+/**
+ * A contract's upgrade events: the configured ones (each must be in the ABI; `[]` for a contract that never
+ * upgrades), else the common ones its ABI declares, else undefined.
+ */
+export function upgradeEventsOf(contract: string, abi: Abi, configured: readonly string[] | undefined): Set<string> | undefined {
+  const names = abiEvents(abi).map((e) => e.name);
+  if (configured !== undefined) {
+    for (const n of configured) if (!names.includes(n)) throw new Error(`${contract}: upgradeEvents: the ABI has no event ${n}`);
+    return new Set(configured);
+  }
+  const found = names.filter((n) => UPGRADE_EVENTS.some((u) => n === u || n.endsWith(`.${u}`)));
+  return found.length > 0 ? new Set(found) : undefined;
+}
 
 /** Above this many addresses, live class checks read each block's state diff instead of asking per address. */
 const PER_ADDRESS_CHECKS = 100;
@@ -52,6 +71,8 @@ export class Sources {
   readonly #decoders = new WeakMap<Abi, Decode>();
   readonly #reported = new Set<string>();
   readonly #note: (n: SourceNote) => void;
+  /** Per contract with upgrade events, their selectors. */
+  readonly #upgradeSelectors = new Map<string, Set<string>>();
   #children = 0;
 
   /** Per contract, the configured ABI's decoder: for events the class at the address doesn't declare. */
@@ -62,6 +83,7 @@ export class Sources {
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
       this.#fallback.set(c.name, createDecoder(c.abi));
+      if (c.upgrades !== undefined) this.#upgradeSelectors.set(c.name, new Set(abiEvents(c.abi).filter((e) => c.upgrades!.has(e.name)).map((e) => e.selectors[0]!)));
       // Handled events of the configured ABI are always fetched, whatever the classes say (Cairo 0 proxies).
       this.#join(c, c.abi);
     }
@@ -73,9 +95,11 @@ export class Sources {
     return this.#children;
   }
 
-  /** Handled events of `abi` join the `keys` filter. */
+  /** Handled and upgrade events of `abi` join the `keys` filter. */
   #join(c: ContractSource, abi: Abi) {
-    for (const e of abiEvents(abi)) if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
+    for (const e of abiEvents(abi)) {
+      if ((c.handled.has(e.name) || c.upgrades?.has(e.name)) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
+    }
   }
 
   /**
@@ -182,11 +206,32 @@ export class Sources {
   }
 
   /**
-   * Before live blocks `from..to` are indexed: finds class replacements among watched addresses. Few addresses: one
-   * batched `getClassHashAt(to)`, bisecting only a changed one. Many: each block's `replaced_classes`.
+   * Before a live block's events are handled: an address that emitted one of its upgrade events in it has its class
+   * read at the block, and decodes the block with the new one.
+   */
+  async upgradesIn(events: readonly { from_address: string; keys: string[] }[], block: number): Promise<void> {
+    const due = new Set<Watched>();
+    for (const e of events) {
+      const w = this.byAddress.get(canonical(e.from_address));
+      if (w !== undefined && this.#upgradeSelectors.get(w.contract)?.has(e.keys[0]!)) due.add(w);
+    }
+    await Promise.all([...due].map(async (w) => {
+      const hash = await this.#rpc.request<string>("starknet_getClassHashAt", { block_id: { block_number: block }, contract_address: w.address });
+      if (hash !== w.spans.at(-1)!.classHash) {
+        this.#note({ kind: "class", contract: w.contract, address: w.address, changes: [{ block, classHash: hash }] });
+        await this.#extend(w, [{ from: block, classHash: hash }]);
+      }
+      w.checked = Math.max(w.checked, block);
+    }));
+  }
+
+  /**
+   * Before live blocks `from..to` are indexed: finds class replacements among watched addresses whose contract has
+   * no upgrade event (those are found by `upgradesIn`). Few addresses: one batched `getClassHashAt(to)`, bisecting
+   * only a changed one. Many: each block's `replaced_classes`.
    */
   async checkClasses(from: number, to: number): Promise<void> {
-    const due = [...this.byAddress.values()].filter((w) => w.checked < to);
+    const due = [...this.byAddress.values()].filter((w) => w.checked < to && this.#contracts.get(w.contract)!.upgrades === undefined);
     if (due.length === 0) return;
     if (due.length <= PER_ADDRESS_CHECKS) {
       const current = await this.#rpc.batch<string[]>(

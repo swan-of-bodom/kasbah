@@ -13,7 +13,7 @@ import { createTableSql, indexSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
 import { blockNumber, type EmittedEvent, getHeaders } from "./rpc/methods.ts";
 import { type Endpoint, probe } from "./rpc/probe.ts";
-import { canonical, type FactorySource, factoryReader, Sources, type Watched } from "./sources.ts";
+import { canonical, type FactorySource, factoryReader, Sources, upgradeEventsOf, type Watched } from "./sources.ts";
 import { Status } from "./status.ts";
 import { type Extras, fetchExtras } from "./sync/extras.ts";
 import { type Batch, eventStream } from "./sync/fetch.ts";
@@ -116,6 +116,8 @@ export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandl
 }
 
 type Factory = FactorySource & { reader: ReturnType<typeof factoryReader> };
+type Header = { hash: string; parent: string; timestamp: number };
+type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Header> };
 type BlockSource = BlockConfig & { name: string };
 
 /** What the startup transaction read. */
@@ -154,6 +156,7 @@ class Run {
   readonly #factoryByAddress: Map<string, Factory>;
   readonly #factoryKeys: string[][];
   readonly #anyInclude: boolean;
+  readonly #anyBlock: boolean;
   /** The last block committed (undefined: none yet). */
   #checkpoint: number | undefined;
   /** One for every factory: they always move together (a factory added later is another build). */
@@ -175,6 +178,7 @@ class Run {
     this.#factoryByAddress = new Map(s.factories.map((f) => [f.address, f]));
     this.#factoryKeys = [[...new Set(s.factories.flatMap((f) => f.reader.selectors))]];
     this.#anyInclude = Object.values(s.config.contracts).some((c) => c.include?.transaction || c.include?.receipt);
+    this.#anyBlock = Object.values(s.config.contracts).some((c) => c.include?.block);
     s.status.checkpoint = this.#checkpoint ?? 0;
     s.status.calls = this.#client.stats;
     s.status.watched = () => ({ contracts: s.sources.addresses.length, children: s.sources.children });
@@ -188,6 +192,8 @@ class Run {
     const schema = config.schema ?? "kasbah";
     status.schema = schema;
     const blockSources = validate(config, handlers);
+    const handledOf = (name: string) => new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
+    const contracts = Object.entries(config.contracts).map(([name, c]) => ({ name, abi: c.abi, startBlock: c.startBlock, handled: handledOf(name), upgrades: upgradeEventsOf(name, c.abi, c.upgradeEvents) }));
     const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
     // Built now, so an index kasbah can't create is refused before the backfill, not after it.
     const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
@@ -223,8 +229,6 @@ class Run {
     const cache = config.cache
       ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", []), config.cache === true ? {} : config.cache)
       : undefined;
-    const handledOf = (name: string) => new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
-    const contracts = Object.entries(config.contracts).map(([name, c]) => ({ name, abi: c.abi, startBlock: c.startBlock, handled: handledOf(name) }));
     const sources = new Sources(rpc, contracts, (n) => status.note(n));
     const factories = await factoriesOf(config, rpc, sources, plan.classTo);
     await Promise.all(Object.entries(config.contracts).flatMap(([name, c]) => (c.address === undefined ? [] : [sources.add(name, c.address, c.startBlock, plan.classTo, false)])));
@@ -292,9 +296,9 @@ class Run {
     const batches = this.#fetch(sources.addresses, sources.keys, first, to, true);
     let idle = performance.now();
     // Transactions and receipts of the next batch are fetched while this one is handled.
-    for await (const [batch, extras] of ahead(this.#anyInclude ? slices(batches, 2_000) : batches, (b) => this.#extras(b.events))) {
+    for await (const [batch, pre] of ahead(this.#anyInclude || this.#anyBlock ? slices(batches, 2_000) : batches, (b) => this.#prefetch(b.events))) {
       status.time.fetch += performance.now() - idle;
-      since += await this.#handleBatch(through + 1, batch, extras);
+      since += await this.#handleBatch(through + 1, batch, pre);
       through = batch.through;
       status.range.through = through;
       if (signal.aborted) break;
@@ -362,8 +366,10 @@ class Run {
 
   async #block(block: LiveBlock, children: Watched[]): Promise<void> {
     this.#final = Math.max(this.#final, block.number - this.#plan.window);
+    await this.#s.sources.upgradesIn(block.events, block.number);
     const extras = await this.#extras(block.events);
-    for (const e of block.events) await this.#handle(e, extras);
+    const headers = new Map([[block.number, { hash: block.hash, parent: block.parent, timestamp: block.timestamp }]]);
+    for (const e of block.events) await this.#handle(e, extras, headers);
     for (const b of this.#s.blockSources) if (firesAt(b, block.number)) await this.#fire(b.name, { number: block.number, hash: block.hash, timestamp: block.timestamp });
     await this.#commit({ kind: "block", block, children });
   }
@@ -434,19 +440,20 @@ class Run {
   }
 
   /** Handles one backfill batch: events and the block handlers due in `[from, batch.through]`, in block order. Returns how many. */
-  async #handleBatch(from: number, batch: Batch, extras: Map<string, Extras>): Promise<number> {
+  async #handleBatch(from: number, batch: Batch, { extras, headers }: Prefetched): Promise<number> {
     const fires = firesIn(this.#s.blockSources, from, batch.through);
-    const headers = fires.length > 0 ? await this.#headers(fires.map((f) => f.number)) : undefined;
+    const missing = fires.map((f) => f.number).filter((n) => !headers.has(n));
+    if (missing.length > 0) for (const [n, h] of await this.#headers(missing)) headers.set(n, h);
     let i = 0;
     const fireUntil = async (block: number) => {
       for (; i < fires.length && fires[i]!.number < block; i++) {
-        const h = headers!.get(fires[i]!.number)!;
+        const h = headers.get(fires[i]!.number)!;
         await this.#fire(fires[i]!.source, { number: fires[i]!.number, hash: h.hash, timestamp: h.timestamp });
       }
     };
     for (const e of batch.events) {
       await fireUntil(e.block_number!);
-      await this.#handle(e, extras);
+      await this.#handle(e, extras, headers);
     }
     await fireUntil(batch.through + 1);
     return batch.events.length + fires.length;
@@ -457,17 +464,25 @@ class Run {
     return byAddress.get(e.from_address) ?? byAddress.get(canonical(e.from_address));
   }
 
+  /** What a batch's handlers need besides its events: transactions, receipts, and headers for `include.block`. */
+  async #prefetch(events: EmittedEvent[]): Promise<Prefetched> {
+    const blocks = this.#anyBlock ? events.filter((e) => this.#includeOf(e)?.block).map((e) => e.block_number!) : [];
+    const [extras, headers] = await Promise.all([this.#extras(events), blocks.length > 0 ? this.#headers(blocks) : new Map<number, Header>()]);
+    return { extras, headers };
+  }
+
+  #includeOf(e: EmittedEvent) {
+    const w = this.#watchedOf(e);
+    return w === undefined ? undefined : this.#s.config.contracts[w.contract]!.include;
+  }
+
   #extras(events: EmittedEvent[]): Promise<Map<string, Extras>> {
     if (!this.#anyInclude) return Promise.resolve(new Map());
-    const includeOf = (e: EmittedEvent) => {
-      const w = this.#watchedOf(e);
-      return w === undefined ? undefined : this.#s.config.contracts[w.contract]!.include;
-    };
-    return fetchExtras(this.#s.rpc, events, includeOf, { cache: this.#s.cache, isFinal: (b) => b <= this.#final });
+    return fetchExtras(this.#s.rpc, events, (e) => this.#includeOf(e), { cache: this.#s.cache, isFinal: (b) => b <= this.#final });
   }
 
   /** Decodes `e` with its address's class at that block and runs its handler, if any. */
-  async #handle(e: EmittedEvent, extras: Map<string, Extras>): Promise<void> {
+  async #handle(e: EmittedEvent, extras: Map<string, Extras>, headers: Map<number, Header>): Promise<void> {
     const w = this.#watchedOf(e);
     if (w === undefined || e.block_number! < w.from) return;
     const decoded = w.decode(e.block_number!, e.keys, e.data);
@@ -481,7 +496,9 @@ class Run {
       name: decoded.name,
       args: decoded.args,
       address: padded(e.from_address),
-      block: { number: e.block_number!, hash: e.block_hash },
+      block: this.#s.config.contracts[w.contract]!.include?.block
+        ? { number: e.block_number!, hash: headers.get(e.block_number!)!.hash, timestamp: headers.get(e.block_number!)!.timestamp }
+        : { number: e.block_number!, hash: e.block_hash },
       transaction: { ...x?.transaction, hash: e.transaction_hash, index: e.transaction_index },
       ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
       index: e.event_index,
@@ -510,10 +527,10 @@ class Run {
   }
 
   /** Headers for block handlers: the cache's, then RPC (final ones saved to the shared cache, outside any commit). */
-  async #headers(numbers: number[]): Promise<Map<number, { hash: string; parent: string; timestamp: number }>> {
+  async #headers(numbers: number[]): Promise<Map<number, Header>> {
     const { cache, rpc } = this.#s;
     const unique = [...new Set(numbers)];
-    const found = (await cache?.headers(unique)) ?? new Map<number, { hash: string; parent: string; timestamp: number }>();
+    const found = (await cache?.headers(unique)) ?? new Map<number, Header>();
     const fetched = await getHeaders(rpc, unique.filter((n) => !found.has(n)), 100);
     await cache?.saveHeaders(fetched.filter((h) => h.block_number <= this.#plan.backfillTo));
     for (const h of fetched) found.set(h.block_number, { hash: h.block_hash, parent: h.parent_hash, timestamp: h.timestamp });

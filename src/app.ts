@@ -15,8 +15,17 @@ export type FactoryConfig = { address: string; abi: Abi; event: string; paramete
 export type ContractConfig = {
   abi: Abi;
   startBlock: number;
-  /** Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final). */
+  /**
+   * Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final), and/or
+   * its block's timestamp (one header per block with events, cached when final).
+   */
   include?: Include;
+  /**
+   * Events announcing a class replacement: while following the head, the class is read again only when one is
+   * emitted. Default: `Upgraded`, `ClassHashReplaced` or `ImplementationReplaced` if the ABI declares them; without
+   * any, the class is checked at every poll. `[]`: never upgrades, never checked.
+   */
+  upgradeEvents?: readonly string[];
 } & ({ address: string; factory?: undefined } | { factory: FactoryConfig; address?: undefined });
 
 /** A handler every `interval` blocks from `startBlock` (inclusive), after that block's events. */
@@ -74,7 +83,8 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
           name: E;
           args: EventArgs<Contracts<C>[K]["abi"], E>;
           address: `0x${string}`;
-          block: { number: number; hash: string | undefined };
+          /** With `include.block`, also the block's timestamp (and its hash, always known then). */
+          block: IncludeOf<C, K> extends { block: true } ? { number: number; hash: string; timestamp: number } : { number: number; hash: string | undefined };
           /** With `include.transaction`, also the transaction's fields as the RPC returns them. */
           transaction: { hash: string; index: number } & (IncludeOf<C, K> extends { transaction: true } ? Transaction : {});
           /** Position of the event in its transaction. */
@@ -114,7 +124,10 @@ export type RunOptions = {
   status?: Status;
 };
 
-export function kasbah<const C extends Config>(config: C) {
+/** `upgradeEvents` are events of each contract's ABI. */
+type Checked<C extends Config> = { contracts: { [K in keyof Contracts<C>]: { upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[] } } };
+
+export function kasbah<const C extends Config>(config: C & Checked<C>) {
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
 
   const on = <N extends HandlerName<C>>(name: N, handler: Handler<C, N>) => {

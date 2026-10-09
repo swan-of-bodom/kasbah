@@ -191,7 +191,7 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
     rpc: rpcUrl,
     database: url!,
     schema,
-    contracts: { Pool: { abi: childB, factory: { address: FACTORY, abi: factoryAbi, event: "Created", parameter: "pool" }, startBlock: FACTORY_DEPLOYED, include: { transaction: true, receipt: true } } },
+    contracts: { Pool: { abi: childB, factory: { address: FACTORY, abi: factoryAbi, event: "Created", parameter: "pool" }, startBlock: FACTORY_DEPLOYED, include: { transaction: true, receipt: true, block: true } } },
     blocks: { Every10: { interval: 10, startBlock: 0 } },
     tables: { pools, ticks, txs },
     reorgWindow: 16,
@@ -201,6 +201,9 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
     ...extra,
   });
   a.on("Pool:Counted", async ({ event, context }) => {
+    // include.block: the node's header, in backfill and live (a run fails on a wrong one).
+    const header = node.blocks[event.block.number]!;
+    if (event.block.timestamp !== 1_000 + event.block.number * 2 || event.block.hash !== header.hash) throw new Error(`block ${event.block.number}: header ${event.block.timestamp} ${event.block.hash}`);
     const v = event.args.amount;
     const fee = BigInt(event.receipt.actual_fee.amount);
     await context.db.insert(txs).values({ hash: event.transaction.hash, sender: event.transaction.sender_address!, fee, events: event.receipt.events.length }).onConflictDoNothing();
