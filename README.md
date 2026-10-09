@@ -20,7 +20,8 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).
 - `src/sync/heads.ts`: WebSocket new heads; `src/sync/extras.ts`: transactions and receipts.
 - `src/cli.ts`: `kasbah start | dev | cache`.
-- `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`.
+- `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`; `src/run.ts`: one run, its
+  phases and its commits; `src/status.ts`: what it reports (`Status`: state to read, notices to subscribe to).
 - `examples/ekubo/`: Ekubo pools (swap count, volume, price, liquidity).
 
 ## An app

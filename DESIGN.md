@@ -242,6 +242,12 @@ is always rolled back before the next confirmed block. To decide when we get the
   classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
+- One run (`src/run.ts`): setup, then the phases factories → backfill → keys → live, each starting from the
+  committed position (checkpoint, factory watermark, the window's hashes) and a no-op when it has nothing left, so
+  a restart resumes through the same code. Every write after startup is one of five commits (pre-pass children,
+  backfill batch, entering live, live block, revert), all through one helper: `moves()` says what each moves in
+  `_kasbah_meta` (checkpoint and `pg_notify`, `discovered:*`, `phase`), and memory takes the same values only
+  after COMMIT. Pre-pass children are resolved (classes read) before their transaction and watched after it.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
 
 - Backfill blocks are final: no undo journal, and they go to the shared cache. So the backfill stops at `head -
@@ -371,9 +377,12 @@ pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves 
 ### 8.6 Dev screen
 
 `kasbah dev` (in a terminal; `--ui` / `--no-ui` override) draws `Status` (`src/status.ts`, filled in by `run`) under
-the log and redraws it in place 4 times a second; log lines and handlers' `console` output print above it and
-stay in the scrollback. Against Ponder's: one chain, so no per-chain table; added a phase line (factories,
-backfill, keys, live), where the time goes (waiting for events, handlers, commits, and which one bounds the
+the log and redraws it in place 4 times a second; the run's notices and handlers' `console` output print above it
+and stay in the scrollback. `Status` is the run's only reporting channel: state read whenever (phase, blocks,
+handlers, RPC, cache), and notices pushed in order to `subscribe` listeners (reorgs, class changes, phase summaries,
+progress; each has a typed payload and its line of text). Without a `Status`, `run` prints every notice as a
+`[kasbah]` line; the screen prints all but progress, which the box shows. Against Ponder's: one chain, so no
+per-chain table; added a phase line (factories, backfill, keys, live), where the time goes (waiting for events, handlers, commits, and which one bounds the
 run: the measure that found the bottlenecks in §8.5), handlers by total time with their average, and the last
 commit's parts. Drawn as a box (phase badge, full-width progress bar, events/s sparkline over 2 minutes, the
 time split as one stacked bar, handlers as a table), plain ANSI codes, no dependency; `NO_COLOR` or a non-TTY

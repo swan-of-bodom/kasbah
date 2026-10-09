@@ -273,20 +273,35 @@ const actual = async (schema: string) => ({
 test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade through the state diff", async () => {
   const schema = "kasbah_test_features";
   const logs: string[] = [];
+  const watched = (status = new Status()) => {
+    status.subscribe((n) => logs.push(n.text));
+    return status;
+  };
   const caughtUp = () => until(async () => (await checkpoint(schema)) === node.blocks.length - 1);
 
   let stop = new AbortController();
-  let run = app(schema).run({ reset: true, signal: stop.signal, log: (l) => logs.push(l) });
+  const first = watched();
+  let run = app(schema).run({ reset: true, signal: stop.signal, status: first });
   await caughtUp();
+  let forgotten = 0;
   for (let i = 0; i < 160; i++) {
     node.add();
     if (i % 10 === 0) await new Promise((r) => setTimeout(r, 10));
     if (i % 50 === 49) {
       await caughtUp();
-      node.reorg(8 + (i % 4));
+      const depth = 8 + (i % 4);
+      forgotten += node.blocks.slice(-depth).flatMap((b) => b.created).length;
+      const reorgs = first.live.reorgs;
+      node.reorg(depth);
+      // The tip's number is unchanged: wait for the revert, then for the new blocks.
+      await until(async () => first.live.reorgs > reorgs);
       await caughtUp();
+      // A revert forgets the children it undid: the counts follow the watched sources.
+      expect([first.children, first.contracts]).toEqual([node.children().length, node.children().length]);
     }
   }
+  expect(forgotten).toBeGreaterThan(0);
+  expect(logs.some((l) => /^reorg: .*, \d+ children forgotten$/.test(l))).toBe(true);
   await caughtUp();
   stop.abort();
   await run;
@@ -295,8 +310,8 @@ test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade
   node.reorg(44);
   stop = new AbortController();
   // The screen's view of a restart: every stored child counted, the last block committed when it stops.
-  const status = new Status();
-  run = app(schema).run({ signal: stop.signal, log: (l) => logs.push(l), status });
+  const status = watched();
+  run = app(schema).run({ signal: stop.signal, status });
   await caughtUp();
   expect(status.phase).toBe("live");
   expect(status.children).toBe(node.children().length);
@@ -321,9 +336,10 @@ test.skipIf(url === undefined)("a run that fails ends in the failed phase, not d
   await new Promise<void>((r) => refusing.listen(0, "127.0.0.1", r));
   const status = new Status();
   const rpc = `http://127.0.0.1:${(refusing.address() as { port: number }).port}`;
-  await expect(app("kasbah_test_failed", false, { rpc }).run({ reset: true, log: () => {}, status })).rejects.toThrow();
+  await expect(app("kasbah_test_failed", false, { rpc }).run({ reset: true, status })).rejects.toThrow();
   refusing.close();
   expect(status.phase).toBe("failed");
+  expect(status.error).toMatch(/refused/);
   const p = new pg.Pool({ connectionString: url, max: 1 });
   await p.query(`DROP SCHEMA IF EXISTS kasbah_test_failed CASCADE`);
   await p.end();
@@ -332,7 +348,7 @@ test.skipIf(url === undefined)("a run that fails ends in the failed phase, not d
 test.skipIf(url === undefined)("a re-index reads the cache and fetches no events", async () => {
   const schema = "kasbah_test_cached";
   const to = node.blocks.length - 20;
-  await app(schema, true).run({ reset: true, to, log: () => {} });
+  await app(schema, true).run({ reset: true, to, status: new Status() });
   expect(await actual(schema)).toEqual(expected(to));
 
   const before = node.calls.get("starknet_getEvents") ?? 0;
@@ -340,7 +356,9 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
   const callsBefore = node.calls.get("starknet_call") ?? 0;
   const extrasBefore = (node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0);
   const logs: string[] = [];
-  await app(schema, true).run({ reset: true, to, log: (l) => logs.push(l) });
+  const status = new Status();
+  status.subscribe((n) => logs.push(n.text));
+  await app(schema, true).run({ reset: true, to, status });
   expect(await actual(schema)).toEqual(expected(to));
   expect(node.calls.get("starknet_getEvents")).toBe(before);
   expect(node.calls.get("starknet_getBlockWithTxHashes")).toBe(headersBefore);
@@ -350,7 +368,7 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
 
   // Past the cached range, only the new blocks are fetched (up to the last final one).
   const final = node.blocks.length - 1 - 16;
-  await app(schema, true).run({ to: final, log: () => {} });
+  await app(schema, true).run({ to: final, status: new Status() });
   expect(await actual(schema)).toEqual(expected(final));
 }, 120_000);
 
@@ -364,7 +382,9 @@ test.skipIf(url === undefined)("with a head subscription, new blocks are indexed
   };
   const stop = new AbortController();
   const logs: string[] = [];
-  const run = app(schema, false, { ws: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, pollMs: 60_000 }).run({ signal: stop.signal, log: (l) => logs.push(l) });
+  const status = new Status();
+  status.subscribe((n) => logs.push(n.text));
+  const run = app(schema, false, { ws: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, pollMs: 60_000 }).run({ signal: stop.signal, status });
   try {
     await until(async () => (await checkpoint(schema)) === node.blocks.length - 1);
     for (let i = 0; i < 5; i++) {

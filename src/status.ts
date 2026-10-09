@@ -15,17 +15,60 @@ export type Pace = {
   range: [number, number] | undefined;
 };
 
-/** What a run is doing, updated in place by `run` and read by the dev screen. */
+/** Something a run reports once, when it happens. The rest of `Status` is its current state. */
+export type Note =
+  /** `onBuildChange: "reset"` and the schema held another build. */
+  | { kind: "rebuild" }
+  | { kind: "api"; url: string }
+  /** `to` was inside the reorg window: indexing stops at `through`, the last final block. */
+  | { kind: "clamped"; to: number; through: number; tip: number; window: number }
+  | { kind: "endpoint"; node: string; spec: string; tip: number; contracts: number; factories: number; blockSources: number }
+  /** Blocks after `ancestor` were replaced (`block`, the newest indexed, among them) and are undone. */
+  | { kind: "reorg"; block: number; hash: string; ancestor: number; rows: number; children: number; stopped: boolean }
+  | { kind: "class"; contract: string; address: string; changes: { block: number; classHash: string }[] }
+  /** Events of a contract's class that its configured ABI lacks: once per contract and event name. */
+  | { kind: "skipped"; contract: string; events: string[]; classHash: string }
+  | { kind: "socket"; state: "on" | "refused" | "reconnected" | "closed"; reason?: string }
+  | { kind: "factories"; children: number; through: number; seconds: number }
+  | { kind: "backfill"; handled: number; seconds: number; cache?: { cachedEvents: number; fetchedEvents: number }; reads: number; cachedReads: number }
+  | { kind: "keys"; keys: number; indexes: number; seconds: number }
+  | { kind: "following"; block: number }
+  /** Every backfill commit, and every live block with events or new children: what the screen's box shows. */
+  | { kind: "progress"; phase: "backfill"; through: number; first: number; to: number; handled: number; seconds: number; ms: number; tables: number; cache?: number }
+  | { kind: "progress"; phase: "live"; block: number; events: number; children: number; behind: number };
+
+/** A note as listeners get it: with its time (ms since the epoch) and its line of text. */
+export type Notice = Note & { at: number; text: string };
+
+/** One commit, as `run` reports it. */
+export type CommitReport = {
+  kind: "children" | "batch" | "follow" | "block" | "revert";
+  ms: number;
+  /** Of `ms`: the app's tables, and the cache. */
+  tables: number;
+  cache: number;
+  /** After the commit. */
+  checkpoint: number | undefined;
+  /** A live block: its timestamp, events, and children created in it. */
+  block?: { number: number; timestamp: number; events: number; children: number };
+};
+
+/**
+ * What a run is doing, updated in place by `run`: read it whenever (the dev screen draws it 4 times a second).
+ * What happens once (reorgs, class changes, phase summaries, progress) goes to `subscribe` listeners, in order.
+ */
 export class Status {
   phase: Phase = "starting";
   readonly started = performance.now();
   phaseStarted = performance.now();
+  /** The run's error, in phase "failed". */
+  error = "";
   schema = "";
   endpoint = "";
   tip = 0;
-  contracts = 0;
   factories = 0;
-  children = 0;
+  /** Addresses watched (contracts and factory children) and children among them, read from the run's sources. */
+  watched = (): { contracts: number; children: number } => ({ contracts: 0, children: 0 });
   /** Blocks of the current phase (factories or backfill): `first..to`, done through `through`. */
   range = { first: 0, to: 0, through: 0 };
   /** The last block committed. */
@@ -48,11 +91,65 @@ export class Status {
   readonly #samples: { t: number; through: number; handled: number }[] = [];
   #bucket = { t: performance.now(), handled: 0 };
   #phaseStart = { through: 0 };
+  #handledAtPhase = 0;
+  readonly #listeners = new Set<(n: Notice) => void>();
+
+  get contracts(): number {
+    return this.watched().contracts;
+  }
+
+  get children(): number {
+    return this.watched().children;
+  }
 
   enter(phase: Phase) {
     this.phase = phase;
     this.phaseStarted = performance.now();
+    this.#handledAtPhase = this.handled;
     this.#samples.length = 0;
+  }
+
+  fail(err: unknown) {
+    this.error = err instanceof Error ? err.message : String(err);
+    this.enter("failed");
+  }
+
+  /** Calls `listener` with every notice from now on, in order. Returns the unsubscribe. */
+  subscribe(listener: (n: Notice) => void): () => void {
+    this.#listeners.add(listener);
+    return () => void this.#listeners.delete(listener);
+  }
+
+  note(note: Note): void {
+    const notice: Notice = { ...note, at: Date.now(), text: describe(note) };
+    for (const l of this.#listeners) {
+      // A broken printer must not stop the indexing, nor leave a commit half applied.
+      try {
+        l(notice);
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  }
+
+  /** Moves the checkpoint, the commit times and the live block, and notes a progress line when one is due. */
+  committed(r: CommitReport): void {
+    this.time.commit += r.ms;
+    if (r.checkpoint !== undefined) this.checkpoint = r.checkpoint;
+    if (r.kind === "revert") this.live.reorgs++;
+    if (r.kind === "batch") {
+      this.lastCommit = { ms: r.ms, tables: r.tables, cache: r.cache };
+      const { first, to } = this.range;
+      const handled = this.handled - this.#handledAtPhase;
+      const seconds = (performance.now() - this.phaseStarted) / 1000;
+      this.note({ kind: "progress", phase: "backfill", through: this.checkpoint, first, to, handled, seconds, ms: r.ms, tables: r.tables, cache: this.cache === undefined ? undefined : r.cache });
+    } else if (r.kind === "block" && r.block !== undefined) {
+      const b = r.block;
+      this.lastCommit = { ms: r.ms, tables: r.tables, cache: r.cache };
+      this.live = { ...this.live, block: b.number, timestamp: b.timestamp, events: b.events, at: Date.now() };
+      this.tip = Math.max(this.tip, b.number);
+      if (b.events > 0 || b.children > 0) this.note({ kind: "progress", phase: "live", block: b.number, events: b.events, children: b.children, behind: Date.now() / 1000 - b.timestamp });
+    }
   }
 
   /** Sets the phase's block range (its progress starts at `through`). */
@@ -94,5 +191,49 @@ export class Status {
     const overall = average > 0 ? remaining / average : undefined;
     const range = left === undefined || overall === undefined ? undefined : ([Math.min(left, overall), Math.max(left, overall)] as [number, number]);
     return { blocks, events, left, range };
+  }
+}
+
+const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+const seconds = (s: number) => `${s.toFixed(1)}s`;
+
+/** Every note's line. */
+function describe(n: Note): string {
+  switch (n.kind) {
+    case "rebuild":
+      return "build changed (config, tables or handlers): indexing from scratch";
+    case "api":
+      return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status`;
+    case "clamped":
+      return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip} minus ${n.window}): indexing to ${n.through}`;
+    case "endpoint":
+      return `${n.node} endpoint, spec ${n.spec}, tip ${n.tip}; ${plural(n.contracts, "contract")}${n.factories > 0 ? `, ${plural(n.factories, "factory", "factories")}` : ""}${n.blockSources > 0 ? `, ${plural(n.blockSources, "block source")}` : ""}`;
+    case "reorg": {
+      const undone = `${n.rows} row changes undone${n.children > 0 ? `, ${n.children} children forgotten` : ""}`;
+      return n.stopped ? `reorg while stopped: block ${n.block} replaced, back to ${n.ancestor}: ${undone}` : `reorg: block ${n.block} (${n.hash}) replaced, back to ${n.ancestor}: ${undone}`;
+    }
+    case "class":
+      return `${n.contract} ${n.address}: class replaced at block ${n.changes.map((c) => `${c.block} (${c.classHash})`).join(", ")}`;
+    case "skipped":
+      return `${n.contract}: events not in the configured ABI are skipped: ${n.events.join(", ")} (first in class ${n.classHash})`;
+    case "socket":
+      return n.state === "on" ? "WebSocket: following new heads"
+        : n.state === "refused" ? `WebSocket: subscribeNewHeads refused (${n.reason}), polling instead`
+        : n.state === "reconnected" ? "WebSocket: reconnected"
+        : "WebSocket: closed, polling until it reconnects";
+    case "factories":
+      return `factories: ${n.children} children up to block ${n.through} in ${seconds(n.seconds)}`;
+    case "backfill": {
+      const reads = n.reads + n.cachedReads;
+      return `backfill done: ${n.handled} handled in ${seconds(n.seconds)}${n.cache === undefined ? "" : ` (${n.cache.cachedEvents} events from the cache, ${n.cache.fetchedEvents} fetched)`}${reads === 0 ? "" : `, ${reads} contract reads (${n.cachedReads} cached)`}`;
+    }
+    case "keys":
+      return `${plural(n.keys, "primary key")} built, ${plural(n.indexes, "index", "indexes")} in place, in ${seconds(n.seconds)}`;
+    case "following":
+      return `following the head from block ${n.block}`;
+    case "progress":
+      return n.phase === "backfill"
+        ? `block ${n.through}/${n.to} (${(((n.through - n.first + 1) / (n.to - n.first + 1)) * 100).toFixed(1)}%), ${n.handled} handled, ${Math.round(n.handled / n.seconds)}/s, commit ${Math.round(n.ms)} ms (tables ${Math.round(n.tables)}${n.cache === undefined ? "" : `, cache ${Math.round(n.cache)}`})`
+        : `block ${n.block}: ${n.events} events${n.children > 0 ? `, ${n.children} new children` : ""}, ${n.behind.toFixed(1)}s after its timestamp`;
   }
 }

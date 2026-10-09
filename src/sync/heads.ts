@@ -1,19 +1,25 @@
+import type { Note } from "../status.ts";
+
+export type SocketNote = Extract<Note, { kind: "socket" }>;
+
 /** A `starknet_subscribeNewHeads` WebSocket that only says "a block arrived". Reconnects with backoff, forever. */
 export class HeadSubscription {
   /** Connected and subscribed. */
   healthy = false;
   readonly stats = { heads: 0, connects: 0 };
   readonly #url: string;
-  readonly #log: (line: string) => void;
+  readonly #note: (n: SocketNote) => void;
   #socket: WebSocket | undefined;
   #closed = false;
   #arrived = false;
   #waiters: (() => void)[] = [];
   #backoff = 500;
 
-  constructor(url: string, log: (line: string) => void) {
+  /** Notes "on" at once, then "refused" (with the node's reason), "reconnected" and "closed" as they happen. */
+  constructor(url: string, note: (n: SocketNote) => void) {
     this.#url = url;
-    this.#log = log;
+    this.#note = note;
+    note({ kind: "socket", state: "on" });
     this.#connect();
   }
 
@@ -67,7 +73,7 @@ export class HeadSubscription {
       }
       if (msg.id === 1) {
         if (msg.error !== undefined || typeof msg.result !== "string") {
-          this.#log(`WebSocket: subscribeNewHeads refused (${msg.error?.message ?? "no subscription id"}), polling instead`);
+          this.#note({ kind: "socket", state: "refused", reason: msg.error?.message ?? "no subscription id" });
           this.#closed = true;
           ws.close();
           return;
@@ -76,7 +82,7 @@ export class HeadSubscription {
         this.healthy = true;
         this.stats.connects++;
         this.#backoff = 500;
-        if (this.stats.connects > 1) this.#log("WebSocket: reconnected");
+        if (this.stats.connects > 1) this.#note({ kind: "socket", state: "reconnected" });
         // A head may have been missed while disconnected: check now.
         this.#wake();
         return;
@@ -89,7 +95,7 @@ export class HeadSubscription {
       const was = this.healthy;
       this.healthy = false;
       if (this.#closed) return;
-      if (was) this.#log(`WebSocket: closed, polling until it reconnects`);
+      if (was) this.#note({ kind: "socket", state: "closed" });
       setTimeout(() => this.#connect(), this.#backoff);
       this.#backoff = Math.min(this.#backoff * 2, 30_000);
     };

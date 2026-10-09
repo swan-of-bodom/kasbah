@@ -21,9 +21,8 @@ export type FollowOptions = {
   onBlock: (block: LiveBlock) => Promise<void>;
   /** Runs before blocks `from..to` are fetched and indexed (the caller may change `address` and `keys` in place). */
   prepare?: (from: number, to: number) => Promise<void>;
-  /** Called with the newest block both chains share; everything after it must be undone. */
-  onReorg: (ancestor: BlockRef) => Promise<void>;
-  log?: (line: string) => void;
+  /** Called with the newest block both chains share and the indexed head it replaces; everything after `ancestor` must be undone. */
+  onReorg: (ancestor: BlockRef, replaced: BlockRef) => Promise<void>;
   /** Waits between ticks that found nothing new (a head subscription); default: sleep `pollMs`. */
   wait?: (signal: AbortSignal) => Promise<void>;
 };
@@ -94,8 +93,7 @@ export async function follow(o: FollowOptions): Promise<void> {
     const forked = first.block_number === head.number + 1 ? first.parent_hash !== head.hash : first.block_hash !== head.hash;
     if (forked) {
       const a = await ancestor();
-      o.log?.(`reorg: block ${head.number} (${head.hash}) replaced, back to ${a.number}`);
-      await o.onReorg(a);
+      await o.onReorg(a, head);
       head = a;
       return true;
     }

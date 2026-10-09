@@ -3,6 +3,10 @@ import { abiEvents, createDecoder } from "./abi/events.ts";
 import { type ClassSpan, classHistory, createHistoricalDecoder, type Decode } from "./abi/history.ts";
 import { selector } from "./abi/selector.ts";
 import type { RpcClient } from "./rpc/client.ts";
+import type { Note } from "./status.ts";
+
+/** What `Sources` reports: class replacements and skipped ABI events. */
+export type SourceNote = Extract<Note, { kind: "class" | "skipped" }>;
 
 export const canonical = (address: string) => `0x${BigInt(address).toString(16)}`;
 
@@ -47,20 +51,31 @@ export class Sources {
   readonly #abis = new Map<string, Promise<Abi>>();
   readonly #decoders = new WeakMap<Abi, Decode>();
   readonly #reported = new Set<string>();
-  readonly #log: (line: string) => void;
+  readonly #note: (n: SourceNote) => void;
+  #children = 0;
 
   /** Per contract, the configured ABI's decoder: for events the class at the address doesn't declare. */
   readonly #fallback = new Map<string, Decode>();
 
-  constructor(rpc: RpcClient, contracts: ContractSource[], log: (line: string) => void) {
+  constructor(rpc: RpcClient, contracts: ContractSource[], note: (n: SourceNote) => void) {
     this.#rpc = rpc;
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
       this.#fallback.set(c.name, createDecoder(c.abi));
       // Handled events of the configured ABI are always fetched, whatever the classes say (Cairo 0 proxies).
-      for (const e of abiEvents(c.abi)) if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
+      this.#join(c, c.abi);
     }
-    this.#log = log;
+    this.#note = note;
+  }
+
+  /** Factory children watched. */
+  get children(): number {
+    return this.#children;
+  }
+
+  /** Handled events of `abi` join the `keys` filter. */
+  #join(c: ContractSource, abi: Abi) {
+    for (const e of abiEvents(abi)) if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
   }
 
   /**
@@ -98,41 +113,54 @@ export class Sources {
     return Promise.all(spans.map(async (s) => ({ ...s, abi: await this.abiOf(s.classHash) })));
   }
 
-  /** Adds class spans to an address: new handled selectors join the filter, unknown event names are reported. */
+  /** Adds class spans to an address (a watched one's handled selectors join the filter); unknown event names are reported. */
   async #extend(w: Watched, spans: ClassSpan[]) {
     const c = this.#contracts.get(w.contract)!;
     const configured = new Set(abiEvents(c.abi).map((e) => e.name));
     for (const s of await this.#withAbis(spans)) {
-      const missing: string[] = [];
-      for (const e of abiEvents(s.abi)) {
-        if (c.handled.has(e.name) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
-        if (!configured.has(e.name)) missing.push(e.name);
-      }
+      const missing = abiEvents(s.abi).filter((e) => !configured.has(e.name)).map((e) => e.name);
       // Once per contract and event name: a contract upgraded 20 times reports the same event once.
       const unreported = missing.filter((m) => !this.#reported.has(`${c.name}:${m}`));
       if (unreported.length > 0) {
         for (const m of unreported) this.#reported.add(`${c.name}:${m}`);
-        this.#log(`${c.name}: events not in the configured ABI are skipped: ${unreported.join(", ")} (first in class ${s.classHash})`);
+        this.#note({ kind: "skipped", contract: c.name, events: unreported, classHash: s.classHash });
       }
       w.spans.push(s);
+      if (this.byAddress.get(w.address) === w) this.#join(c, s.abi);
     }
     w.decode = this.#decoder(w.contract, w.spans);
   }
 
   /**
-   * Watches `address` from block `from`, its classes known up to `to`. Configured contracts get a full class
-   * history; children are probed at creation and at `to`, and bisected only if those differ.
+   * Reads the classes of `address` from block `from`, known up to `to`, without watching it yet (undefined: already
+   * watched). Configured contracts get a full class history; children are probed at creation and at `to`, and
+   * bisected only if those differ.
    */
-  async add(contract: string, address: string, from: number, to: number, child: boolean): Promise<Watched | undefined> {
+  async resolve(contract: string, address: string, from: number, to: number, child: boolean): Promise<Watched | undefined> {
     const a = canonical(address);
     if (this.byAddress.has(a)) return undefined;
     const spans = await classHistory(this.#rpc, a, from, Math.max(from, to), child ? Number.MAX_SAFE_INTEGER : undefined);
     if (spans.length === 0) throw new Error(`${contract}: nothing deployed at ${a} by block ${to}`);
     const w: Watched = { contract, address: a, from, child, spans: [], decode: createHistoricalDecoder([]), checked: Math.max(from, to) };
     await this.#extend(w, spans);
-    this.byAddress.set(a, w);
-    this.addresses.push(a);
     return w;
+  }
+
+  /** Starts watching a resolved address: it joins `addresses`, its handled selectors `keys`. False if already watched. */
+  watch(w: Watched): boolean {
+    if (this.byAddress.has(w.address)) return false;
+    this.byAddress.set(w.address, w);
+    this.addresses.push(w.address);
+    if (w.child) this.#children++;
+    const c = this.#contracts.get(w.contract)!;
+    for (const s of w.spans) this.#join(c, s.abi);
+    return true;
+  }
+
+  /** `resolve`, then `watch`. */
+  async add(contract: string, address: string, from: number, to: number, child: boolean): Promise<Watched | undefined> {
+    const w = await this.resolve(contract, address, from, to, child);
+    return w !== undefined && this.watch(w) ? w : undefined;
   }
 
   /** Forgets children created after `block` (their creation was reorged away, or never indexed). */
@@ -144,6 +172,7 @@ export class Sources {
         removed.push(a);
       }
     }
+    this.#children -= removed.length;
     if (removed.length > 0) {
       const gone = new Set(removed);
       const kept = this.addresses.filter((a) => !gone.has(a));
@@ -166,7 +195,7 @@ export class Sources {
       await Promise.all(due.map(async (w, i) => {
         if (current[i] !== w.spans.at(-1)!.classHash) {
           const changes = (await classHistory(this.#rpc, w.address, w.checked, to, Number.MAX_SAFE_INTEGER)).slice(1);
-          this.#log(`${w.contract} ${w.address}: class replaced at block ${changes.map((s) => `${s.from} (${s.classHash})`).join(", ")}`);
+          this.#note({ kind: "class", contract: w.contract, address: w.address, changes: changes.map((s) => ({ block: s.from, classHash: s.classHash })) });
           await this.#extend(w, changes);
         }
         w.checked = to;
@@ -184,7 +213,7 @@ export class Sources {
         for (const r of u.state_diff.replaced_classes) {
           const w = this.byAddress.get(canonical(r.contract_address));
           if (w === undefined || n <= w.checked) continue;
-          this.#log(`${w.contract} ${w.address}: class replaced at block ${n} (${r.class_hash})`);
+          this.#note({ kind: "class", contract: w.contract, address: w.address, changes: [{ block: n, classHash: r.class_hash }] });
           await this.#extend(w, [{ from: n, classHash: r.class_hash }]);
         }
       }

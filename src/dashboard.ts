@@ -129,7 +129,7 @@ export function render(status: Status, { width = 100, color = false, now = perfo
       line(`${p.green("✓")} through block ${p.bold(thousands(status.checkpoint))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`);
       break;
     case "failed":
-      line(`${p.red("✗")} stopped by an error (above) · committed through block ${p.bold(thousands(status.checkpoint))}`);
+      line(`${p.red("✗")} ${status.error || "stopped by an error"} · committed through block ${p.bold(thousands(status.checkpoint))}`);
       break;
   }
 
@@ -188,8 +188,8 @@ export function render(status: Status, { width = 100, color = false, now = perfo
 }
 
 /**
- * Draws `status` under the log, redrawn in place: log lines (and anything the app prints) scroll above it and
- * stay in the terminal's history.
+ * Draws `status` under the log, redrawn in place: its notices (but progress, which the box shows) and anything the
+ * app prints scroll above it, in order, and stay in the terminal's history.
  */
 export class Screen {
   readonly #status: Status;
@@ -212,10 +212,8 @@ export class Screen {
     this.#console = { log: console.log, info: console.info, warn: console.warn, error: console.error };
   }
 
-  /** Prints a line above the screen. */
-  readonly log = (line: string) => this.#print(`${this.#color ? "\x1b[2m[kasbah]\x1b[22m" : "[kasbah]"} ${line}`);
-
   start() {
+    this.#status.subscribe((n) => n.kind !== "progress" && this.#print(`${this.#color ? "\x1b[2m[kasbah]\x1b[22m" : "[kasbah]"} ${n.text}`));
     // Handlers' own console output goes above the screen too, instead of through it.
     for (const k of ["log", "info", "warn", "error"] as const) console[k] = (...args: unknown[]) => this.#print(format(...args));
     this.#timer = setInterval(() => this.#draw(), 250);

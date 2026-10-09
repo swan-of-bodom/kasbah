@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import { WebSocketServer, type WebSocket as Socket } from "ws";
-import { HeadSubscription } from "../src/sync/heads.ts";
+import { HeadSubscription, type SocketNote } from "../src/sync/heads.ts";
 
 async function server(onSubscribe: (socket: Socket, id: number) => void) {
   const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
@@ -31,8 +31,8 @@ const timed = async (p: Promise<void>) => {
 
 test("a head wakes a waiter, a head between waits isn't lost, reconnects after a drop", async () => {
   const s = await server(accept);
-  const logs: string[] = [];
-  const heads = new HeadSubscription(s.url, (l) => logs.push(l));
+  const notes: SocketNote[] = [];
+  const heads = new HeadSubscription(s.url, (n) => notes.push(n));
   const signal = new AbortController().signal;
   try {
     await until(() => heads.healthy);
@@ -50,7 +50,7 @@ test("a head wakes a waiter, a head between waits isn't lost, reconnects after a
     expect(await timed(heads.wait(30, signal))).toBeLessThan(500);
     await until(() => heads.healthy);
     expect(heads.stats.connects).toBe(2);
-    expect(logs).toContain("WebSocket: reconnected");
+    expect(notes.map((n) => n.state)).toEqual(["on", "closed", "reconnected"]);
   } finally {
     heads.close();
     s.wss.close();
@@ -59,11 +59,11 @@ test("a head wakes a waiter, a head between waits isn't lost, reconnects after a
 
 test("a refused subscription gives up and leaves polling", async () => {
   const s = await server((socket, id) => socket.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } })));
-  const logs: string[] = [];
-  const heads = new HeadSubscription(s.url, (l) => logs.push(l));
+  const notes: SocketNote[] = [];
+  const heads = new HeadSubscription(s.url, (n) => notes.push(n));
   try {
-    await until(() => logs.length > 0);
-    expect(logs[0]).toContain("refused (Method not found)");
+    await until(() => notes.length > 1);
+    expect(notes[1]).toEqual({ kind: "socket", state: "refused", reason: "Method not found" });
     expect(heads.healthy).toBe(false);
   } finally {
     heads.close();

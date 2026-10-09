@@ -3,7 +3,8 @@ import { index, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { selector } from "../src/abi/selector.ts";
-import { bignum, kasbah } from "../src/index.ts";
+import { liveChannel } from "../src/api/server.ts";
+import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 
 const url = process.env.DATABASE_URL;
@@ -136,11 +137,11 @@ afterAll(async () => {
   await p.end();
 });
 
-function app() {
+function app(s = schema) {
   const a = kasbah({
     rpc: rpcUrl,
     database: url!,
-    schema,
+    schema: s,
     contracts: { C: { abi: classB, address: ADDRESS, startBlock: DEPLOYED } },
     tables: { totals, log },
     reorgWindow: 16,
@@ -179,11 +180,16 @@ async function until(condition: () => Promise<boolean>, ms = 20_000) {
 
 test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a restart end on the canonical state", async () => {
   const logs: string[] = [];
-  const log = (l: string) => logs.push(l);
+  /** A status whose notices' lines go to `logs`. */
+  const watched = () => {
+    const status = new Status();
+    status.subscribe((n) => logs.push(n.text));
+    return status;
+  };
 
   // First run: backfill to the window, follow, grow past the upgrade with reorgs, then stop.
   let stop = new AbortController();
-  let run = app().run({ reset: true, signal: stop.signal, log });
+  let run = app().run({ reset: true, signal: stop.signal, status: watched() });
   await until(async () => (await checkpoint()) === node.blocks.length - 1);
   const caughtUp = () => until(async () => (await checkpoint()) === node.blocks.length - 1);
   for (let i = 0; i < 150; i++) {
@@ -208,7 +214,7 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   for (let i = 0; i < 60; i++) node.add();
   node.reorg(64);
   stop = new AbortController();
-  run = app().run({ signal: stop.signal, log });
+  run = app().run({ signal: stop.signal, status: watched() });
   await until(async () => (await checkpoint()) === node.blocks.length - 1);
   stop.abort();
   await run;
@@ -239,3 +245,28 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   expect(logs.filter((l) => l.startsWith("reorg:")).length).toBe(3);
   expect(logs.some((l) => l.startsWith("reorg while stopped"))).toBe(true);
 }, 60_000);
+
+test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", async () => {
+  const s = "kasbah_test_app_once";
+  const listener = new pg.Client({ connectionString: url });
+  await listener.connect();
+  const notified: number[] = [];
+  listener.on("notification", (n) => notified.push(JSON.parse(n.payload!).checkpoint));
+  await listener.query(`LISTEN "${liveChannel(s)}"`);
+  const status = new Status();
+  const progress: string[] = [];
+  status.subscribe((n) => n.kind === "progress" && progress.push(n.text));
+  try {
+    await app(s).run({ reset: true, to: 150, status });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(notified).toEqual([150]);
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatch(/^block 150\/150 \(100\.0%\)/);
+    expect([status.phase, status.checkpoint]).toEqual(["done", 150]);
+  } finally {
+    await listener.end();
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+    await p.end();
+  }
+});

@@ -15,7 +15,7 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   s.schema = "app";
   s.endpoint = "pathfinder 0.10";
   s.tip = 2_000_000;
-  s.contracts = 1;
+  s.watched = () => ({ contracts: 1, children: 0 });
   s.enter("backfill");
   s.setRange(0, 1000, 100);
   const t0 = s.phaseStarted;
@@ -65,6 +65,8 @@ test("live and done", () => {
   s.enter("done");
   expect(render(s)[0]).toContain("[DONE]");
   expect(inside(render(s)).join("\n")).toMatch(/✓ through block/);
+  s.fail(new Error("the node refused"));
+  expect(inside(render(s)).join("\n")).toMatch(/✗ the node refused · committed through block/);
 });
 
 test("colors don't change the layout", () => {
@@ -77,7 +79,7 @@ test("colors don't change the layout", () => {
   expect(colored.map(plain)).toEqual(render(s, { width: 80 }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")));
 });
 
-test("the screen redraws in place, with log lines and console output above it", async () => {
+test("the screen redraws in place, with notices and console output above it", async () => {
   let written = "";
   const out = { columns: 60, write: (c: string) => ((written += c), true) } as unknown as NodeJS.WriteStream;
   const s = new Status();
@@ -85,20 +87,22 @@ test("the screen redraws in place, with log lines and console output above it", 
   screen.start();
   const drawn = (written.match(/\n/g) ?? []).length;
   // Many lines in one tick: one redraw, the lines above the box in order.
-  screen.log("hello");
+  s.note({ kind: "following", block: 5 });
+  // The box shows progress: no line for it.
+  s.note({ kind: "progress", phase: "live", block: 6, events: 1, children: 0, behind: 1 });
   console.log("from a handler %d", 7);
   await new Promise((r) => setImmediate(r));
   const frames = written.split(/\x1b\[(\d+)F\x1b\[J/);
   expect(frames.length).toBe(3);
   // Each redraw moves up exactly the lines drawn before it.
   expect(Number(frames[1])).toBe(drawn);
-  expect(plain(frames[2]!).startsWith("[kasbah] hello\nfrom a handler 7\n")).toBe(true);
+  expect(plain(frames[2]!).startsWith("[kasbah] following the head from block 5\nfrom a handler 7\n")).toBe(true);
   // Printed after stop: below the last box, which isn't drawn again.
   console.log("late");
   screen.stop();
   const before = written;
-  screen.log("after");
+  s.note({ kind: "following", block: 8 });
   await new Promise((r) => setImmediate(r));
-  expect(written.slice(before.length)).toBe("[kasbah] after\n");
+  expect(written.slice(before.length)).toBe("[kasbah] following the head from block 8\n");
   for (const line of plain(written).split("\n")) expect(line.length).toBeLessThanOrEqual(60);
 });

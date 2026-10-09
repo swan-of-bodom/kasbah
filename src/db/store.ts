@@ -295,15 +295,18 @@ export class Store {
     );
     const ordered = (rows as unknown as { tbl: string; pk: Record<string, unknown>; before: Record<string, unknown> | null; block: number; seq: string }[])
       .sort((a, b) => b.block - a.block || Number(BigInt(b.seq) - BigInt(a.seq)));
-    const byName = new Map([...this.#tables.values()].map((s) => [s.info.name, s.info]));
+    const byName = new Map([...this.#tables.values()].map((s) => [s.info.name, s]));
     for (const r of ordered) {
-      const info = byName.get(r.tbl);
-      if (info === undefined) throw new Error(`journal names unknown table ${r.tbl}`);
+      const s = byName.get(r.tbl);
+      if (s === undefined) throw new Error(`journal names unknown table ${r.tbl}`);
+      const info = s.info;
       const pkCols = info.primaryKey.map((c) => c.column.name);
       if (r.before === null) {
         const where = pkCols.map((c, i) => `${quote(c)} = $${i + 1}`).join(" AND ");
         await client.query(`DELETE FROM ${quote(info.name)} WHERE ${where}`, pkCols.map((c) => r.pk[c]));
       } else {
+        // ON CONFLICT needs the key: a restart reverts before the keys phase, and a table may have lost it.
+        await this.#addKey(s, (sql) => client.query(sql));
         const cols = info.columns.map((c) => c.column.name);
         const set = cols.filter((c) => !pkCols.includes(c)).map((c) => `${quote(c)} = EXCLUDED.${quote(c)}`);
         await client.query(
