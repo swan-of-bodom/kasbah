@@ -86,6 +86,7 @@ export class Reader {
   /** Runs `body` in a read-only transaction on the app's schema, then rolls it back. */
   async transaction<T>(body: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect();
+    let broken: Error | undefined;
     try {
       await client.query(`BEGIN READ ONLY; SET LOCAL statement_timeout = ${this.timeoutMs}; SET LOCAL search_path TO ${quote(this.#schema)}`);
       try {
@@ -93,10 +94,11 @@ export class Reader {
       } catch (e) {
         throw asQueryError(e, this.timeoutMs);
       } finally {
-        await client.query("ROLLBACK");
+        // A failed ROLLBACK leaves the connection unusable: dropped, and the query's own error kept.
+        await client.query("ROLLBACK").catch((e: Error) => (broken = e));
       }
     } finally {
-      client.release();
+      client.release(broken);
     }
   }
 

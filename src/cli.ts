@@ -140,7 +140,9 @@ process.on("warning", (w) => {
 // Like `node --env-file-if-exists=.env`: variables already set win.
 try {
   process.loadEnvFile(".env");
-} catch {}
+} catch (e) {
+  if ((e as { code?: string }).code !== "ENOENT") throw e;
+}
 
 const { positionals, values } = parseArgs({
   allowPositionals: true,

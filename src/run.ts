@@ -602,17 +602,18 @@ class Run {
 
 async function transaction<T>(pool: pg.Pool, body: (tx: pg.PoolClient) => Promise<T>): Promise<T> {
   const tx = await pool.connect();
+  let out: T;
   try {
     await tx.query("BEGIN");
-    const out = await body(tx);
+    out = await body(tx);
     await tx.query("COMMIT");
-    return out;
   } catch (err) {
-    await tx.query("ROLLBACK");
+    // A failed ROLLBACK leaves the connection unusable: dropped, and the original error kept.
+    await tx.query("ROLLBACK").then(() => tx.release(), (e) => tx.release(e));
     throw err;
-  } finally {
-    tx.release();
   }
+  tx.release();
+  return out;
 }
 
 const setMeta = (tx: pg.PoolClient, key: string, value: unknown) =>

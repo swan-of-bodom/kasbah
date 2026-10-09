@@ -80,7 +80,7 @@ const GRAPHIQL = `<!doctype html>
   <script crossorigin src="https://unpkg.com/graphiql@3.8.3/graphiql.min.js"></script>
   <script>
     const fetcher = GraphiQL.createFetcher({ url: location.origin + location.pathname });
-    ReactDOM.createRoot(document.getElementById("graphiql")).render(React.createElement(GraphiQL, { fetcher, defaultEditorToolbarTabs: [] }));
+    ReactDOM.createRoot(document.getElementById("graphiql")).render(React.createElement(GraphiQL, { fetcher }));
   </script>
 </body>
 </html>`;
