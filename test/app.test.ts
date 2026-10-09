@@ -232,7 +232,8 @@ test.skipIf(url === undefined)("backfill, live, reorgs, a class upgrade and a re
   expect(logged).toEqual({ n: events, ids: events });
   expect(keys).toEqual(expect.arrayContaining([`${schema}.log`, `${schema}.totals`]));
   expect(indexes).toEqual(["log_block_index", "log_pkey"]);
-  expect(logs.filter((l) => l.startsWith("primary keys")).length).toBe(2);
+  // Both tables keyed after the first backfill, then only the log table, whose key was dropped.
+  expect(logs.filter((l) => / primary keys? built/.test(l)).map((l) => l.split(" ")[0])).toEqual(["2", "1"]);
   expect(node.blocks.at(-1)!.number).toBeGreaterThan(UPGRADED);
   expect(logs.some((l) => l.includes(`class replaced at block ${UPGRADED}`))).toBe(true);
   expect(logs.filter((l) => l.startsWith("reorg:")).length).toBe(3);

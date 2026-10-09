@@ -235,20 +235,31 @@ export class Store {
     }
   }
 
-  /** Gives every table its primary key (before live mode: the journal and reverts need them). */
-  async addKeys(client: PoolClient): Promise<void> {
-    for (const s of this.#tables.values()) await this.#addKey(s, (sql) => client.query(sql));
+  /** Tables still without their primary key. */
+  get unkeyed(): number {
+    let n = 0;
+    for (const s of this.#tables.values()) if (!s.keyed) n++;
+    return n;
   }
 
-  async #addKey(s: State, query: (sql: string) => Promise<unknown>) {
-    if (s.keyed) return;
+  /** Gives `table` its primary key, if it has none yet (before live mode: the journal and reverts need it). */
+  addKey(table: PgTable, client: PoolClient): Promise<boolean> {
+    return this.#addKey(this.#state(table), (sql) => client.query(sql));
+  }
+
+  async #addKey(s: State, query: (sql: string) => Promise<unknown>): Promise<boolean> {
+    if (s.keyed) return false;
     try {
-      await query(primaryKeySql(s.info));
+      for (const statement of primaryKeySql(s.info)) await query(statement);
     } catch (e) {
-      if ((e as { code?: string }).code === "23505") throw new Error(`${s.info.name}: a key was inserted twice (${(e as { detail?: string }).detail ?? "duplicate key"})`, { cause: e });
+      if ((e as { code?: string }).code === "23505") {
+        const detail = (e as { detail?: string }).detail ?? "duplicate key";
+        throw new Error(`${s.info.name}: a handler inserted a key twice (${detail}); fix the handler and run with reset`, { cause: e });
+      }
       throw e;
     }
     s.keyed = true;
+    return true;
   }
 
   async #writeJournal(client: PoolClient, block: number) {

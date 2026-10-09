@@ -37,8 +37,10 @@ export function tableInfo(table: PgTable): TableInfo {
  * `primaryKeySql`: tables are filled faster without it.
  */
 export function createTableSql(info: TableInfo, { primaryKey = true } = {}): string {
+  const keyColumns = new Set(info.primaryKey.map((c) => c.column));
   const cols = info.columns.map(({ column }) => {
-    const notNull = column.notNull || column.primary ? " NOT NULL" : "";
+    // Key columns are NOT NULL with or without the key, so a missing key part fails at once, not when it's built.
+    const notNull = column.notNull || keyColumns.has(column) ? " NOT NULL" : "";
     return `${quote(column.name)} ${column.getSQLType()}${notNull}`;
   });
   if (!primaryKey) return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")})`;
@@ -46,22 +48,54 @@ export function createTableSql(info: TableInfo, { primaryKey = true } = {}): str
   return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")}, PRIMARY KEY (${pk}))`;
 }
 
-export function primaryKeySql(info: TableInfo): string {
-  return `ALTER TABLE ${quote(info.name)} ADD PRIMARY KEY (${info.primaryKey.map((c) => quote(c.column.name)).join(", ")})`;
+/**
+ * The index first (readers can still read the table while it builds), then the constraint on it, which locks the
+ * table only for a moment.
+ */
+export function primaryKeySql(info: TableInfo): string[] {
+  const name = quote(`${info.name}_pkey`);
+  const columns = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
+  return [
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${quote(info.name)} (${columns})`,
+    `ALTER TABLE ${quote(info.name)} ADD CONSTRAINT ${name} PRIMARY KEY USING INDEX ${name}`,
+  ];
 }
 
-/** `CREATE [UNIQUE] INDEX IF NOT EXISTS` for each Drizzle `index()`/`uniqueIndex()` of the table (columns only). */
+/**
+ * `CREATE [UNIQUE] INDEX IF NOT EXISTS` for each Drizzle `index()`/`uniqueIndex()` and unique constraint of the
+ * table. Anything kasbah can't create as written (expressions, `where`, ordering, operator classes, foreign keys,
+ * checks) is refused here, before indexing starts.
+ */
 export function indexSql(info: TableInfo): string[] {
-  return getTableConfig(info.table).indexes.map(({ config }) => {
-    const columns = config.columns.map((c) => {
-      if (!("name" in c) || typeof c.name !== "string") throw new Error(`${info.name}: indexes on expressions are not supported`);
-      return c.name;
+  const config = getTableConfig(info.table);
+  const refuse = (what: string) => {
+    throw new Error(`${info.name}: ${what} are not supported`);
+  };
+  if (config.foreignKeys.length > 0) refuse("foreign keys");
+  if (config.checks.length > 0) refuse("check constraints");
+  const out = config.indexes.map(({ config: c }) => {
+    const columns = c.columns.map((col) => {
+      if (!("name" in col) || typeof col.name !== "string") return refuse("indexes on expressions");
+      const o = (col as { indexConfig?: { order?: string; nulls?: string; opClass?: string } }).indexConfig;
+      if (o?.opClass !== undefined || (o?.order !== undefined && o.order !== "asc") || (o?.nulls !== undefined && o.nulls !== "last")) refuse("index ordering and operator classes");
+      return col.name;
     });
-    if (config.where !== undefined) throw new Error(`${info.name}: partial indexes are not supported`);
-    const name = config.name ?? `${info.name}_${columns.join("_")}_index`;
-    const using = config.method === undefined || config.method === "btree" ? "" : ` USING ${config.method}`;
-    return `CREATE ${config.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote(name)} ON ${quote(info.name)}${using} (${columns.map(quote).join(", ")})`;
+    if (c.where !== undefined) refuse("partial indexes");
+    if (c.with !== undefined && Object.keys(c.with).length > 0) refuse("index storage options");
+    const name = c.name ?? `${info.name}_${columns.join("_")}_index`;
+    const using = c.method === undefined || c.method === "btree" ? "" : ` USING ${c.method}`;
+    return `CREATE ${c.unique ? "UNIQUE " : ""}INDEX IF NOT EXISTS ${quote(name)} ON ${quote(info.name)}${using} (${columns.map(quote).join(", ")})`;
   });
+  const unique = (name: string, columns: string[], nullsNotDistinct: boolean) =>
+    `CREATE UNIQUE INDEX IF NOT EXISTS ${quote(name)} ON ${quote(info.name)} (${columns.map(quote).join(", ")})${nullsNotDistinct ? " NULLS NOT DISTINCT" : ""}`;
+  for (const u of config.uniqueConstraints) {
+    const columns = u.columns.map((c) => c.name);
+    out.push(unique(u.name ?? `${info.name}_${columns.join("_")}_unique`, columns, u.nullsNotDistinct));
+  }
+  for (const { column } of info.columns) {
+    if (column.isUnique && !column.primary) out.push(unique(column.uniqueName ?? `${info.name}_${column.name}_unique`, [column.name], column.uniqueType === "not distinct"));
+  }
+  return out;
 }
 
 export { quote };

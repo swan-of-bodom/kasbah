@@ -4,7 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
 import { selector } from "../src/abi/selector.ts";
-import { bignum, kasbah } from "../src/index.ts";
+import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 
 const url = process.env.DATABASE_URL;
@@ -186,7 +186,7 @@ afterAll(async () => {
   await p.end();
 });
 
-function app(schema: string, cache = false, extra: { ws?: string; pollMs?: number } = {}) {
+function app(schema: string, cache = false, extra: { ws?: string; pollMs?: number; rpc?: string } = {}) {
   const a = kasbah({
     rpc: rpcUrl,
     database: url!,
@@ -294,10 +294,16 @@ test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade
   for (let i = 0; i < 40; i++) node.add();
   node.reorg(44);
   stop = new AbortController();
-  run = app(schema).run({ signal: stop.signal, log: (l) => logs.push(l) });
+  // The screen's view of a restart: every stored child counted, the last block committed when it stops.
+  const status = new Status();
+  run = app(schema).run({ signal: stop.signal, log: (l) => logs.push(l), status });
   await caughtUp();
+  expect(status.phase).toBe("live");
+  expect(status.children).toBe(node.children().length);
   stop.abort();
   await run;
+  expect(status.phase).toBe("done");
+  expect(status.checkpoint).toBe(node.blocks.length - 1);
 
   const tip = node.blocks.length - 1;
   expect(await actual(schema)).toEqual(expected(tip));
@@ -308,6 +314,20 @@ test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade
   expect(node.calls.get("starknet_getStateUpdate")).toBeGreaterThan(0);
   expect(logs.filter((l) => l.startsWith("reorg")).length).toBeGreaterThanOrEqual(4);
 }, 120_000);
+
+test.skipIf(url === undefined)("a run that fails ends in the failed phase, not done", async () => {
+  // A node that refuses everything: the run stops at its first call.
+  const refusing = createServer((_, res) => res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "refused" } })));
+  await new Promise<void>((r) => refusing.listen(0, "127.0.0.1", r));
+  const status = new Status();
+  const rpc = `http://127.0.0.1:${(refusing.address() as { port: number }).port}`;
+  await expect(app("kasbah_test_failed", false, { rpc }).run({ reset: true, log: () => {}, status })).rejects.toThrow();
+  refusing.close();
+  expect(status.phase).toBe("failed");
+  const p = new pg.Pool({ connectionString: url, max: 1 });
+  await p.query(`DROP SCHEMA IF EXISTS kasbah_test_failed CASCADE`);
+  await p.end();
+});
 
 test.skipIf(url === undefined)("a re-index reads the cache and fetches no events", async () => {
   const schema = "kasbah_test_cached";
@@ -328,9 +348,10 @@ test.skipIf(url === undefined)("a re-index reads the cache and fetches no events
   expect((node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0)).toBe(extrasBefore);
   expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
 
-  // Past the cached range, only the new blocks are fetched.
-  await app(schema, true).run({ to: node.blocks.length - 1, log: () => {} });
-  expect(await actual(schema)).toEqual(expected(node.blocks.length - 1));
+  // Past the cached range, only the new blocks are fetched (up to the last final one).
+  const final = node.blocks.length - 1 - 16;
+  await app(schema, true).run({ to: final, log: () => {} });
+  expect(await actual(schema)).toEqual(expected(final));
 }, 120_000);
 
 test.skipIf(url === undefined)("with a head subscription, new blocks are indexed without waiting for the poll", async () => {

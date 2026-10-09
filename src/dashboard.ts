@@ -44,7 +44,7 @@ type Paint = Record<"dim" | "bold" | "cyan" | "green" | "yellow" | "blue" | "mag
 
 function paint(on: boolean): Paint {
   const c = (open: number, close: number) => (s: string) => (on ? `\x1b[${open}m${s}\x1b[${close}m` : s);
-  const colors: Record<Phase, number> = { starting: 100, factories: 45, backfill: 43, keys: 45, live: 42, done: 44 };
+  const colors: Record<Phase, number> = { starting: 100, factories: 45, backfill: 43, keys: 45, live: 42, done: 44, failed: 41 };
   return {
     dim: c(2, 22),
     bold: c(1, 22),
@@ -85,7 +85,7 @@ export function render(status: Status, { width = 100, color = false, now = perfo
 
   const where = [status.endpoint, status.tip > 0 ? `tip ${thousands(status.tip)}` : "", status.contracts > 0 ? plural(status.contracts, "contract") : ""];
   if (status.children > 0) where.push(`${thousands(status.children)} from ${plural(status.factories, "factory", "factories")}`);
-  split(p.dim(where.filter(Boolean).join(" · ")), p.dim(`up ${duration((now - status.started) / 1000)} · ${bytes(process.memoryUsage().rss)}`));
+  split(p.dim(where.filter(Boolean).join(" · ")), p.dim(`up ${duration((now - status.started) / 1000)} · ${bytes(process.memoryUsage.rss())}`));
   line();
 
   const r = status.range;
@@ -126,13 +126,16 @@ export function render(status: Status, { width = 100, color = false, now = perfo
       break;
     }
     case "done":
-      line(`${p.green("✓")} through block ${p.bold(thousands(r.through))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`);
+      line(`${p.green("✓")} through block ${p.bold(thousands(status.checkpoint))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`);
+      break;
+    case "failed":
+      line(`${p.red("✗")} stopped by an error (above) · committed through block ${p.bold(thousands(status.checkpoint))}`);
       break;
   }
 
   const t = status.time;
   const total = t.fetch + t.handlers + t.commit;
-  if (total > 1000 && status.phase !== "live" && status.phase !== "starting") {
+  if (total > 1000 && (status.phase === "factories" || status.phase === "backfill" || status.phase === "keys")) {
     line();
     const w = 30;
     const seg = (x: number) => Math.round((x / total) * w);
@@ -195,6 +198,10 @@ export class Screen {
   readonly #color: boolean;
   #drawn = 0;
   #timer: NodeJS.Timeout | undefined;
+  /** Lines printed since the last draw: drawn above the box together, at most once per tick. */
+  #above = "";
+  #scheduled = false;
+  #stopped = false;
   readonly #console: Pick<Console, "log" | "info" | "warn" | "error">;
 
   constructor(status: Status, out: NodeJS.WriteStream = process.stdout) {
@@ -211,24 +218,32 @@ export class Screen {
   start() {
     // Handlers' own console output goes above the screen too, instead of through it.
     for (const k of ["log", "info", "warn", "error"] as const) console[k] = (...args: unknown[]) => this.#print(format(...args));
-    this.#timer = setInterval(() => this.#draw(""), 250);
+    this.#timer = setInterval(() => this.#draw(), 250);
     this.#timer.unref();
-    this.#draw("");
+    this.#draw();
   }
 
   /** Draws the last state and leaves it in place. */
   stop() {
     clearInterval(this.#timer);
-    this.#draw("");
-    this.#drawn = 0;
+    this.#draw();
+    this.#stopped = true;
     Object.assign(console, this.#console);
   }
 
   #print(text: string) {
-    this.#draw(`${text}\n`);
+    this.#above += `${text}\n`;
+    if (this.#scheduled) return;
+    this.#scheduled = true;
+    setImmediate(() => this.#draw());
   }
 
-  #draw(above: string) {
+  #draw() {
+    this.#scheduled = false;
+    const above = this.#above;
+    this.#above = "";
+    // After stop the last box stays; anything printed later goes under it.
+    if (this.#stopped) return void (above !== "" && this.#write(above));
     const width = Math.min(110, Math.max(44, (this.#out.columns ?? 100) - 1));
     const lines = render(this.#status, { width, color: this.#color });
     const clear = this.#drawn > 0 ? `\x1b[${this.#drawn}F\x1b[J` : "";

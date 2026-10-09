@@ -1,6 +1,6 @@
 import type { RpcStats } from "./rpc/client.ts";
 
-export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done";
+export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done" | "failed";
 
 /** Seconds per point of the events/s history, and points kept (2 minutes). */
 const BUCKET_MS = 2000;
@@ -28,6 +28,8 @@ export class Status {
   children = 0;
   /** Blocks of the current phase (factories or backfill): `first..to`, done through `through`. */
   range = { first: 0, to: 0, through: 0 };
+  /** The last block committed. */
+  checkpoint = 0;
   /** Events and block handlers handled. */
   handled = 0;
   readonly handlers = new Map<string, { count: number; ms: number }>();

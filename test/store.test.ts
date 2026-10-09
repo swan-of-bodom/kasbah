@@ -160,7 +160,7 @@ test.skipIf(url === undefined)("an unkeyed table gets its primary key when first
   const c = await pool.connect();
   try {
     await c.query("BEGIN");
-    await expect(store.addKeys(c)).rejects.toThrow(/balances: a key was inserted twice \(Key \(owner\)=\(0x3\) is duplicated/);
+    await expect(store.addKey(balances, c)).rejects.toThrow(/balances: a handler inserted a key twice \(Key \(owner\)=\(0x3\) is duplicated\.\); fix the handler and run with reset/);
     await c.query("ROLLBACK");
   } finally {
     c.release();

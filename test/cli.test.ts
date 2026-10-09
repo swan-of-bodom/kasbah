@@ -107,11 +107,13 @@ const cli = (...args: string[]) => {
   return { p, out, exited: new Promise<number | null>((r) => p.once("exit", r)) };
 };
 
-test.skipIf(url === undefined)("start --to indexes and exits; a changed build is refused", async () => {
+test.skipIf(url === undefined)("start --to indexes final blocks and exits; a changed build is refused", async () => {
   writeFileSync(appFile, appSource(1).replace('"RPC"', JSON.stringify(rpcUrl)));
   const run = cli("start", appFile, "--to", String(BLOCKS - 1), "--reset");
   expect(await run.exited).toBe(0);
-  expect(await total()).toBe(String(sum));
+  // The head is block 39 and 4 blocks can still be reorged: indexed through 35 (amounts 1..36).
+  expect(await total()).toBe(String((36 * 37) / 2));
+  expect(run.out.join("")).toMatch(/--to 39 is past block 35, the last one that can't be reorged/);
 
   writeFileSync(appFile, appSource(2).replace('"RPC"', JSON.stringify(rpcUrl)));
   const refused = cli("start", appFile, "--to", String(BLOCKS - 1));

@@ -77,20 +77,28 @@ test("colors don't change the layout", () => {
   expect(colored.map(plain)).toEqual(render(s, { width: 80 }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")));
 });
 
-test("the screen redraws in place, with log lines and console output above it", () => {
+test("the screen redraws in place, with log lines and console output above it", async () => {
   let written = "";
   const out = { columns: 60, write: (c: string) => ((written += c), true) } as unknown as NodeJS.WriteStream;
   const s = new Status();
   const screen = new Screen(s, out);
   screen.start();
   const drawn = (written.match(/\n/g) ?? []).length;
+  // Many lines in one tick: one redraw, the lines above the box in order.
   screen.log("hello");
   console.log("from a handler %d", 7);
-  screen.stop();
+  await new Promise((r) => setImmediate(r));
   const frames = written.split(/\x1b\[(\d+)F\x1b\[J/);
+  expect(frames.length).toBe(3);
   // Each redraw moves up exactly the lines drawn before it.
   expect(Number(frames[1])).toBe(drawn);
-  expect(plain(frames[2]!).startsWith("[kasbah] hello\n")).toBe(true);
-  expect(plain(frames[4]!).startsWith("from a handler 7\n")).toBe(true);
+  expect(plain(frames[2]!).startsWith("[kasbah] hello\nfrom a handler 7\n")).toBe(true);
+  // Printed after stop: below the last box, which isn't drawn again.
+  console.log("late");
+  screen.stop();
+  const before = written;
+  screen.log("after");
+  await new Promise((r) => setImmediate(r));
+  expect(written.slice(before.length)).toBe("[kasbah] after\n");
   for (const line of plain(written).split("\n")) expect(line.length).toBeLessThanOrEqual(60);
 });

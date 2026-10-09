@@ -50,7 +50,10 @@ async function start(file: string, o: { to?: number; reset?: boolean; dev?: bool
   try {
     const app = await load(file);
     const stop = new AbortController();
-    for (const s of ["SIGINT", "SIGTERM"] as const) process.once(s, () => stop.abort());
+    // Ctrl-C reaches this process twice under `kasbah dev` (from the terminal, then from the parent), so a repeat
+    // must not kill it before the last commit; a third one does.
+    let signals = 0;
+    for (const s of ["SIGINT", "SIGTERM"] as const) process.on(s, () => (++signals >= 3 ? process.exit(130) : stop.abort()));
     await app.run({ to: o.to, reset: o.reset, signal: stop.signal, onBuildChange: o.dev ? "reset" : "error", buildSalt: sourceHash(file), status, log: screen?.log });
   } finally {
     screen?.stop();

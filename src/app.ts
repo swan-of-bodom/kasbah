@@ -195,6 +195,8 @@ export function kasbah<const C extends Config>(config: C) {
     status.schema = schema;
     const window = config.reorgWindow ?? 64;
     const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
+    // Built now, so an index kasbah can't create is refused before the backfill, not after it.
+    const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
     const blockSources = Object.entries(config.blocks ?? {}).map(([name, b]) => ({ name, ...b }));
     for (const b of blockSources) {
       if (config.contracts[b.name] !== undefined) throw new Error(`${b.name} is both a contract and a block source`);
@@ -292,11 +294,15 @@ export function kasbah<const C extends Config>(config: C) {
       }
 
       const store = new Store(drizzle(pool), tables, { complete: checkpoint === undefined, unkeyed });
+      status.checkpoint = checkpoint ?? 0;
       const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency ?? 32 });
       const endpoint = await probe(rpc);
       const tip = await blockNumber(rpc);
       const live = options.to === undefined;
-      const backfillTo = live ? tip - window : Math.min(options.to!, tip);
+      // Backfill blocks are final: they get no undo journal and go to the cache. A `to` inside the reorg window stops
+      // at its edge.
+      const backfillTo = live ? tip - window : Math.min(options.to!, tip - window);
+      if (!live && options.to! > backfillTo) log(`--to ${options.to} is past block ${backfillTo}, the last one that can't be reorged (head ${tip} minus ${window}): indexing to ${backfillTo}`);
       // Classes are looked up to the tip when following it: live blocks decode with the class active now.
       const classTo = live ? tip : backfillTo;
       const cache = config.cache
@@ -445,6 +451,7 @@ export function kasbah<const C extends Config>(config: C) {
         const forgotten = sources.removeChildrenAfter(ancestor.number);
         for (const n of known.keys()) if (n > ancestor.number) known.delete(n);
         checkpoint = ancestor.number;
+        status.checkpoint = ancestor.number;
         status.live.reorgs++;
         log(`reverted to block ${ancestor.number}, ${undone} row changes undone${forgotten.length > 0 ? `, ${forgotten.length} children forgotten` : ""}`);
       };
@@ -463,6 +470,11 @@ export function kasbah<const C extends Config>(config: C) {
         storedChildren.filter((ch) => ch.block <= Math.min(...factories.map((f) => f.discovered)))
           .map((ch) => sources.add(ch.contract, ch.address, ch.block, classTo, true)),
       );
+      const countSources = () => {
+        status.contracts = sources.addresses.length;
+        status.children = [...sources.byAddress.values()].filter((w) => w.child).length;
+      };
+      countSources();
 
       // Factory pre-pass: every child created up to the backfill end, before any child event is fetched.
       const discoverFrom = Math.min(...factories.map((f) => f.discovered + 1));
@@ -494,8 +506,7 @@ export function kasbah<const C extends Config>(config: C) {
           await cache?.persist(tx, through);
         });
         cache?.untrack();
-        status.children = added.length + storedChildren.length;
-        status.contracts = sources.addresses.length;
+        countSources();
         log(`factories: ${added.length} children up to block ${through} in ${((performance.now() - started) / 1000).toFixed(1)}s`);
         if (signal.aborted) return;
       }
@@ -530,7 +541,7 @@ export function kasbah<const C extends Config>(config: C) {
           const ms = performance.now() - t;
           status.time.commit += ms;
           status.lastCommit = { ms, tables: timing.tables, cache: timing.cache };
-          status.range.through = through;
+          status.checkpoint = through;
         };
         // Transactions and receipts of the next batch are fetched while this one is handled.
         const batches = fetchRange(sources.addresses, sources.keys, first, backfillTo);
@@ -553,6 +564,7 @@ export function kasbah<const C extends Config>(config: C) {
           await fireUntil(batch.through + 1);
           sinceFlush += batch.events.length + fires.length;
           through = batch.through;
+          status.range.through = through;
           if (signal.aborted) break;
           if (sinceFlush >= FLUSH_EVENTS || through === backfillTo || (cache?.pendingBytes ?? 0) > 64 << 20) {
             await timedCommit();
@@ -573,15 +585,21 @@ export function kasbah<const C extends Config>(config: C) {
         log(`backfill done: ${status.handled - handledBefore} handled in ${((performance.now() - started) / 1000).toFixed(1)}s${c === undefined ? "" : ` (${c.cachedEvents} events from the cache, ${c.fetchedEvents} fetched)`}${calls === 0 ? "" : `, ${calls} contract reads (${client.stats.cached} cached)`}`);
       }
       const indexing = performance.now();
-      const indexes = tables.flatMap((t) => indexSql(tableInfo(t)));
+      const indexCount = [...indexes.values()].reduce((n, l) => n + l.length, 0);
       status.enter("keys");
-      status.keys = { tables: unkeyed.size, indexes: indexes.length };
-      await transaction(async (tx) => {
-        await store.addKeys(tx);
-        for (const statement of indexes) await tx.query(statement);
-      });
-      if (unkeyed.size > 0) log(`primary keys and ${indexes.length} indexes built in ${((performance.now() - indexing) / 1000).toFixed(1)}s`);
-      unkeyed.clear();
+      status.keys = { tables: store.unkeyed, indexes: indexCount };
+      // A transaction per table, in parallel: each table is locked only while its own key and indexes are built.
+      const built = await Promise.all(tables.map(async (t) => {
+        let keyed = false;
+        await transaction(async (tx) => {
+          keyed = await store.addKey(t, tx);
+          for (const statement of indexes.get(t)!) await tx.query(statement);
+        });
+        return keyed;
+      }));
+      const seconds = (performance.now() - indexing) / 1000;
+      const keys = built.filter(Boolean).length;
+      if (keys > 0 || seconds >= 1) log(`${plural(keys, "primary key")} built, ${plural(indexCount, "index", "indexes")} in place, in ${seconds.toFixed(1)}s`);
       if (!live) return;
 
       // Live: one transaction per block with its undo journal and hash, kept for the reorg window.
@@ -614,7 +632,7 @@ export function kasbah<const C extends Config>(config: C) {
             const page = await getEvents(rpc, filter, endpoint.maxChunk, token);
             for (const e of page.events) {
               const f = factoryByAddress.get(canonical(e.from_address));
-              const child = f === undefined ? undefined : f.reader.child(e);
+              const child = f === undefined || e.block_number! < f.startBlock ? undefined : f.reader.child(e);
               if (f === undefined || child === undefined) continue;
               const w = await sources.add(f.contract, child, e.block_number!, to, true);
               if (w !== undefined) newChildren.set(w.from, [...(newChildren.get(w.from) ?? []), { address: w.address, contract: w.contract }]);
@@ -661,10 +679,8 @@ export function kasbah<const C extends Config>(config: C) {
           status.lastCommit = { ms: done - committing, tables: 0, cache: 0 };
           status.live = { ...status.live, block: block.number, timestamp: block.timestamp, events: block.events.length, at: Date.now() };
           status.tip = Math.max(status.tip, block.number);
-          if (children.length > 0) {
-            status.children += children.length;
-            status.contracts = sources.addresses.length;
-          }
+          status.checkpoint = block.number;
+          if (children.length > 0) countSources();
           for (const f of factories) f.discovered = block.number;
           known.set(block.number, block.hash);
           for (const n of known.keys()) if (n < prune) known.delete(n);
@@ -675,8 +691,11 @@ export function kasbah<const C extends Config>(config: C) {
         },
         onReorg: revert,
       });
+    } catch (err) {
+      status.enter("failed");
+      throw err;
     } finally {
-      status.enter("done");
+      if (status.phase !== "failed") status.enter("done");
       heads?.close();
       await api?.close();
       await pool.end();

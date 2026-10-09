@@ -231,12 +231,22 @@ is always rolled back before the next confirmed block. To decide when we get the
   key early when the store first needs it: an upsert or delete (`ON CONFLICT` needs it) or a read from
   Postgres (without it, a scan). So small updated tables are keyed at their first update and append-only ones
   at the end. A restart finds unkeyed tables in `pg_constraint`; live mode always has every key (journal,
-  reverts). The price: a key inserted twice that the cache no longer knows is reported when the key is built,
-  not at that batch. Drizzle `index()`/`uniqueIndex()` on columns are built then too (`IF NOT EXISTS`, at every
-  start, so a new index needs no re-index); expression and partial indexes are refused.
+  reverts). Each table is keyed in its own transaction, tables in parallel: `CREATE UNIQUE INDEX` (readers still
+  read) then `ADD CONSTRAINT … PRIMARY KEY USING INDEX` (locked a moment). Measured on JediSwap: during the 31 s
+  `swaps` key, API queries kept answering (31 of 32 ok, none over 2 s; one key transaction for every table had
+  locked them all). Key columns are NOT NULL from the start, composite keys too, so a missing key part fails at
+  once. The price: a key inserted twice that the cache no longer knows is reported when the key is built,
+  not at that batch (the error says to fix the handler and reset). Drizzle `index()`/`uniqueIndex()`, `unique()`
+  and `.unique()` are built then too (`IF NOT EXISTS`, at every start, so a new index needs no re-index). Their SQL
+  is made at startup, and anything kasbah can't create as written (expressions, `where`, ordering, operator
+  classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
+
+- Backfill blocks are final: no undo journal, and they go to the shared cache. So the backfill stops at `head -
+  reorgWindow` even with a `to` above it (logged): a `to` near the head had cached blocks a reorg could still
+  replace, for every app on the chain, with nothing to undo them in the app's own tables.
 
 ### 7.1 Transactions and receipts (opt-in per contract)
 
