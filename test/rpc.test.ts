@@ -50,3 +50,21 @@ test("a call error that retrying can't fix rejects at once", async () => {
     n.server.close();
   }
 });
+
+test("zstd responses decode whether or not fetch already decoded them", async () => {
+  const { zstdCompressSync } = await import("node:zlib");
+  const server = createServer((req, res) => {
+    req.resume();
+    req.on("end", () => {
+      res.writeHead(200, { "content-type": "application/json", "content-encoding": "zstd" });
+      res.end(zstdCompressSync(JSON.stringify({ jsonrpc: "2.0", id: 0, result: "x".repeat(1_000) })));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const rpc = new RpcClient(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    expect(await rpc.request("m", [])).toBe("x".repeat(1_000));
+  } finally {
+    server.close();
+  }
+});

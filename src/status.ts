@@ -203,7 +203,7 @@ function describe(n: Note): string {
     case "rebuild":
       return "build changed (config, tables or handlers): indexing from scratch";
     case "api":
-      return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status`;
+      return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
     case "clamped":
       return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip} minus ${n.window}): indexing to ${n.through}`;
     case "endpoint":

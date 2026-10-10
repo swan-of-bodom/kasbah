@@ -1,10 +1,13 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { GraphQLError, graphql, type GraphQLSchema } from "graphql";
+import { execute, GraphQLError, type GraphQLSchema, specifiedRules, validate } from "graphql";
 import { is, Relations } from "drizzle-orm";
+import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import { tableInfo } from "../db/table.ts";
 import { createGraphqlSchema, relationsOf } from "./graphql.ts";
+import { parseLimited } from "./limits.ts";
 import { QueryError, Reader, type ReaderOptions } from "./reader.ts";
+import { matcher, type Route } from "./routes.ts";
 
 export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   /** Tables, and Drizzle `relations()` between them (GraphQL relation fields): a schema module works as is. */
@@ -13,6 +16,8 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   host?: string;
   /** Open `GET /live` streams allowed at once. Default 1,000. */
   maxLive?: number;
+  /** The app's own endpoints, matched after the built-in ones. */
+  routes?: readonly Route[];
 };
 
 /** The channel the indexer notifies on each commit, with `{"checkpoint": n}`. */
@@ -97,19 +102,29 @@ export class Api {
   readonly #server: Server;
   readonly #live = new Set<(checkpoint: number | undefined) => void>();
   readonly #maxLive: number;
+  readonly #tables: Record<string, PgTable | Relations>;
+  readonly #routes: { method: string; path: string; match: ReturnType<typeof matcher>; handler: Route["handler"] }[];
   #unlisten: (() => Promise<void>) | undefined;
 
-  private constructor(reader: Reader, schema: GraphQLSchema, maxLive: number) {
+  private constructor(reader: Reader, schema: GraphQLSchema, o: ApiOptions) {
     this.#reader = reader;
     this.#schema = schema;
-    this.#maxLive = maxLive;
+    this.#maxLive = o.maxLive ?? 1_000;
+    this.#tables = o.tables;
+    this.#routes = (o.routes ?? []).map((r) => ({ ...r, match: matcher(r.path) }));
     this.#server = createServer((req, res) => void this.#handle(req, res));
   }
 
   static async start(o: ApiOptions): Promise<Api> {
+    const seen = new Set<string>();
+    for (const r of o.routes ?? []) {
+      if (seen.has(`${r.method} ${r.path}`)) throw new Error(`route ${r.method} ${r.path} defined twice`);
+      seen.add(`${r.method} ${r.path}`);
+      matcher(r.path);
+    }
     const infos = Object.fromEntries(Object.entries(o.tables).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])));
     const reader = await Reader.connect({ ...o, tables: Object.values(infos) });
-    const api = new Api(reader, createGraphqlSchema(infos, relationsOf(o.tables, infos)), o.maxLive ?? 1_000);
+    const api = new Api(reader, createGraphqlSchema(infos, relationsOf(o.tables, infos)), o);
     api.#unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
       let checkpoint: number | undefined;
       try {
@@ -140,9 +155,15 @@ export class Api {
         });
         return res.end();
       }
-      if (path === "/status" && req.method === "GET") {
-        const { rows } = await this.#reader.sql(`SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`);
-        return send(res, 200, Object.fromEntries(rows));
+      if (path === "/status" && req.method === "GET") return send(res, 200, await this.#status());
+      // For a load balancer or orchestrator: up (and its database reachable), and caught up with the head.
+      if (path === "/health" && req.method === "GET") {
+        await this.#reader.sql("SELECT 1");
+        return send(res, 200, { ok: true });
+      }
+      if (path === "/ready" && req.method === "GET") {
+        const s = await this.#status();
+        return send(res, s.phase === "live" || s.phase === "done" ? 200 : 503, s);
       }
       if (path === "/sql" && req.method === "POST") {
         const body = await json(req);
@@ -167,10 +188,17 @@ export class Api {
       }
       if (path === "/" && req.method === "GET") {
         return send(res, 200, {
-          endpoints: ["POST /sql {sql, params?}", "POST /graphql {query, variables?}", "GET /graphql (GraphiQL in a browser, or ?query=)", "GET /live (?sql= or ?query=)", "GET /status"],
+          endpoints: [
+            "POST /sql {sql, params?}", "POST /graphql {query, variables?}", "GET /graphql (GraphiQL in a browser, or ?query=)", "GET /live (?sql= or ?query=)",
+            "GET /status", "GET /health", "GET /ready", ...this.#routes.map((r) => `${r.method} ${r.path}`),
+          ],
         });
       }
       if (path === "/live" && req.method === "GET") return await this.#stream(req, res);
+      for (const r of this.#routes) {
+        const params = r.match(path);
+        if (params !== undefined && r.method === req.method) return await this.#route(r.handler, params, req, res);
+      }
       send(res, 404, { error: "not found" });
     } catch (e) {
       if (e instanceof QueryError) return send(res, e.status, { error: e.message });
@@ -179,11 +207,41 @@ export class Api {
     }
   }
 
+  async #status(): Promise<Record<string, string>> {
+    const { rows } = await this.#reader.sql(`SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`);
+    return Object.fromEntries(rows as [string, string][]);
+  }
+
+  async #route(handler: Route["handler"], params: Record<string, string>, req: IncomingMessage, res: ServerResponse) {
+    const text = req.method === "POST" ? await readBody(req) : "";
+    const body = text === "" ? undefined : parseJson(text, "body");
+    const query = new URL(req.url ?? "/", "http://x").searchParams;
+    const out = await this.#reader.transaction(async (client) => {
+      const r = await (handler as (c: unknown) => unknown)({ db: drizzle(client, { schema: this.#tables }), params, query, body, request: req });
+      // Read inside the transaction: a streamed body could still be querying.
+      return r instanceof Response ? { response: r, bytes: Buffer.from(await r.arrayBuffer()) } : { json: r };
+    });
+    if ("json" in out) return send(res, 200, out.json ?? null);
+    const headers: Record<string, string> = { "access-control-allow-origin": "*" };
+    out.response.headers.forEach((v, k) => (headers[k] = v));
+    res.writeHead(out.response.status, headers);
+    res.end(out.bytes);
+  }
+
   async #graphql(query: string, variables: unknown) {
-    const result = await this.#reader.transaction((client) =>
-      graphql({
+    let document;
+    try {
+      document = parseLimited(query);
+    } catch (e) {
+      if (e instanceof GraphQLError) return { errors: [{ message: e.message, locations: e.locations }] };
+      throw e;
+    }
+    const invalid = validate(this.#schema, document, specifiedRules);
+    if (invalid.length > 0) return { errors: invalid.map((e) => ({ message: e.message, locations: e.locations })) };
+    const result = await this.#reader.transaction(async (client) =>
+      execute({
         schema: this.#schema,
-        source: query,
+        document,
         variableValues: (variables ?? undefined) as Record<string, unknown> | undefined,
         contextValue: { client, timeoutMs: this.#reader.timeoutMs },
       }),

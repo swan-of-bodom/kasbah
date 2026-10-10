@@ -1,3 +1,4 @@
+import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { createDecoder, type EventArgs, type EventName, type IndexedEvent, kasbah, type TypeOf } from "../src/index.ts";
 import cairo0Pair from "./fixtures/cairo0-0.abi.ts";
 import ekubo from "./fixtures/ekubo-core.abi.ts";
@@ -83,3 +84,14 @@ kasbah(config).on("Plain:Swapped", ({ event }) => void event.block.timestamp);
 kasbah({ ...config, contracts: { Core: { abi: ekubo, address: "0x1", startBlock: 0, upgradeEvents: ["ClassHashReplaced"] } } });
 // @ts-expect-error: not an event of the ABI
 kasbah({ ...config, contracts: { Core: { abi: ekubo, address: "0x1", startBlock: 0, upgradeEvents: ["Upgraded"] } } });
+
+// Routes: `db` knows the app's tables, relational queries included.
+const swapsTable = pgTable("swaps", { id: text().primaryKey(), amount: integer().notNull() });
+const routed = kasbah({ ...config, tables: { swapsTable }, api: { port: 0 } });
+routed.get("/swaps/:id", async ({ db, params }) => {
+  const row = await db.query.swapsTable.findFirst({ where: (t, { eq }) => eq(t.id, params.id!) });
+  const amount: number | undefined = row?.amount;
+  // @ts-expect-error: no such table
+  void db.query.nope;
+  return amount;
+});

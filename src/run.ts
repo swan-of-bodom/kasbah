@@ -4,6 +4,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { classHistory } from "./abi/history.ts";
+import type { Route } from "./api/routes.ts";
 import { Api, liveChannel } from "./api/server.ts";
 import type { BlockConfig, Config, IndexedBlock, RunOptions } from "./app.ts";
 import { EventCache } from "./cache.ts";
@@ -85,7 +86,7 @@ const FLUSH_EVENTS = 100_000;
 const PHASES = ["factories", "backfill", "keys", "live"] as const;
 
 /** Runs the app: setup, then each phase from where the database is. Reports only through `status`. */
-export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandler>, options: RunOptions = {}): Promise<void> {
+export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandler>, options: RunOptions = {}, routes: readonly Route[] = []): Promise<void> {
   const status = options.status ?? new Status();
   const unsubscribe = options.status === undefined ? status.subscribe((n) => console.log(`[kasbah] ${n.text}`)) : undefined;
   const signal = options.signal ?? new AbortController().signal;
@@ -93,7 +94,7 @@ export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandl
   const closers: (() => unknown)[] = [];
   let failure: { error: unknown } | undefined;
   try {
-    const r = await Run.open(config, handlers, options, status, signal, closers);
+    const r = await Run.open(config, handlers, routes, options, status, signal, closers);
     for (const phase of PHASES) {
       if (signal.aborted) break;
       await r[phase]();
@@ -188,7 +189,7 @@ class Run {
    * Validates the config, opens the database (refusing or dropping another build), the API, the RPC and the
    * cache, reads every class, then undoes a reorg that happened while stopped and watches the stored children.
    */
-  static async open(config: Config, handlers: ReadonlyMap<string, AnyHandler>, options: RunOptions, status: Status, signal: AbortSignal, closers: (() => unknown)[]): Promise<Run> {
+  static async open(config: Config, handlers: ReadonlyMap<string, AnyHandler>, routes: readonly Route[], options: RunOptions, status: Status, signal: AbortSignal, closers: (() => unknown)[]): Promise<Run> {
     const schema = config.schema ?? "kasbah";
     status.schema = schema;
     const blockSources = validate(config, handlers);
@@ -214,7 +215,7 @@ class Run {
     const stored = await startup(pool, schema, tables, buildId);
 
     if (config.api !== undefined) {
-      const api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables });
+      const api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables, routes });
       closers.push(() => api.close());
       // Listening on 127.0.0.1 unless told otherwise; shown as localhost, the same address.
       status.api = `http://${config.api.host === undefined || config.api.host === "127.0.0.1" ? "localhost" : config.api.host}:${api.port}`;

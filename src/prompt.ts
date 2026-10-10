@@ -169,7 +169,8 @@ export class Prompt {
       this.#out.write(`${tty ? "\r\x1b[K" : ""}${this.green("✓")} ${label}  ${this.dim(result(v))}\n`);
       return v;
     } catch (e) {
-      this.#out.write(`${tty ? "\r\x1b[K" : ""}${this.red("✗")} ${label}  ${this.red((e as Error).message)}\n`);
+      const message = (e as Error).message || ((e as { code?: string }).code ?? String(e));
+      this.#out.write(`${tty ? "\r\x1b[K" : ""}${this.red("✗")} ${label}  ${this.red(message)}\n`);
       throw e;
     } finally {
       clearInterval(timer);

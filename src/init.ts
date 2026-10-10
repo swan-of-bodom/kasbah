@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import pg from "pg";
 import type { Abi, AbiMember } from "./abi/abi.ts";
@@ -104,6 +104,7 @@ export function generate(p: Project): Record<string, string> {
     "",
   ].join("\n");
   const appTs = [
+    `import { desc } from "drizzle-orm";`,
     `import { kasbah } from "kasbah";`,
     `import ${camel(p.name)}Abi from "./abis/${abiFile}";`,
     `import * as schema from "./schema.ts";`,
@@ -116,14 +117,17 @@ export function generate(p: Project): Record<string, string> {
     `    ${p.name}: { abi: ${camel(p.name)}Abi, address: "${p.address}", startBlock: ${p.startBlock}${p.timestamps ? ", include: { block: true }" : ""} },`,
     "  },",
     "  tables: schema,",
-    "  // GraphiQL at http://localhost:42069/graphql, SQL at POST /sql.",
-    "  api: { port: 42069 },",
+    "  // GraphiQL at http://localhost:42069/graphql, SQL at POST /sql; API_HOST=0.0.0.0 in a container.",
+    "  api: { port: 42069, host: process.env.API_HOST },",
     "  // Raw events and contract reads kept in Postgres: a re-index after a handler change fetches nothing again.",
     "  cache: true,",
     "});",
     "",
     ...(anyJson ? ["// jsonb can't hold bigints: they're stored as decimal strings.", "const plain = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === \"bigint\" ? x.toString() : x)));", ""] : []),
     handlers.join("\n\n"),
+    "",
+    `// Your own endpoints, read-only on the tables: http://localhost:42069/${snake(defs[0]!.name)}/latest`,
+    `app.get("/${snake(defs[0]!.name)}/latest", async ({ db }) => db.select().from(schema.${camel(defs[0]!.name)}).orderBy(desc(schema.${camel(defs[0]!.name)}.block)).limit(10));`,
     "",
     "export default app;",
     "",
@@ -132,6 +136,7 @@ export function generate(p: Project): Record<string, string> {
     name: basename(p.dir),
     private: true,
     type: "module",
+    packageManager: "pnpm@10.12.1",
     scripts: { dev: "kasbah dev app.ts", start: "kasbah start app.ts", typecheck: "tsc" },
     dependencies: { "drizzle-orm": "^0.45.4", kasbah: p.kasbah },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
@@ -144,22 +149,88 @@ export function generate(p: Project): Record<string, string> {
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
     "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
     ".gitignore": "node_modules\n.env\n",
+    ".dockerignore": "node_modules\n.env\n.git\n",
+    Dockerfile: DOCKERFILE,
+    "docker-compose.yml": COMPOSE,
     ".env": `KASBAH_RPC_URL=${p.rpc}\nDATABASE_URL=${p.database}\n`,
     [`abis/${abiFile}`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
     "schema.ts": schemaTs,
     "app.ts": appTs,
-    "README.md": `# ${basename(p.dir)}\n\nA kasbah indexer of ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.\n\n\`\`\`\npnpm dev          # index, follow the head, restart on every change; GraphiQL at http://localhost:42069/graphql\npnpm start        # the same, without watching\npnpm typecheck\n\`\`\`\n\n\`.env\` holds the RPC URL and the database: keep it out of git.\n`,
+    "README.md": [
+      `# ${basename(p.dir)}`,
+      "",
+      `A kasbah indexer of ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.`,
+      "",
+      "```",
+      "pnpm dev               # index, follow the head, restart on every change; GraphiQL at http://localhost:42069/graphql",
+      "pnpm start             # the same, without watching",
+      "pnpm typecheck",
+      "docker compose up -d   # Postgres and the indexer, API on 127.0.0.1:42069 (reads KASBAH_RPC_URL from .env)",
+      "```",
+      "",
+      "`.env` holds the RPC URL and the database: keep it out of git (and out of the image: `.dockerignore`).",
+      "`GET /health` answers while the indexer and its database are up, `GET /ready` once it follows the head.",
+      "",
+    ].join("\n"),
   };
 }
 
-/** The dependency on this kasbah: from a checkout its packed tarball (a link would bring the checkout's own drizzle-orm), else its version. */
-function kasbahSpec(): string {
+const DOCKERFILE = `FROM node:24-slim
+RUN npm install -g pnpm@10.12.1
+WORKDIR /app
+COPY . .
+RUN pnpm install
+ENV API_HOST=0.0.0.0
+EXPOSE 42069
+# kasbah itself, not through pnpm: it gets the SIGTERM of a stop and finishes the block it's on.
+CMD ["node", "node_modules/kasbah/dist/cli.js", "start", "app.ts"]
+`;
+
+const COMPOSE = `services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-kasbah}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+    restart: unless-stopped
+
+  indexer:
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-kasbah}@postgres:5432/postgres
+    # Localhost only: put a proxy (Caddy, nginx) in front for the outside, with TLS and rate limits.
+    ports:
+      - "127.0.0.1:42069:42069"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:42069/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
+      interval: 30s
+      start_period: 30s
+    stop_grace_period: 30s
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+`;
+
+/**
+ * The dependency on this kasbah: from a checkout its packed tarball, copied into the project so a Docker build sees
+ * it (a link would bring the checkout's own drizzle-orm); else its version.
+ */
+function kasbahSpec(): { spec: string; tarball?: string } {
   const root = resolve(import.meta.dirname, "..");
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
-  if (!existsSync(join(root, ".git"))) return `^${version}`;
+  if (!existsSync(join(root, ".git"))) return { spec: `^${version}` };
   const tarball = join(root, `kasbah-${version}.tgz`);
   if (!existsSync(tarball)) throw new Error(`no ${tarball}: run pnpm pack in ${root} first`);
-  return `file:${tarball}`;
+  return { spec: `file:./vendor/${basename(tarball)}`, tarball };
 }
 
 /** A name for the contract from its largest interface (`ekubo::interfaces::core::ICore` → `Core`). */
@@ -241,18 +312,24 @@ export async function init(o: InitOptions): Promise<void> {
     try {
       await ui.step("Connecting to Postgres", async () => (await pool.query<{ v: string }>("SELECT current_setting('server_version') AS v")).rows[0]!.v, (v) => `Postgres ${v}`);
       break;
-    } catch (e) {
-      if (!ask) throw e;
+    } catch {
+      // Not up yet is fine (docker compose brings its own): only `kasbah dev` needs it.
+      if (!ask || (await ui.confirm("Keep this URL anyway?", false))) break;
       database = undefined;
     } finally {
       await pool.end();
     }
   }
 
-  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, kasbah: o.kasbah ?? kasbahSpec() });
+  const dependency = o.kasbah === undefined ? kasbahSpec() : { spec: o.kasbah };
+  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, kasbah: dependency.spec });
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), content);
+  }
+  if (dependency.tarball !== undefined) {
+    mkdirSync(join(target, "vendor"), { recursive: true });
+    copyFileSync(dependency.tarball, join(target, "vendor", basename(dependency.tarball)));
   }
   ui.line();
   ui.line(`${ui.green("✓")} ${ui.bold(target)}`);

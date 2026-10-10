@@ -29,5 +29,6 @@ test("one table per event, arguments as typed columns, structs as jsonb", () => 
 test("secrets only in .env, which git ignores", () => {
   expect(files[".env"]).toBe("KASBAH_RPC_URL=http://rpc\nDATABASE_URL=postgres://db\n");
   expect(files[".gitignore"]).toContain(".env");
+  expect(files[".dockerignore"]).toContain(".env");
   for (const [path, content] of Object.entries(files)) if (path !== ".env") expect(content).not.toContain("http://rpc");
 });

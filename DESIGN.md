@@ -488,6 +488,16 @@ Target size: under 10k lines for v1.
      the page query runs per parent in a `LATERAL` subquery over `VALUES` of the parents' keys. Each
      request has a budget: 500 statements and the query timeout in total. A relation named like a column is
      refused at startup.
+   - GraphQL limits: before a query runs, at most 1,000 tokens (graphql-js `maxTokens`), depth
+     20 and 30 aliases, fragments counted where spread (Ponder: 1,000 / 100 / 30; depth is lower here because each
+     nested relation is a statement). GraphiQL's introspection query fits. The statement budget stays behind them.
+   - The app's routes: `app.get(path, handler)` / `app.post`, `:name` path segments, matched
+     after the built-in paths (which they can't take). The handler gets `db`, a Drizzle database typed with the
+     app's tables (relational queries included) on the reader's read-only transaction and timeout, plus `params`,
+     `query`, `body` and the request; what it returns is sent as JSON, a `Response` as is, an `HttpError` as its
+     status. Ponder's equivalent is a user Hono app; this keeps the API dependency-free.
+   - `GET /health`: 200 while the process and its database answer. `GET /ready`: 200 once the phase is live (or
+     done), else 503 with the phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 

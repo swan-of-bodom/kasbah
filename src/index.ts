@@ -20,6 +20,7 @@ export {
   kasbah,
 } from "./app.ts";
 export type { Db } from "./db/store.ts";
+export { HttpError, type RouteContext, type RouteHandler } from "./api/routes.ts";
 export type { Receipt, Transaction } from "./rpc/methods.ts";
 export type { Include } from "./sync/extras.ts";
 export { bignum, hex } from "./schema.ts";

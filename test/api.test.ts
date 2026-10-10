@@ -1,7 +1,10 @@
 import { relations } from "drizzle-orm";
 import { integer, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import { eq, sql } from "drizzle-orm";
+import { getIntrospectionQuery } from "graphql";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { HttpError, type Route } from "../src/api/routes.ts";
 import { Api } from "../src/api/server.ts";
 import { createTableSql, tableInfo } from "../src/db/table.ts";
 import { bignum } from "../src/schema.ts";
@@ -40,7 +43,19 @@ beforeAll(async () => {
   await c.query(`INSERT INTO positions VALUES ('0xa', 'p01', 5), ('0xa', 'p02', 6), ('0xb', 'p01', 7)`);
   c.release();
   await owner.end();
-  api = await Api.start({ database: url, schema, tables: { pools, positions, poolsRelations, positionsRelations }, port: 0, timeoutMs: 300, maxRows: 10 });
+  const tables = { pools, positions, poolsRelations, positionsRelations };
+  type Db = import("drizzle-orm/node-postgres").NodePgDatabase<typeof tables>;
+  const routes: Route[] = [
+    { method: "GET", path: "/pools/:id", handler: (async ({ db, params, query }: { db: Db; params: Record<string, string>; query: URLSearchParams }) => {
+      const pool = await db.query.pools.findFirst({ where: eq(pools.id, params.id!), with: { positions: true } });
+      if (pool === undefined) throw new HttpError(404, `no pool ${params.id}`);
+      return { id: pool.id, volume: pool.volume, positions: pool.positions.length, q: query.get("q") };
+    }) as never },
+    { method: "POST", path: "/echo", handler: (({ body }: { body: unknown }) => new Response(JSON.stringify(body), { status: 201, headers: { "cache-control": "max-age=5", "content-type": "application/json" } })) as never },
+    { method: "GET", path: "/write", handler: (async ({ db }: { db: Db }) => db.execute(sql`delete from pools`)) as never },
+    { method: "GET", path: "/slow", handler: (async ({ db }: { db: Db }) => db.execute(sql`select pg_sleep(2)`)) as never },
+  ];
+  api = await Api.start({ database: url, schema, tables, port: 0, timeoutMs: 300, maxRows: 10, routes });
   base = `http://127.0.0.1:${api.port}`;
 });
 
@@ -244,9 +259,9 @@ test.skipIf(url === undefined)("GraphQL relations: to-one and to-many are batche
   }
   await check.end();
 
-  // What can't be batched still has a budget: 501 separate lookups.
+  // 501 separate lookups, which can't be batched, are refused before any runs (the statement budget stays behind it).
   const many = await gql(`{ ${Array.from({ length: 501 }, (_, i) => `a${i}: pool(id: "p01") { id }`).join(" ")} }`);
-  expect(many.errors?.[0]?.message).toMatch(/more than 500 SQL statements/);
+  expect(many.errors?.[0]?.message).toMatch(/more than 1000 tokens/);
 });
 
 test.skipIf(url === undefined)("GET /graphql: GraphiQL for a browser, ?query= for anything else", async () => {
@@ -259,5 +274,45 @@ test.skipIf(url === undefined)("GET /graphql: GraphiQL for a browser, ?query= fo
   const bare = await fetch(`${base}/graphql`);
   expect(bare.status).toBe(400);
   expect(((await bare.json()) as any).error).toContain("?query=");
-  expect(((await (await fetch(`${base}/`)).json()) as any).endpoints.length).toBe(5);
+  expect(((await (await fetch(`${base}/`)).json()) as any).endpoints).toEqual(expect.arrayContaining(["GET /health", "GET /ready", "GET /pools/:id", "POST /echo"]));
+});
+
+test.skipIf(url === undefined)("routes: typed read-only db, path params, errors with a status, a Response as is", async () => {
+  expect(await (await fetch(`${base}/pools/p01?q=x`)).json()).toEqual({ id: "p01", volume: (10n ** 40n + 1n).toString(), positions: Number((await post("/sql", { sql: "select count(*)::int from positions where pool = 'p01'" })).body.rows[0][0]), q: "x" });
+  expect([(await fetch(`${base}/pools/nope`)).status, await (await fetch(`${base}/pools/nope`)).json()]).toEqual([404, { error: "no pool nope" }]);
+  const echo = await fetch(`${base}/echo`, { method: "POST", body: JSON.stringify({ a: 1 }) });
+  expect([echo.status, echo.headers.get("cache-control"), await echo.json()]).toEqual([201, "max-age=5", { a: 1 }]);
+  expect((await fetch(`${base}/echo`)).status).toBe(404);
+  const write = await fetch(`${base}/write`);
+  expect([write.status, (await write.json()).error]).toEqual([400, expect.stringMatching(/read-only transaction/)]);
+  expect(((await fetch(`${base}/slow`)).status)).toBe(400);
+  expect((await post("/sql", { sql: "select count(*)::int as n from pools" })).body.rows).toEqual([[17]]);
+});
+
+test.skipIf(url === undefined)("routes: a built-in path or a duplicate is refused at start", async () => {
+  const start = (routes: Route[]) => Api.start({ database: url!, schema, tables: { pools }, port: 0, routes });
+  await expect(start([{ method: "GET", path: "/sql", handler: () => 1 }])).rejects.toThrow(/kasbah serves it/);
+  await expect(start([{ method: "GET", path: "/a", handler: () => 1 }, { method: "GET", path: "/a", handler: () => 2 }])).rejects.toThrow(/defined twice/);
+});
+
+test.skipIf(url === undefined)("GraphQL limits: tokens, depth and aliases; GraphiQL's introspection fits", async () => {
+  expect((await gql(getIntrospectionQuery())).errors).toBeUndefined();
+  let deep = "id";
+  for (let i = 0; i < 7; i++) deep = `positions { items { poolInfo { ${deep} } } }`;
+  expect((await gql(`{ pool(id: "p01") { ${deep} } }`)).errors[0].message).toBe("query deeper than 20 levels");
+  const aliases = Array.from({ length: 31 }, (_, i) => `a${i}: pool(id: "p01") { id }`).join(" ");
+  expect((await gql(`{ ${aliases} }`)).errors[0].message).toBe("more than 30 aliases");
+  expect((await gql(`{ pool(id: "p01") { ${"id ".repeat(1_000)} } }`)).errors[0].message).toMatch(/more than 1000 tokens/);
+  const looped = await gql(`{ pool(id: "p01") { ...A } } fragment A on Pool { positions { items { poolInfo { ...A } } } }`);
+  expect(looped.errors[0].message).toMatch(/Cannot spread fragment "A" within itself/);
+});
+
+test.skipIf(url === undefined)("health: up while the database answers; ready once live", async () => {
+  expect([(await fetch(`${base}/health`)).status, await (await fetch(`${base}/health`)).json()]).toEqual([200, { ok: true }]);
+  expect((await fetch(`${base}/ready`)).status).toBe(200);
+  const owner = new pg.Pool({ connectionString: url, max: 1 });
+  await owner.query(`UPDATE ${schema}._kasbah_meta SET value = '"backfill"' WHERE key = 'phase'`);
+  expect([(await fetch(`${base}/ready`)).status, (await (await fetch(`${base}/ready`)).json()).phase]).toEqual([503, "backfill"]);
+  await owner.query(`UPDATE ${schema}._kasbah_meta SET value = '"live"' WHERE key = 'phase'`);
+  await owner.end();
 });

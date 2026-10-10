@@ -132,11 +132,10 @@ export class RpcClient {
       signal: AbortSignal.timeout(this.#timeoutMs),
     });
     onStatus(res.status);
-    // fetch decodes br and gzip itself but hands zstd through as is.
-    const text =
-      res.headers.get("content-encoding") === "zstd"
-        ? utf8.decode(await zstdDecompress(new Uint8Array(await res.arrayBuffer())))
-        : await res.text();
+    // fetch decodes br and gzip itself, and zstd too in newer Node 24 (still labelled zstd): the frame magic tells.
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    const zstd = res.headers.get("content-encoding") === "zstd" && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd;
+    const text = utf8.decode(zstd ? await zstdDecompress(bytes) : bytes);
     this.stats.bytes += text.length;
     if (!res.ok) throw new RpcError(calls[0]!.method, res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
     const parsed = JSON.parse(text) as Response | Response[];

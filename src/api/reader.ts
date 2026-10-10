@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
 import pg from "pg";
 import { quote, type TableInfo } from "../db/table.ts";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 
 export type ReaderOptions = {
   /** Connection the indexer writes with; used once to set up the reader role. */
@@ -33,6 +34,11 @@ const clientError = (e: unknown) => {
 /** Postgres errors a query can cause become `QueryError`s (shown to the client); the rest stay internal. */
 export function asQueryError(e: unknown, timeoutMs: number): unknown {
   if (e instanceof QueryError) return e;
+  // Drizzle (a route's `db`) wraps the Postgres error.
+  if (e instanceof DrizzleQueryError) {
+    const inner = asQueryError(e.cause, timeoutMs);
+    return inner instanceof QueryError ? inner : e;
+  }
   if ((e as { code?: string }).code === "57014") return new QueryError(`query cancelled after ${timeoutMs} ms`);
   if (clientError(e)) return new QueryError((e as Error).message);
   return e;

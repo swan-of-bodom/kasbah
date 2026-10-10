@@ -34,6 +34,10 @@ kasbah init my-indexer       # asks for the RPC, a contract address (its ABI and
 kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps   # no questions without a terminal or with --yes
 ```
 
+It also writes a Dockerfile and a `docker-compose.yml` (Postgres and the indexer, health-checked, the API on
+127.0.0.1:42069 for a proxy in front): `docker compose up -d`. From a checkout, the kasbah tarball is copied into
+`vendor/` so the image can install it (`pnpm pack` first).
+
 Arguments become columns of their type (`integer`, `bignum`, `hex`, `boolean`, `text`); structs, enums and arrays
 `jsonb` (bigints as decimal strings).
 
@@ -63,6 +67,19 @@ Per contract, optional:
 - `upgradeEvents`: events that announce a class replacement, so the class is read again only when one is emitted.
   `Upgraded`, `ClassHashReplaced` and `ImplementationReplaced` are found in the ABI by default; a contract with none
   is checked at every poll, `[]` never.
+
+Endpoints of your own, next to `/sql` and `/graphql` (needs `api`):
+
+```ts
+app.get("/pools/:key", async ({ db, params, query }) => {
+  const pool = await db.query.pools.findFirst({ where: eq(pools.key, params.key!) });  // read-only, typed
+  if (pool === undefined) throw new HttpError(404, "no such pool");
+  return pool;                        // JSON (bigints as strings); or return a Response for headers and status
+});
+```
+
+The API limits GraphQL queries to 1,000 tokens, depth 20 and 30 aliases; `GET /health` answers while it and its
+database are up, `GET /ready` once it follows the head.
 
 The build id covers config, tables, handler code and a hash of the code files in the app's directory.
 ## In another project

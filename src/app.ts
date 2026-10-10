@@ -1,6 +1,7 @@
 import type { Relations } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { Abi } from "./abi/abi.ts";
+import type { Route, RouteHandler } from "./api/routes.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import type { Client } from "./client.ts";
 import type { Db } from "./db/store.ts";
@@ -51,7 +52,7 @@ export type Config = {
    * wake the follower, which then fetches as when polling; while the socket is down it polls every `pollMs`.
    */
   ws?: string | true;
-  /** Serve the read API (SQL over HTTP, GraphQL) while indexing. */
+  /** Serve the read API (SQL over HTTP, GraphQL, the app's `get`/`post` routes) while indexing. */
   api?: { port: number; host?: string; readDatabase?: string };
   /**
    * Keep final raw events and call results in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches
@@ -130,10 +131,18 @@ type Checked<C extends Config> = { contracts: { [K in keyof Contracts<C>]: { upg
 export function kasbah<const C extends Config>(config: C & Checked<C>) {
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
 
+  const routes: Route[] = [];
+
   const on = <N extends HandlerName<C>>(name: N, handler: Handler<C, N>) => {
     if (handlers.has(name)) throw new Error(`${name} already has a handler`);
     handlers.set(name, handler as never);
   };
 
-  return { on, run: (options: RunOptions = {}) => run(config, handlers, options) };
+  /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs `api` in the config. */
+  const route = (method: Route["method"]) => (path: string, handler: RouteHandler<C["tables"]>) => {
+    if (config.api === undefined) throw new Error(`${method} ${path}: routes need \`api\` in the config`);
+    routes.push({ method, path, handler: handler as never });
+  };
+
+  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes) };
 }
