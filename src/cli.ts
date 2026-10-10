@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kasbah start <app> | kasbah dev <app> | kasbah cache info | kasbah cache clear [--events] [--calls] [--chain <id>]
+// kasbah init [dir] | kasbah start <app> | kasbah dev <app> | kasbah cache info | kasbah cache clear [--events] [--calls] [--chain <id>]
 // The app module's default export is the value `kasbah(config)` returned, with its handlers registered.
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -11,9 +11,14 @@ import pg from "pg";
 import type { RunOptions } from "./app.ts";
 import { EventCache } from "./cache.ts";
 import { Screen } from "./dashboard.ts";
+import { init } from "./init.ts";
 import { Status } from "./status.ts";
 
 const USAGE = `usage:
+  kasbah init [dir]                                a new indexer: asks for the RPC, a contract (its ABI and
+                                                   deployment block are read from the chain), events, Postgres
+    [--rpc <url>] [--address <0x…>] [--name <Name>] [--handle <A,B>] [--start <block>] [--database <url>]
+    [--timestamps] [--yes]                         answers as flags; --yes takes the defaults, asks nothing
   kasbah start <app.ts> [--to <block>] [--reset]   index, then follow the head (until --to, or Ctrl-C)
   kasbah dev <app.ts>                              the same, restarted on every file change; a changed
                                                    build re-indexes from scratch
@@ -156,12 +161,21 @@ const { positionals, values } = parseArgs({
     events: { type: "boolean" },
     calls: { type: "boolean" },
     chain: { type: "string" },
+    rpc: { type: "string" },
+    address: { type: "string" },
+    name: { type: "string" },
+    start: { type: "string" },
+    timestamps: { type: "boolean" },
+    yes: { type: "boolean", short: "y" },
+    kasbah: { type: "string" },
+    handle: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
 });
 const [command, arg] = positionals;
 try {
   if (values.help || command === undefined) console.log(USAGE);
+  else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
   else if (command === "start" && arg !== undefined) await start(arg, { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
   else if (command === "dev" && arg !== undefined) dev(arg, values.ui);
   else if (command === "cache") await cache(arg, values);

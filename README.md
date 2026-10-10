@@ -19,10 +19,23 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window.
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).
 - `src/sync/heads.ts`: WebSocket new heads; `src/sync/extras.ts`: transactions and receipts.
-- `src/cli.ts`: `kasbah start | dev | cache`.
+- `src/cli.ts`: `kasbah init | start | dev | cache`; `src/init.ts`: a new project from a contract's ABI;
+  `src/prompt.ts`: the terminal questions.
 - `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`; `src/run.ts`: one run, its
   phases and its commits; `src/status.ts`: what it reports (`Status`: state to read, notices to subscribe to).
 - `examples/ekubo/`: Ekubo pools (swap count, volume, price, liquidity).
+
+## A new project
+
+```
+kasbah init my-indexer       # asks for the RPC, a contract address (its ABI and deployment block are read from
+                             # the chain), events, timestamps and Postgres; writes package.json, .env, the ABI,
+                             # one table per event and its handler, ready for `pnpm install && pnpm dev`
+kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps   # no questions without a terminal or with --yes
+```
+
+Arguments become columns of their type (`integer`, `bignum`, `hex`, `boolean`, `text`); structs, enums and arrays
+`jsonb` (bigints as decimal strings).
 
 ## An app
 

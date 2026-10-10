@@ -23,7 +23,7 @@ const ESC = /\x1b\[[0-9;]*m/g;
 const visible = (s: string) => s.replace(ESC, "").length;
 
 /** Cuts `s` to `width` visible characters, keeping its color codes. */
-function fit(s: string, width: number): string {
+export function fit(s: string, width: number): string {
   if (visible(s) <= width) return s;
   let out = "";
   let n = 0;

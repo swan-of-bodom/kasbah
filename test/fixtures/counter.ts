@@ -25,6 +25,7 @@ export function counterNode(blocks: number) {
         const ok = (result: unknown) => ({ jsonrpc: "2.0", id, result });
         switch (method) {
           case "starknet_specVersion": return ok("0.10.4");
+          case "starknet_chainId": return ok("0xc0c0");
           case "pathfinder_version": return ok("fake");
           case "starknet_blockNumber": return ok(BLOCKS - 1);
           case "starknet_blockHashAndNumber": return ok({ block_hash: hash(BLOCKS - 1), block_number: BLOCKS - 1 });
