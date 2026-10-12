@@ -10,6 +10,8 @@ export type TableInfo = {
   /** Columns in table order, with their JS property keys. */
   columns: { key: string; column: PgColumn }[];
   primaryKey: { key: string; column: PgColumn }[];
+  /** Keys of json and jsonb columns. */
+  json: string[];
   keyOf: (row: Row) => string;
 };
 
@@ -29,7 +31,30 @@ export function tableInfo(table: PgTable): TableInfo {
     keys.length === 1
       ? (row: Row) => String(row[keys[0]!])
       : (row: Row) => keys.map((k) => String(row[k])).join("\x1f");
-  return { table, name: config.name, columns, primaryKey, keyOf };
+  const json = columns.filter((c) => c.column.dataType === "json").map((c) => c.key);
+  return { table, name: config.name, columns, primaryKey, json, keyOf };
+}
+
+/** `v` with every bigint as a decimal string, as jsonb holds it; `v` itself when it has none. */
+export function jsonSafe(v: unknown): unknown {
+  if (typeof v === "bigint") return v.toString();
+  if (v === null || typeof v !== "object" || v instanceof Date) return v;
+  if (Array.isArray(v)) {
+    let out: unknown[] | undefined;
+    for (let i = 0; i < v.length; i++) {
+      const x = jsonSafe(v[i]);
+      if (x !== v[i]) (out ??= v.slice())[i] = x;
+    }
+    return out ?? v;
+  }
+  const o = v as Row;
+  let out: Row | undefined;
+  for (const k in o) {
+    const x = o[k];
+    const y = jsonSafe(x);
+    if (y !== x) (out ??= { ...o })[k] = y;
+  }
+  return out ?? v;
 }
 
 /**

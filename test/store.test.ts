@@ -1,9 +1,9 @@
 import { drizzle } from "drizzle-orm/node-postgres";
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { integer, jsonb, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { Store } from "../src/db/store.ts";
-import { createTableSql, tableInfo } from "../src/db/table.ts";
+import { createTableSql, jsonSafe, tableInfo } from "../src/db/table.ts";
 import { bignum } from "../src/schema.ts";
 
 const url = process.env.DATABASE_URL;
@@ -165,4 +165,28 @@ test.skipIf(url === undefined)("an unkeyed table gets its primary key when first
   } finally {
     c.release();
   }
+});
+
+test("jsonSafe: bigints become decimal strings, anything without one is returned as is", () => {
+  const plain = { a: [1, "x", { b: true }], c: null };
+  expect(jsonSafe(plain)).toBe(plain);
+  const args = { key: { fee: 2n ** 127n, tick: { mag: 5n, sign: false } }, list: [1n, 2], at: 3 };
+  expect(jsonSafe(args)).toEqual({ key: { fee: (2n ** 127n).toString(), tick: { mag: "5", sign: false } }, list: ["1", 2], at: 3 });
+  expect(args.key.fee).toBe(2n ** 127n);
+});
+
+const swaps = pgTable("swaps", { id: text().primaryKey(), params: jsonb() });
+
+test.skipIf(url === undefined)("a jsonb column takes bigints, and reads the same from memory and from Postgres", async () => {
+  await pool.query(`DROP TABLE IF EXISTS swaps`);
+  await pool.query(createTableSql(tableInfo(swaps)));
+  const params = { amount: { mag: 10n ** 30n, sign: true }, sqrt_ratio_limit: 2n ** 200n };
+  const expected = { amount: { mag: (10n ** 30n).toString(), sign: true }, sqrt_ratio_limit: (2n ** 200n).toString() };
+  const store = new Store(drizzle(pool), [swaps], { complete: false });
+  await store.db.insert(swaps).values({ id: "a", params });
+  await store.db.insert(swaps).values({ id: "b", params: null });
+  expect((await store.db.find(swaps, { id: "a" }))?.params).toEqual(expected);
+  await inTransaction((c) => store.flush(c));
+  expect((await pool.query(`SELECT params FROM swaps WHERE id = 'a'`)).rows[0].params).toEqual(expected);
+  expect((await new Store(drizzle(pool), [swaps], { complete: false }).db.find(swaps, { id: "a" }))?.params).toEqual(expected);
 });

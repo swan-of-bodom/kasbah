@@ -3,7 +3,7 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 import { copyRows } from "./copy.ts";
-import { primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
+import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
 /** How a buffered row reaches the database at flush. */
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
@@ -102,6 +102,8 @@ export class Store {
   }
 
   #write(s: State, row: Row, before: Row | null) {
+    // In memory as Postgres will give it back, so a row reads the same before and after a flush.
+    for (const key of s.info.json) row[key] = jsonSafe(row[key]);
     const existed = before !== null;
     const k = s.info.keyOf(row);
     this.#remember(s, k, before);

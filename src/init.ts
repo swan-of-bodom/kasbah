@@ -60,13 +60,13 @@ const snake = (s: string) => s.replace(/\./g, "_").replace(/([a-z0-9])([A-Z])/g,
 const camel = (s: string) => snake(s).replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 
 /** The column for an argument: plain values get their type, anything else (structs, enums, arrays) jsonb. */
-function columnOf(m: AbiMember): { column: string; json: boolean } {
-  if (SMALL.has(m.type)) return { column: "integer().notNull()", json: false };
-  if (BIG.has(m.type)) return { column: "bignum().notNull()", json: false };
-  if (HEX.has(m.type)) return { column: "hex().notNull()", json: false };
-  if (m.type === "core::bool") return { column: "boolean().notNull()", json: false };
-  if (m.type === "core::byte_array::ByteArray") return { column: "text().notNull()", json: false };
-  return { column: "jsonb()", json: true };
+function columnOf(m: AbiMember): string {
+  if (SMALL.has(m.type)) return "integer().notNull()";
+  if (BIG.has(m.type)) return "bignum().notNull()";
+  if (HEX.has(m.type)) return "hex().notNull()";
+  if (m.type === "core::bool") return "boolean().notNull()";
+  if (m.type === "core::byte_array::ByteArray") return "text().notNull()";
+  return "jsonb()";
 }
 
 /** The files of a new project, by path. */
@@ -74,7 +74,6 @@ export function generate(p: Project): Record<string, string> {
   const defs = abiEvents(p.abi).filter((e) => p.events.includes(e.name));
   const pgImports = new Set(["integer", "pgTable", "text"]);
   const indexerImports = new Set<string>();
-  let anyJson = false;
   const tables: string[] = [];
   const handlers: string[] = [];
   for (const e of defs) {
@@ -86,13 +85,12 @@ export function generate(p: Project): Record<string, string> {
     if (p.timestamps) values.push("timestamp: event.block.timestamp");
     values.push("transaction: event.transaction.hash");
     for (const m of [...e.keyMembers, ...e.dataMembers]) {
-      const { column, json } = columnOf(m);
+      const column = columnOf(m);
       const key = FIXED.has(m.name) ? `${m.name}_` : m.name;
       for (const t of ["integer", "boolean", "jsonb", "text"]) if (column.startsWith(`${t}(`)) pgImports.add(t);
       for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) indexerImports.add(t);
       columns.push(`  ${key}: ${column},`);
-      values.push(`${key}: ${json ? `plain(event.args.${m.name})` : `event.args.${m.name}`}`);
-      anyJson ||= json;
+      values.push(`${key}: event.args.${m.name}`);
     }
     tables.push(`export const ${v} = pgTable("${snake(e.name)}", {\n${columns.join("\n")}\n});`);
     handlers.push(`app.on("${p.name}:${e.name}", async ({ event, context }) => {\n  await context.db.insert(schema.${v}).values({\n    ${values.join(",\n    ")},\n  });\n});`);
@@ -129,7 +127,6 @@ export function generate(p: Project): Record<string, string> {
     `import app from "../kasbah.config.ts";`,
     `import * as schema from "../kasbah.schema.ts";`,
     "",
-    ...(anyJson ? ["// jsonb can't hold bigints: they're stored as decimal strings.", "const plain = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === \"bigint\" ? x.toString() : x)));", ""] : []),
     handlers.join("\n\n"),
   );
   const api = lines(

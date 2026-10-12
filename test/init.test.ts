@@ -32,7 +32,8 @@ test("one table per event, arguments as typed columns, structs as jsonb", () => 
   expect(files["kasbah.schema.ts"]).not.toContain("timestamp");
   expect(files["src/index.ts"]).toContain(`app.on("Pool:Moved"`);
   expect(files["src/index.ts"]).toContain("block_: event.args.block,");
-  expect(files["src/index.ts"]).toContain("key: plain(event.args.key),");
+  expect(files["src/index.ts"]).toContain("key: event.args.key,");
+  expect(files["src/index.ts"]).not.toContain("plain");
 });
 
 test("secrets only in .env, which git and Docker ignore; .env.example has the names", () => {
