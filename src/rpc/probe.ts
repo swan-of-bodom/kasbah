@@ -9,8 +9,6 @@ export type Endpoint = {
   maxChunk: number;
   /** Blocks one `getEvents` call scans before returning a token, `undefined` if unbounded. */
   scanLimit?: number;
-  /** Largest JSON-RPC batch accepted, among 100 and 1000. */
-  maxBatch: number;
 };
 
 const PAGE_SIZE_TOO_BIG = 31;
@@ -20,16 +18,6 @@ async function tryRequest<T>(rpc: RpcClient, method: string, params: unknown): P
     return await rpc.request<T>(method, params);
   } catch (e) {
     if (e instanceof RpcError) return undefined;
-    throw e;
-  }
-}
-
-async function acceptsBatch(rpc: RpcClient, size: number): Promise<boolean> {
-  try {
-    await rpc.batch(Array.from({ length: size }, () => ({ method: "starknet_chainId", params: [] })));
-    return true;
-  } catch (e) {
-    if (e instanceof RpcError) return false;
     throw e;
   }
 }
@@ -59,9 +47,7 @@ export async function probe(rpc: RpcClient): Promise<Endpoint> {
   }
   if (maxChunk === 0) throw new Error("endpoint rejects every chunk_size tried");
 
-  const maxBatch = (await acceptsBatch(rpc, 101)) ? ((await acceptsBatch(rpc, 1000)) ? 1000 : 100) : 100;
-
   // Hosted Pathfinder (Alchemy, Cartridge) hides pathfinder_version; its defaults give it away.
   const inferred = node === "unknown" && maxChunk === 1024 && scanLimit === 81_920 ? "pathfinder" : node;
-  return { spec, node: inferred, nodeVersion: pathfinder ?? juno, maxChunk, scanLimit, maxBatch };
+  return { spec, node: inferred, nodeVersion: pathfinder ?? juno, maxChunk, scanLimit };
 }
