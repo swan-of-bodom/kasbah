@@ -1,8 +1,10 @@
 {
   "name": "kasbah",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "description": "Minimal, fast Starknet indexer",
+  "license": "Apache-2.0",
+  "keywords": ["starknet", "indexer", "postgres", "graphql", "drizzle"],
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -11,7 +13,8 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./package.json": "./package.json"
   },
   "bin": {
     "kasbah": "./dist/cli.js"
@@ -19,7 +22,8 @@
   "files": [
     "dist",
     "src",
-    "README.md"
+    "README.md",
+    "LICENSE"
   ],
   "scripts": {
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",

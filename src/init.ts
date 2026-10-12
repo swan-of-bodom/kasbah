@@ -27,20 +27,21 @@ export type InitOptions = {
   /** Take the defaults for anything not given, ask nothing. */
   yes?: boolean;
   /** The kasbah dependency, as package.json writes it. */
-  kasbah?: string;
+  dependency?: string;
 };
 
 export type Project = {
   dir: string;
   rpc: string;
-  database: string;
+  /** `undefined`: none in `.env`, so `dev` starts a container. */
+  database: string | undefined;
   name: string;
   address: string;
   abi: Abi;
   startBlock: number;
   events: string[];
   timestamps: boolean;
-  kasbah: string;
+  dependency: string;
 };
 
 const SMALL = new Set(["u8", "u16", "u32", "usize", "i8", "i16", "i32"].map((t) => `core::integer::${t}`));
@@ -69,7 +70,7 @@ function columnOf(m: AbiMember): { column: string; json: boolean } {
 export function generate(p: Project): Record<string, string> {
   const defs = abiEvents(p.abi).filter((e) => p.events.includes(e.name));
   const pgImports = new Set(["integer", "pgTable", "text"]);
-  const kasbahImports = new Set<string>();
+  const indexerImports = new Set<string>();
   let anyJson = false;
   const tables: string[] = [];
   const handlers: string[] = [];
@@ -85,7 +86,7 @@ export function generate(p: Project): Record<string, string> {
       const { column, json } = columnOf(m);
       const key = FIXED.has(m.name) ? `${m.name}_` : m.name;
       for (const t of ["integer", "boolean", "jsonb", "text"]) if (column.startsWith(`${t}(`)) pgImports.add(t);
-      for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) kasbahImports.add(t);
+      for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) indexerImports.add(t);
       columns.push(`  ${key}: ${column},`);
       values.push(`${key}: ${json ? `plain(event.args.${m.name})` : `event.args.${m.name}`}`);
       anyJson ||= json;
@@ -97,7 +98,7 @@ export function generate(p: Project): Record<string, string> {
   const schemaName = snake(basename(p.dir)).replace(/[^a-z0-9_]/g, "_");
   const schemaTs = [
     `import { ${[...pgImports].sort().join(", ")} } from "drizzle-orm/pg-core";`,
-    ...(kasbahImports.size > 0 ? [`import { ${[...kasbahImports].sort().join(", ")} } from "kasbah";`] : []),
+    ...(indexerImports.size > 0 ? [`import { ${[...indexerImports].sort().join(", ")} } from "kasbah";`] : []),
     "",
     "/** One row per event: its transaction and position, its block, and its arguments. */",
     tables.join("\n\n"),
@@ -138,7 +139,7 @@ export function generate(p: Project): Record<string, string> {
     type: "module",
     packageManager: "pnpm@10.12.1",
     scripts: { dev: "kasbah dev app.ts", start: "kasbah start app.ts", typecheck: "tsc" },
-    dependencies: { "drizzle-orm": "^0.45.4", kasbah: p.kasbah },
+    dependencies: { "drizzle-orm": "^0.45.4", "kasbah": p.dependency },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };
   const tsconfig = {
@@ -152,7 +153,7 @@ export function generate(p: Project): Record<string, string> {
     ".dockerignore": "node_modules\n.env\n.git\n",
     Dockerfile: DOCKERFILE,
     "docker-compose.yml": COMPOSE,
-    ".env": `KASBAH_RPC_URL=${p.rpc}\nDATABASE_URL=${p.database}\n`,
+    ".env": `KASBAH_RPC_URL=${p.rpc}\n${p.database === undefined ? "# DATABASE_URL=postgresql://… (without it, `pnpm dev` runs Postgres in a Docker or Podman container)" : `DATABASE_URL=${p.database}`}\n`,
     [`abis/${abiFile}`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
     "schema.ts": schemaTs,
     "app.ts": appTs,
@@ -224,7 +225,7 @@ volumes:
  * The dependency on this kasbah: from a checkout its packed tarball, copied into the project so a Docker build sees
  * it (a link would bring the checkout's own drizzle-orm); else its version.
  */
-function kasbahSpec(): { spec: string; tarball?: string } {
+function indexerSpec(): { spec: string; tarball?: string } {
   const root = resolve(import.meta.dirname, "..");
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
   if (!existsSync(join(root, ".git"))) return { spec: `^${version}` };
@@ -305,9 +306,13 @@ export async function init(o: InitOptions): Promise<void> {
   const startBlock = Number(o.start ?? (ask ? await ui.text("Start block", { initial: String(deployed), hint: "its deployment block indexes everything; a later one only what comes after", check: (v) => (/^\d+$/.test(v) && Number(v) <= tip ? undefined : `a block number up to ${tip}`) }) : deployed));
   const timestamps = o.timestamps ?? (ask ? await ui.confirm("Store block timestamps? (one extra call per block with events)", false) : false);
 
-  let database = o.database ?? (ask ? undefined : process.env.DATABASE_URL ?? need("database"));
-  for (;;) {
-    database ??= await ui.text("Postgres URL", { initial: process.env.DATABASE_URL ?? "postgres://postgres@localhost:5432/postgres", check: (v) => (/^postgres(ql)?:\/\//.test(v) ? undefined : "a postgres:// URL") });
+  let database = o.database ?? (ask ? undefined : process.env.DATABASE_URL);
+  for (; ask || database !== undefined; ) {
+    if (database === undefined) {
+      const answer = await ui.text("Postgres URL", { initial: process.env.DATABASE_URL, hint: "empty: `pnpm dev` runs one in a Docker or Podman container", check: (v) => (v === "" || /^postgres(ql)?:\/\//.test(v) ? undefined : "a postgres:// URL, or empty") });
+      if (answer === "") break;
+      database = answer;
+    }
     const pool = new pg.Pool({ connectionString: database, max: 1, connectionTimeoutMillis: 5_000 });
     try {
       await ui.step("Connecting to Postgres", async () => (await pool.query<{ v: string }>("SELECT current_setting('server_version') AS v")).rows[0]!.v, (v) => `Postgres ${v}`);
@@ -321,8 +326,8 @@ export async function init(o: InitOptions): Promise<void> {
     }
   }
 
-  const dependency = o.kasbah === undefined ? kasbahSpec() : { spec: o.kasbah };
-  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, kasbah: dependency.spec });
+  const dependency = o.dependency === undefined ? indexerSpec() : { spec: o.dependency };
+  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, dependency: dependency.spec });
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), content);

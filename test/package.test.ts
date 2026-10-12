@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -31,7 +31,7 @@ test("the packed package installs and works outside the repo: library, types and
   const pnpm = (args: string[], cwd: string) => execFileSync("pnpm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   pnpm(["pack", "--pack-destination", dir], root);
   const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"))!;
-  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module", dependencies: { kasbah: `file:./${tarball}`, "drizzle-orm": "^0.45.4" } }));
+  writeFileSync(join(dir, "package.json"), JSON.stringify({ name: "consumer", private: true, type: "module", dependencies: { "kasbah": `file:./${tarball}`, "drizzle-orm": "^0.45.4" } }));
   // The repo's store: pnpm keeps one per filesystem, and the temp dir may be on another (tmpfs).
   pnpm(["install", "--offline", "--store-dir", pnpm(["store", "path"], root).trim()], dir);
 
@@ -44,6 +44,24 @@ test("the packed package installs and works outside the repo: library, types and
   expect(existsSync(join(dir, "node_modules/kasbah/dist", map.sources[0]!))).toBe(true);
   expect(readdirSync(join(dir, "node_modules/kasbah/dist"))).toContain("index.d.ts.map");
   expect(execFileSync(join(dir, "node_modules/.bin/kasbah"), ["--help"], { cwd: dir, encoding: "utf8" })).toContain("kasbah start <app.ts>");
+}, 120_000);
+
+test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed package", async () => {
+  const pnpm = (args: string[], cwd: string) => execFileSync("pnpm", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"))!;
+  const create = join(dir, "create");
+  mkdirSync(create);
+  pnpm(["pack", "--pack-destination", create], join(root, "create"));
+  const createTarball = readdirSync(create).find((f) => f.endsWith(".tgz"))!;
+  // Until it's on the registry, its kasbah dependency comes from the tarball.
+  writeFileSync(join(create, "package.json"), JSON.stringify({ name: "c", private: true, dependencies: { "create-kasbah": `file:./${createTarball}` }, pnpm: { overrides: { "kasbah": `file:../${tarball}` } } }));
+  pnpm(["install", "--offline", "--store-dir", pnpm(["store", "path"], root).trim()], create);
+  // Async: the fake node answering it runs in this process.
+  const { stdout: out } = await promisify(execFile)(join(create, "node_modules/.bin/create-kasbah"), ["proj", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--start", "0", "--database", "postgres://nobody@127.0.0.1:1/x"], { cwd: create, encoding: "utf8" });
+  expect(out).toContain("kasbah init");
+  expect(JSON.parse(readFileSync(join(create, "proj/package.json"), "utf8")).dependencies.kasbah).toBe("^0.1.0");
+  expect(readFileSync(join(create, "proj/app.ts"), "utf8")).toContain(`app.on("C:Counted"`);
+  expect(readdirSync(join(create, "node_modules/create-kasbah"))).toContain("LICENSE");
 }, 120_000);
 
 test.skipIf(url === undefined)("the installed kasbah command runs a TypeScript app, with DATABASE_URL from .env", async () => {
@@ -76,7 +94,7 @@ test.skipIf(url === undefined)("kasbah init writes a project that installs, type
   const bin = join(dir, "node_modules/.bin/kasbah");
   const run = promisify(execFile);
   // Without a terminal every answer is a flag; the deployment block is found on the chain.
-  const { stdout } = await run(bin, ["init", "kasbah_test_init", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--database", url!, "--timestamps", "--kasbah", `file:../${tarball}`], { cwd: dir, encoding: "utf8" });
+  const { stdout } = await run(bin, ["init", "kasbah_test_init", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--database", url!, "--timestamps", "--dependency", `file:../${tarball}`], { cwd: dir, encoding: "utf8" });
   expect(stdout).toMatch(/Finding its deployment block {2}block 0/);
   const project = join(dir, "kasbah_test_init");
   expect(readFileSync(join(project, "schema.ts"), "utf8")).toContain(`export const counted = pgTable("counted", {`);

@@ -23,16 +23,23 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
   `src/prompt.ts`: the terminal questions.
 - `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`; `src/run.ts`: one run, its
   phases and its commits; `src/status.ts`: what it reports (`Status`: state to read, notices to subscribe to).
-- `examples/ekubo/`: Ekubo pools (swap count, volume, price, liquidity).
+- `examples/ekubo/`: Ekubo pools (price, liquidity, balances), hourly and daily candles (OHLC, volume, fees, TVL),
+  protocol totals every 1,800 blocks, and routes `/pools/top`, `/pools/:id/candles`, `/history`.
 
 ## A new project
 
 ```
-kasbah init my-indexer       # asks for the RPC, a contract address (its ABI and deployment block are read from
-                             # the chain), events, timestamps and Postgres; writes package.json, .env, the ABI,
-                             # one table per event and its handler, ready for `pnpm install && pnpm dev`
+pnpm create kasbah my-indexer   # once published; until then: node ~/Desktop/kasbah/src/cli.ts init my-indexer
+kasbah init my-indexer          # the same: asks for the RPC, a contract address (its ABI and deployment block
+                                       # are read from the chain), events, timestamps and Postgres (or none); writes
+                                       # package.json, .env, the ABI, a table and a handler per event
 kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps   # no questions without a terminal or with --yes
+cd my-indexer && pnpm install && pnpm dev
 ```
+
+Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the app (`postgres:17`, pulled the
+first time; one container and volume per app directory, on a free localhost port), stopped when `dev` exits, data
+kept for the next run. `start` never does: it needs `DATABASE_URL`.
 
 It also writes a Dockerfile and a `docker-compose.yml` (Postgres and the indexer, health-checked, the API on
 127.0.0.1:42069 for a proxy in front): `docker compose up -d`. From a checkout, the kasbah tarball is copied into
@@ -57,6 +64,7 @@ pnpm kasbah dev app.ts       # index, follow the head, restart on every change (
                              # with a progress screen in a terminal: phase, time left, where the time goes,
                              # handlers by time spent, RPC and cache; --no-ui for plain logs, start --ui for it
 pnpm kasbah start app.ts     # the same without watching; refuses a schema holding another build
+pnpm kasbah serve app.ts     # the API alone over what a run stored (a finished --to run, or more API processes)
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`
 ```
 
@@ -88,8 +96,8 @@ Not on a registry (the repo is private): pack it and install the tarball. Node 2
 run with Node's type stripping; kasbah itself is compiled to `dist/`).
 
 ```
-cd ~/Desktop/kasbah && pnpm pack                          # builds dist/ and writes kasbah-0.0.0.tgz
-cd my-indexer && pnpm add ~/Desktop/kasbah/kasbah-0.0.0.tgz drizzle-orm
+cd ~/Desktop/kasbah && pnpm pack                          # builds dist/ and writes kasbah-0.1.0.tgz
+cd my-indexer && pnpm add ~/Desktop/kasbah/kasbah-0.1.0.tgz drizzle-orm
 pnpm kasbah dev app.ts                                    # reads .env (KASBAH_RPC_URL, DATABASE_URL)
 ```
 
@@ -101,7 +109,8 @@ kasbah, pack and `pnpm add` the tarball again. `test/package.test.ts` does all o
 ```
 pnpm install
 pnpm test        # all tests; the Postgres ones need DATABASE_URL in .env
-node --env-file=.env --no-warnings examples/ekubo/index.ts --port 42070   # Ekubo pools: backfill, follow the head, serve the API
+node --env-file=.env --no-warnings examples/ekubo/index.ts --port 42070   # Ekubo: backfill, follow the head, serve the API
+# from deployment to block 300,000: 652,647 events, 2.6 min; with timestamps, one header per block with events (79,184)
 pnpm typecheck   # includes the type tests (test/*.test-d.ts) on the real ABIs
 pnpm fixtures    # refetch test/fixtures from mainnet (needs KASBAH_RPC_URL in .env, see .env.example)
 ```
@@ -114,3 +123,8 @@ docker run -d --name kasbah-pg -e POSTGRES_PASSWORD=kasbah -e POSTGRES_DB=kasbah
 
 Node 24+. Fixtures: Ekubo Core (Cairo 1, flat and nested variants), STRK (OpenZeppelin ERC20, key members), two
 Cairo 0 contracts (a pair and an ERC20).
+
+## License and versions
+
+Apache-2.0 (`LICENSE`). Versions follow semver; while at 0.x, a minor version (0.1 → 0.2) may break the config,
+the tables it keeps or the API, and a patch never does. The package stays `private` until the repo is public.

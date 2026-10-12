@@ -2,11 +2,12 @@ import type { Relations } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { Abi } from "./abi/abi.ts";
 import type { Route, RouteHandler } from "./api/routes.ts";
+import { Api } from "./api/server.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import type { Client } from "./client.ts";
 import type { Db } from "./db/store.ts";
 import type { Receipt, Transaction } from "./rpc/methods.ts";
-import { run } from "./run.ts";
+import { apiUrl, DEFAULT_SCHEMA, run } from "./run.ts";
 import type { Status } from "./status.ts";
 import type { Include } from "./sync/extras.ts";
 
@@ -144,5 +145,12 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     routes.push({ method, path, handler: handler as never });
   };
 
-  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes) };
+  /** The API alone (`api` in the config), over what an indexer of this app stores: another process, or an earlier run. */
+  const serve = async (): Promise<{ url: string; close: () => Promise<void> }> => {
+    if (config.api === undefined) throw new Error("serve needs `api` in the config");
+    const api = await Api.start({ ...config.api, database: config.database, schema: config.schema ?? DEFAULT_SCHEMA, tables: config.tables, routes });
+    return { url: apiUrl(config.api, api.port), close: () => api.close() };
+  };
+
+  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes), serve };
 }

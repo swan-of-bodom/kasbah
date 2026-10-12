@@ -86,6 +86,11 @@ const FLUSH_EVENTS = 100_000;
 const PHASES = ["factories", "backfill", "keys", "live"] as const;
 
 /** Runs the app: setup, then each phase from where the database is. Reports only through `status`. */
+export const DEFAULT_SCHEMA = "kasbah";
+
+/** How the API is shown: listening on 127.0.0.1 unless told otherwise, shown as localhost, the same address. */
+export const apiUrl = (api: { host?: string }, port: number) => `http://${api.host === undefined || api.host === "127.0.0.1" ? "localhost" : api.host}:${port}`;
+
 export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandler>, options: RunOptions = {}, routes: readonly Route[] = []): Promise<void> {
   const status = options.status ?? new Status();
   const unsubscribe = options.status === undefined ? status.subscribe((n) => console.log(`[kasbah] ${n.text}`)) : undefined;
@@ -190,7 +195,7 @@ class Run {
    * cache, reads every class, then undoes a reorg that happened while stopped and watches the stored children.
    */
   static async open(config: Config, handlers: ReadonlyMap<string, AnyHandler>, routes: readonly Route[], options: RunOptions, status: Status, signal: AbortSignal, closers: (() => unknown)[]): Promise<Run> {
-    const schema = config.schema ?? "kasbah";
+    const schema = config.schema ?? DEFAULT_SCHEMA;
     status.schema = schema;
     const blockSources = validate(config, handlers);
     const handledOf = (name: string) => new Set([...handlers.keys()].filter((h) => h.startsWith(`${name}:`)).map((h) => h.slice(name.length + 1)));
@@ -217,8 +222,7 @@ class Run {
     if (config.api !== undefined) {
       const api = await Api.start({ ...config.api, database: config.database, schema, tables: config.tables, routes });
       closers.push(() => api.close());
-      // Listening on 127.0.0.1 unless told otherwise; shown as localhost, the same address.
-      status.api = `http://${config.api.host === undefined || config.api.host === "127.0.0.1" ? "localhost" : config.api.host}:${api.port}`;
+      status.api = apiUrl(config.api, api.port);
       status.note({ kind: "api", url: status.api });
     }
     const store = new Store(drizzle(pool), tables, { complete: stored.checkpoint === undefined, unkeyed: stored.unkeyed });

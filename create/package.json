@@ -1,0 +1,21 @@
+{
+  "name": "create-kasbah",
+  "version": "0.1.0",
+  "private": true,
+  "description": "pnpm create kasbah: a new Starknet indexer from a contract address",
+  "license": "Apache-2.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "create-kasbah": "./index.js"
+  },
+  "files": [
+    "index.js",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "kasbah": "^0.1.0"
+  }
+}

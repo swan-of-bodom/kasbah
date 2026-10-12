@@ -505,8 +505,27 @@ CLI (`src/cli.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info
 module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
 on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the
 reliable reload), with `onBuildChange: "reset"`. The build id now includes each handler's source and the CLI's
-hash of the app's code files: before, a handler body edit kept stale results. Not yet: a compiled build for
-publishing to a registry.
+hash of the app's code files: before, a handler body edit kept stale results. The compiled build for a registry
+was done the same day (`dist/`, `pnpm pack`).
+
+Database for `dev` (`src/devdb.ts`): without `DATABASE_URL`, `dev` runs `postgres:17` in Docker
+or Podman, one container and named volume per app directory (its basename and a hash of its path), published on a
+free localhost port, and waits until TCP connects (the image's first start runs a socket-only server while it
+initialises). Stopped when `dev` exits, kept for the next run. Chosen over PGlite (single connection: no separate
+read-only role, API reads queued behind writes, an in-process stand-in for LISTEN) and embedded Postgres binaries:
+it is the same Postgres as production, and the generated compose file already assumes Docker. `start` never starts
+one. `pnpm create kasbah` is the `create/` package: it runs the installed `kasbah init`.
+
+`serve`: `kasbah serve <app>` (`app.serve()`) runs the API alone over the app's schema,
+like `ponder serve`: an index finished with `--to`, or API processes next to one indexer.
+
+Ekubo example (`examples/ekubo/`): candles per pool per hour and day (OHLC from `sqrt_ratio`,
+volume, fees on the input side, balances after the last event, so TVL per candle), balances from the signed deltas
+of swaps, positions, collected fees and accumulated fees, protocol totals snapshotted by a block handler. A handler's
+`db` only reads by key, so "every changed pool" can't be listed in a block handler: per-candle TVL does that job.
+Deployment to block 300,000: 652,647 events in 158 s; hourly sums equal each pool's totals, daily equal hourly, the
+last candle's balances equal the pool's, no negative balance, no OHLC out of order. ETH/USDC 0.05% closes at
+$1,647 (October 2023). The cost is the timestamps: 79,184 headers for that range, one per block with events.
 
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
 

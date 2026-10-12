@@ -1,9 +1,10 @@
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { containerName } from "../src/devdb.ts";
 import { counterAbi, counterNode } from "./fixtures/counter.ts";
 
 const url = process.env.DATABASE_URL;
@@ -105,3 +106,80 @@ test.skipIf(url === undefined)("cache info runs", async () => {
   const run = cli("cache", "info", "--chain", "0x0");
   expect(await run.exited).toBe(0);
 });
+
+test.skipIf(url === undefined)("a second Ctrl-C waits for the block being handled; a third exits at once", async () => {
+  // Every handler takes 1 s: the signals arrive while one runs.
+  const slow = appSource(1).replace('"RPC"', JSON.stringify(rpcUrl)).replace("const v =", "await new Promise((r) => setTimeout(r, 1_000));\n  const v =");
+  const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));
+  writeFileSync(appFile, slow);
+  const twice = cli("start", appFile, "--reset");
+  await until(async () => twice.out.join("").includes("1 contract"));
+  await pause(300);
+  twice.p.kill("SIGINT");
+  await pause(200);
+  twice.p.kill("SIGINT");
+  expect(await twice.exited).toBe(0);
+
+  const thrice = cli("start", appFile, "--reset");
+  await until(async () => thrice.out.join("").includes("1 contract"));
+  await pause(300);
+  for (let i = 0; i < 3; i++) {
+    thrice.p.kill("SIGINT");
+    await pause(100);
+  }
+  expect(await thrice.exited).toBe(130);
+}, 60_000);
+
+const hasRuntime = ["docker", "podman"].some((r) => spawnSync(r, ["version"]).status === 0);
+test.skipIf(!hasRuntime)("dev without DATABASE_URL: a Postgres container for the app, stopped with dev, data kept", async () => {
+  const name = containerName(dir);
+  const runtime = spawnSync("docker", ["version"]).status === 0 ? "docker" : "podman";
+  const remove = () => {
+    spawnSync(runtime, ["rm", "-fv", name]);
+    spawnSync(runtime, ["volume", "rm", "-f", name]);
+  };
+  remove();
+  writeFileSync(appFile, appSource(1).replace('"RPC"', JSON.stringify(rpcUrl)));
+  const start = () => {
+    const out: string[] = [];
+    const { DATABASE_URL: _, ...env } = process.env;
+    // From the app's directory: the repo's .env would set DATABASE_URL.
+    const p = spawn(process.execPath, ["--no-warnings", resolve("src/cli.ts"), "dev", appFile, "--no-ui"], { env, cwd: dir });
+    p.stdout.on("data", (d) => out.push(String(d)));
+    p.stderr.on("data", (d) => out.push(String(d)));
+    return { p, out, exited: new Promise<number | null>((r) => p.once("exit", r)) };
+  };
+  try {
+    const first = start();
+    await until(async () => first.out.join("").includes("following the head"), 90_000).catch((e) => {
+      console.log(first.out.join(""));
+      throw e;
+    });
+    expect(first.out.join("")).toContain(`creating ${name}`);
+    first.p.kill("SIGINT");
+    expect(await first.exited).toBe(0);
+    expect(spawnSync(runtime, ["inspect", "--format", "{{.State.Running}}", name], { encoding: "utf8" }).stdout.trim()).toBe("false");
+
+    // The second run starts the same container and resumes: nothing re-indexed.
+    const second = start();
+    await until(async () => second.out.join("").includes("following the head"), 90_000);
+    expect(second.out.join("")).toContain(`starting ${name}`);
+    expect(second.out.join("")).not.toMatch(/backfill done: [1-9]/);
+    second.p.kill("SIGINT");
+    expect(await second.exited).toBe(0);
+  } finally {
+    remove();
+  }
+}, 240_000);
+
+test.skipIf(url === undefined)("serve: the API alone, over what a run stored", async () => {
+  writeFileSync(appFile, appSource(1).replace('"RPC"', JSON.stringify(rpcUrl)).replace("tables: { totals },", "tables: { totals }, api: { port: 0 },"));
+  expect(await cli("start", appFile, "--to", String(BLOCKS - 1), "--reset").exited).toBe(0);
+  const served = cli("serve", appFile);
+  await until(async () => /API on (\S+):/.test(served.out.join("")));
+  const base = /API on (\S+):/.exec(served.out.join(""))![1]!;
+  const r = await fetch(`${base}/sql`, { method: "POST", body: JSON.stringify({ sql: "select total::text from totals" }) });
+  expect((await r.json()).rows).toEqual([[String((36 * 37) / 2)]]);
+  served.p.kill("SIGINT");
+  expect(await served.exited).toBe(0);
+}, 60_000);

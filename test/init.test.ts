@@ -13,7 +13,7 @@ const abi = [
   { type: "event", name: "x::Pool::Event", kind: "enum", variants: [{ name: "Moved", type: "x::Pool::Moved", kind: "nested" }] },
 ] as const satisfies Abi;
 
-const files = generate({ dir: "/x/pools", rpc: "http://rpc", database: "postgres://db", name: "Pool", address: "0x1", abi, startBlock: 7, events: ["Moved"], timestamps: false, kasbah: "^0.0.0" });
+const files = generate({ dir: "/x/pools", rpc: "http://rpc", database: "postgres://db", name: "Pool", address: "0x1", abi, startBlock: 7, events: ["Moved"], timestamps: false, dependency: "^0.0.0" });
 
 test("one table per event, arguments as typed columns, structs as jsonb", () => {
   expect(files["schema.ts"]).toContain(`export const moved = pgTable("moved", {`);

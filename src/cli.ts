@@ -11,23 +11,28 @@ import pg from "pg";
 import type { RunOptions } from "./app.ts";
 import { EventCache } from "./cache.ts";
 import { Screen } from "./dashboard.ts";
+import { type DevDatabase, devDatabase } from "./devdb.ts";
 import { init } from "./init.ts";
 import { Status } from "./status.ts";
 
 const USAGE = `usage:
-  kasbah init [dir]                                a new indexer: asks for the RPC, a contract (its ABI and
-                                                   deployment block are read from the chain), events, Postgres
+  kasbah init [dir]              a new indexer: asks for the RPC, a contract (its ABI and deployment block
+                                        are read from the chain), events and Postgres
     [--rpc <url>] [--address <0x…>] [--name <Name>] [--handle <A,B>] [--start <block>] [--database <url>]
-    [--timestamps] [--yes]                         answers as flags; --yes takes the defaults, asks nothing
-  kasbah start <app.ts> [--to <block>] [--reset]   index, then follow the head (until --to, or Ctrl-C)
-  kasbah dev <app.ts>                              the same, restarted on every file change; a changed
-                                                   build re-indexes from scratch
-  --ui / --no-ui                                   the progress screen (on for dev in a terminal)
-  kasbah cache info [--chain <id>]                 each chain's raw-event and call cache, with its size
+    [--timestamps] [--yes]              answers as flags; --yes takes the defaults, asks nothing
+  kasbah start <app.ts>          index, then follow the head (until --to, or Ctrl-C)
+    [--to <block>] [--reset]
+  kasbah dev <app.ts>            the same, restarted on every file change (a changed build re-indexes);
+                                        without DATABASE_URL, a Postgres container (Docker or Podman) for the app
+  --ui / --no-ui                        the progress screen (on for dev in a terminal)
+  kasbah serve <app.ts>          the API only, over what an indexer of the app stored (more API processes
+                                        than indexers, or a finished run)
+  kasbah cache info [--chain <id>]
+                                        each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
 
-type App = { run: (o?: RunOptions) => Promise<void> };
+type App = { run: (o?: RunOptions) => Promise<void>; serve: () => Promise<{ url: string; close: () => Promise<void> }> };
 
 async function load(file: string): Promise<App> {
   const mod = (await import(pathToFileURL(resolve(file)).href)) as { default?: unknown };
@@ -65,9 +70,18 @@ async function start(file: string, o: { to?: number; reset?: boolean; dev?: bool
   }
 }
 
-/** Runs `start --dev` in a child process and restarts it on changes under the app's directory. */
-function dev(file: string, ui: boolean | undefined) {
+/**
+ * Runs `start --dev` in a child process and restarts it on changes under the app's directory. Without
+ * `DATABASE_URL`, a Postgres container for the app, stopped (data kept) when `dev` exits.
+ */
+async function dev(file: string, ui: boolean | undefined) {
   const log = (line: string) => console.log(`[kasbah dev] ${line}`);
+  let db: DevDatabase | undefined;
+  if (process.env.DATABASE_URL === undefined) {
+    db = await devDatabase(dirname(resolve(file)), log);
+    log(`DATABASE_URL=${db.url}  (delete it all: ${db.runtime} rm -fv ${db.container} && ${db.runtime} volume rm ${db.container})`);
+    process.env.DATABASE_URL = db.url;
+  }
   let child: ChildProcess | undefined;
   let exited: Promise<void> = Promise.resolve();
   const launch = () => {
@@ -110,10 +124,22 @@ function dev(file: string, ui: boolean | undefined) {
       clearTimeout(timer);
       child?.kill("SIGINT");
       await exited;
+      db?.stop();
       process.exit(0);
     });
   }
   launch();
+}
+
+async function serve(file: string) {
+  const app = await load(file);
+  const api = await app.serve();
+  console.log(`[kasbah] API on ${api.url}: GraphiQL at ${api.url}/graphql (Ctrl-C stops it)`);
+  await new Promise<void>((r) => {
+    process.once("SIGINT", r);
+    process.once("SIGTERM", r);
+  });
+  await api.close();
 }
 
 async function cache(command: string | undefined, o: { database?: string; events?: boolean; calls?: boolean; chain?: string }) {
@@ -167,7 +193,7 @@ const { positionals, values } = parseArgs({
     start: { type: "string" },
     timestamps: { type: "boolean" },
     yes: { type: "boolean", short: "y" },
-    kasbah: { type: "string" },
+    dependency: { type: "string" },
     handle: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
@@ -177,7 +203,8 @@ try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
   else if (command === "start" && arg !== undefined) await start(arg, { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
-  else if (command === "dev" && arg !== undefined) dev(arg, values.ui);
+  else if (command === "dev" && arg !== undefined) await dev(arg, values.ui);
+  else if (command === "serve" && arg !== undefined) await serve(arg);
   else if (command === "cache") await cache(arg, values);
   else {
     console.error(USAGE);
