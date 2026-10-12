@@ -22,10 +22,17 @@ export type RpcStats = { requests: number; calls: number; retries: number; throt
 
 export type RpcClientOptions = {
   timeoutMs?: number;
-  initialConcurrency?: number;
+  /** Requests in flight at most. */
   maxConcurrency?: number;
+  /** Calls per second to start at; the limit then follows what the endpoint takes. */
+  initialRate?: number;
+  maxRate?: number;
   maxAttempts?: number;
 };
+
+const MIN_RATE = 5;
+const INITIAL_PAUSE_MS = 100;
+const MAX_PAUSE_MS = 5_000;
 
 type Call = { method: string; params: unknown };
 type Response = { id: number; result?: unknown; error?: { code: number; message: string; data?: unknown } };
@@ -39,16 +46,30 @@ function retryable(status: number | undefined, code?: number): boolean {
 }
 
 /**
- * JSON-RPC over HTTP with AIMD concurrency: the in-flight limit grows by about one per round of successes and halves
- * on throttling or timeouts, so one client finds what an endpoint can take.
+ * JSON-RPC over HTTP, paced in calls per second (calls inside a batch count one by one: that's what providers rate
+ * and bill), after Ponder's limiter. The rate doubles until the first throttle, which halves it; after that it grows
+ * 5% per 5 s worth of successes while sends are waiting on it, and drops 5% on each throttle or timeout, which also
+ * pauses sending (100 ms, then ×1.5 per throttle in a row, up to 5 s).
  */
 export class RpcClient {
   readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, bytes: 0, methods: {} };
   readonly #url: string;
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
+  readonly #maxRate: number;
   readonly #maxAttempts: number;
-  #limit: number;
+  #rate: number;
+  #slowStart = true;
+  /** Calls answered since the rate last changed, and whether any send waited on it meanwhile. */
+  #succeeded = 0;
+  #bound = false;
+  /** Calls that may go out now: refills at the rate, up to a second's worth. */
+  #tokens: number;
+  #refilled = Date.now();
+  /** Sends take tokens one at a time, in order. */
+  #gate: Promise<void> = Promise.resolve();
+  #pausedUntil = 0;
+  #pauseMs = INITIAL_PAUSE_MS;
   #active = 0;
   #waiting: (() => void)[] = [];
   #id = 0;
@@ -56,13 +77,16 @@ export class RpcClient {
   constructor(url: string, options: RpcClientOptions = {}) {
     this.#url = url;
     this.#timeoutMs = options.timeoutMs ?? 30_000;
-    this.#limit = options.initialConcurrency ?? 8;
     this.#maxConcurrency = options.maxConcurrency ?? 64;
+    this.#rate = options.initialRate ?? 100;
+    this.#tokens = this.#rate;
+    this.#maxRate = options.maxRate ?? 10_000;
     this.#maxAttempts = options.maxAttempts ?? 8;
   }
 
-  get concurrency(): number {
-    return Math.floor(this.#limit);
+  /** The current limit, in calls per second. */
+  get rate(): number {
+    return Math.floor(this.#rate);
   }
 
   async request<T>(method: string, params: unknown): Promise<T> {
@@ -71,14 +95,24 @@ export class RpcClient {
   }
 
   /**
-   * Sends calls in one HTTP request. Resolves in call order. Calls that fail with a retryable error (a throttled
-   * call inside an otherwise fine batch, for one) are sent again on their own; any other call error rejects.
+   * Sends calls in one HTTP request, or several when the batch is larger than a second's worth of calls. Resolves in
+   * call order. Calls that fail with a retryable error (a throttled call inside an otherwise fine batch, for one) are
+   * sent again on their own; any other call error rejects.
    */
   async batch<T extends unknown[]>(calls: Call[]): Promise<T> {
+    const size = Math.max(1, Math.floor(this.#rate));
+    if (calls.length <= size) return this.#batch(calls) as Promise<T>;
+    const parts: Promise<unknown[]>[] = [];
+    for (let i = 0; i < calls.length; i += size) parts.push(this.#batch(calls.slice(i, i + size)));
+    return (await Promise.all(parts)).flat() as T;
+  }
+
+  async #batch(calls: Call[]): Promise<unknown[]> {
     const results = new Array<unknown>(calls.length);
     let pending = calls.map((_, i) => i);
     for (let attempt = 1; ; attempt++) {
       await this.#acquire();
+      await this.#pace(pending.length);
       let status: number | undefined;
       let failure: unknown;
       try {
@@ -91,11 +125,9 @@ export class RpcClient {
             failure = a;
           } else throw a;
         });
+        this.#answered(calls.length - again.length);
         pending = again;
-        if (pending.length === 0) {
-          this.#limit = Math.min(this.#maxConcurrency, this.#limit + 1 / this.#limit);
-          return results as T;
-        }
+        if (pending.length === 0) return results;
       } catch (e) {
         const code = e instanceof RpcError ? e.code : undefined;
         if (e instanceof RpcError && !retryable(status, code)) throw e;
@@ -106,15 +138,65 @@ export class RpcClient {
       const code = failure instanceof RpcError ? failure.code : undefined;
       // Throttling only slows us down: it never uses up attempts, other failures do.
       const throttled = status === 429 || code === 429 || code === -32005;
-      if (throttled || (failure as Error).name === "TimeoutError") {
+      const timeout = (failure as Error).name === "TimeoutError";
+      if (throttled || timeout) {
         this.stats.throttled++;
-        this.#limit = Math.max(1, this.#limit / 2);
+        this.#slowDown(timeout);
       }
-      if (throttled) attempt = Math.min(attempt, 6) - 1;
-      else if (attempt >= this.#maxAttempts) throw failure;
       this.stats.retries++;
-      await sleep(Math.min(10_000, 200 * 2 ** Math.max(0, attempt - 1)) * (0.5 + Math.random()));
+      // A throttle waits out the pause and never uses up attempts; other failures back off and do.
+      if (throttled) attempt--;
+      else if (attempt >= this.#maxAttempts) throw failure;
+      else await sleep(Math.min(10_000, 200 * 2 ** (attempt - 1)) * (0.5 + Math.random()));
     }
+  }
+
+  /** Waits for `n` calls' worth of tokens, at the rate as it is while waiting. */
+  #pace(n: number): Promise<void> {
+    const turn = this.#gate.then(async () => {
+      for (;;) {
+        const now = Date.now();
+        if (now < this.#pausedUntil) {
+          await sleep(this.#pausedUntil - now);
+          continue;
+        }
+        this.#tokens = Math.min(this.#rate, this.#tokens + ((now - this.#refilled) * this.#rate) / 1000);
+        this.#refilled = now;
+        const need = Math.min(n, this.#rate);
+        if (this.#tokens >= need) {
+          this.#tokens -= n;
+          return;
+        }
+        this.#bound = true;
+        await sleep(Math.max(1, ((need - this.#tokens) * 1000) / this.#rate));
+      }
+    });
+    this.#gate = turn;
+    return turn;
+  }
+
+  #answered(n: number) {
+    if (n === 0) return;
+    this.#pauseMs = INITIAL_PAUSE_MS;
+    this.#succeeded += n;
+    if (!this.#bound || this.#succeeded < (this.#slowStart ? 1 : 5) * this.#rate) return;
+    this.#rate = Math.min(this.#maxRate, this.#rate * (this.#slowStart ? 2 : 1.05));
+    this.#succeeded = 0;
+    this.#bound = false;
+  }
+
+  /** One throttle per pause counts: requests already in flight when it began were sent at the old rate. */
+  #slowDown(timeout: boolean) {
+    const now = Date.now();
+    if (now < this.#pausedUntil) return;
+    this.#rate = Math.max(MIN_RATE, this.#rate * (this.#slowStart ? 0.5 : 0.95));
+    this.#slowStart = false;
+    this.#succeeded = 0;
+    this.#bound = false;
+    this.#pausedUntil = now + this.#pauseMs;
+    this.#tokens = 0;
+    this.#refilled = this.#pausedUntil;
+    this.#pauseMs = timeout ? INITIAL_PAUSE_MS : Math.min(MAX_PAUSE_MS, this.#pauseMs * 1.5);
   }
 
   /** One HTTP request: per call its result or its `RpcError`. Throws for transport and HTTP errors. */
@@ -150,7 +232,7 @@ export class RpcClient {
   }
 
   async #acquire(): Promise<void> {
-    while (this.#active >= Math.floor(this.#limit)) await new Promise<void>((r) => this.#waiting.push(r));
+    while (this.#active >= this.#maxConcurrency) await new Promise<void>((r) => this.#waiting.push(r));
     this.#active++;
   }
 

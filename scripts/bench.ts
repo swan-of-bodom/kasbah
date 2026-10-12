@@ -33,7 +33,7 @@ const { values: a } = parseArgs({
 const url = endpoints()[a.endpoint!];
 if (url === undefined) throw new Error(`unknown endpoint ${a.endpoint}`);
 const concurrency = Number(a.concurrency);
-const rpc = new RpcClient(url, { maxConcurrency: Math.max(concurrency, 8), initialConcurrency: Math.min(concurrency, 16) });
+const rpc = new RpcClient(url, { maxConcurrency: Math.max(concurrency, 8) });
 const endpoint = await probe(rpc);
 const head = await blockNumber(rpc);
 
@@ -122,7 +122,7 @@ const result: Record<string, unknown> = {
   unknown,
   retries: rpc.stats.retries,
   throttled: rpc.stats.throttled,
-  finalConcurrency: rpc.concurrency,
+  finalRate: rpc.rate,
   mbReceived: +(rpc.stats.bytes / 1e6).toFixed(1),
   checksum: checksum.toString(16),
 };

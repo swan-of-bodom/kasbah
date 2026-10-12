@@ -30,7 +30,7 @@ export type Note =
   | { kind: "skipped"; contract: string; events: string[]; classHash: string }
   | { kind: "socket"; state: "on" | "refused" | "reconnected" | "closed"; reason?: string }
   | { kind: "factories"; children: number; through: number; seconds: number }
-  | { kind: "backfill"; handled: number; seconds: number; cache?: { cachedEvents: number; fetchedEvents: number }; reads: number; cachedReads: number }
+  | { kind: "backfill"; handled: number; seconds: number; cache?: { cachedEvents: number; fetchedEvents: number }; reads: number; cachedReads: number; rpc?: { calls: number; throttled: number; rate: number } }
   | { kind: "keys"; keys: number; indexes: number; seconds: number }
   | { kind: "following"; block: number }
   /** Every backfill commit, and every live block with events or new children: what the screen's box shows. */
@@ -83,7 +83,7 @@ export class Status {
   live = { block: 0, timestamp: 0, events: 0, at: 0, reorgs: 0 };
   api = "";
   rpc?: RpcStats;
-  concurrency = () => 0;
+  rate = () => 0;
   cache?: { cachedEvents: number; fetchedEvents: number };
   calls?: { calls: number; cached: number };
   /** Events handled per second, one point per 2 s, oldest first. */
@@ -225,7 +225,7 @@ function describe(n: Note): string {
       return `factories: ${n.children} children up to block ${n.through} in ${seconds(n.seconds)}`;
     case "backfill": {
       const reads = n.reads + n.cachedReads;
-      return `backfill done: ${n.handled} handled in ${seconds(n.seconds)}${n.cache === undefined ? "" : ` (${n.cache.cachedEvents} events from the cache, ${n.cache.fetchedEvents} fetched)`}${reads === 0 ? "" : `, ${reads} contract reads (${n.cachedReads} cached)`}`;
+      return `backfill done: ${n.handled} handled in ${seconds(n.seconds)}${n.cache === undefined ? "" : ` (${n.cache.cachedEvents} events from the cache, ${n.cache.fetchedEvents} fetched)`}${reads === 0 ? "" : `, ${reads} contract reads (${n.cachedReads} cached)`}${n.rpc === undefined ? "" : `; rpc ${n.rpc.calls} calls, ${n.rpc.throttled} throttled, ${n.rpc.rate} calls/s max`}`;
     }
     case "keys":
       return `${plural(n.keys, "primary key")} built, ${plural(n.indexes, "index", "indexes")} in place, in ${seconds(n.seconds)}`;

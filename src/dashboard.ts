@@ -167,7 +167,7 @@ export function render(status: Status, { width = 100, color = false, now = perfo
   if (status.rpc !== undefined) {
     const s = status.rpc;
     const trouble = [s.retries > 0 ? p.yellow(`${thousands(s.retries)} retries`) : "", s.throttled > 0 ? p.yellow(`${thousands(s.throttled)} throttled`) : ""].filter(Boolean);
-    label("rpc", [`${thousands(s.requests)} requests`, `${thousands(s.calls)} calls`, `${bytes(s.bytes)} in`, `concurrency ${status.concurrency()}`, ...trouble].join(p.dim(" · ")));
+    label("rpc", [`${thousands(s.requests)} requests`, `${thousands(s.calls)} calls`, `${bytes(s.bytes)} in`, `${thousands(status.rate())} calls/s max`, ...trouble].join(p.dim(" · ")));
     const methods = Object.entries(s.methods).sort((a, b) => b[1] - a[1]);
     if (methods.length > 0) {
       const shown = methods.slice(0, 3).map(([m, n]) => `${m.replace(/^starknet_/, "")} ${compact(n)}`);

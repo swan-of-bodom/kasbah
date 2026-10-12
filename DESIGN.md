@@ -48,7 +48,7 @@ in core, the `ponder dev` drop-everything mode.
 
 ```
             ┌──────────────── endpoint layer (§4) ─────────────────┐
-            │ capability probe · adaptive concurrency · pinning    │
+            │ capability probe · calls/s pacing · pinning          │
             └───────▲───────────────────▲──────────────────▲───────┘
                     │                   │                  │
    ┌────────────────┴──┐   ┌────────────┴─────┐   ┌────────┴────────┐
@@ -91,8 +91,12 @@ before indexing; we skip that round trip.
 **Request policy:**
 - Every request names an explicit block number or hash. Never `latest` in a data call: behind a load balancer
   (Alchemy), consecutive calls can see different heads.
-- Adaptive concurrency per endpoint (AIMD: grow on success, halve on 429/timeout), several endpoints with
-  latency-based routing. Ponder's `rpc/index.ts` is a good model and is chain-agnostic.
+- Pacing per endpoint in calls per second, each call in a batch counted (providers rate and bill per call), after
+  Ponder's `rpc/index.ts` (unchanged through 0.18.3): doubles until the first 429, which halves it, then +5% per 5 s of
+  successes while rate-bound, −5% and a pause (100 ms ×1.5 per 429 in a row, ≤5 s) per 429. Concurrency alone
+  couldn't do it: at 1 request in flight, one batch of 100 header calls still went over Alchemy's limit (130 retries
+  in 1,030 requests); paced, Ekubo 310k–315k took 6,232 calls with 0 throttled. Later: several endpoints with
+  latency-based routing, as Ponder does.
 - **Continuation tokens are node-specific** (`"<block>-<n>"`, but `n` counts matched events on Pathfinder and raw
   events on Juno). A pagination chain stays on one endpoint. If the endpoint changes, restart from the token's
   block number with no token and drop duplicates by `(block, tx_index, event_index)`.
@@ -277,8 +281,8 @@ handlers `event.transaction` with the transaction's RPC fields and `event.receip
   51–54 s from RPC (bound by Alchemy's compute units, ≈280 transactions/s) at 0.5–0.7 GB; again from the cache
   2.7 s. ≈5.2 KB per transaction cached, so full Ekubo history with receipts would be ≈40 GB.
 - Found on the way: Alchemy throttles single calls inside a batch (HTTP 200, error 429 per call). The RPC client
-  now resends only the failed calls, and throttling never uses up retry attempts (it halves concurrency and
-  backs off instead).
+  now resends only the failed calls, and throttling never uses up retry attempts (it waits out a pause instead,
+  see §4).
 
 ## 8. ABIs, types and decoding
 

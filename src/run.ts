@@ -237,7 +237,7 @@ class Run {
     const sources = new Sources(rpc, contracts, (n) => status.note(n));
     const factories = await factoriesOf(config, rpc, sources, plan.classTo);
     await Promise.all(Object.entries(config.contracts).flatMap(([name, c]) => (c.address === undefined ? [] : [sources.add(name, c.address, c.startBlock, plan.classTo, false)])));
-    Object.assign(status, { endpoint: `${endpoint.node} ${endpoint.spec}`, tip, factories: factories.length, rpc: rpc.stats, concurrency: () => rpc.concurrency, cache: cache?.stats });
+    Object.assign(status, { endpoint: `${endpoint.node} ${endpoint.spec}`, tip, factories: factories.length, rpc: rpc.stats, rate: () => rpc.rate, cache: cache?.stats });
     status.note({ kind: "endpoint", node: endpoint.node, spec: endpoint.spec, tip, contracts: sources.addresses.length + stored.children.length, factories: factories.length, blockSources: blockSources.length });
     const r = new Run({ config, handlers, status, signal, closers, schema, pool, rpc, endpoint, cache, store, sources, factories, blockSources, tables, indexes }, plan, stored);
     await r.#resume(stored.children);
@@ -320,7 +320,7 @@ class Run {
     if (signal.aborted) return;
     const calls = this.#client.stats;
     const c = cache?.stats;
-    status.note({ kind: "backfill", handled: status.handled - handledBefore, seconds: (performance.now() - started) / 1000, cache: c && { ...c }, reads: calls.calls, cachedReads: calls.cached });
+    status.note({ kind: "backfill", handled: status.handled - handledBefore, seconds: (performance.now() - started) / 1000, cache: c && { ...c }, reads: calls.calls, cachedReads: calls.cached, rpc: status.rpc && { calls: status.rpc.calls, throttled: status.rpc.throttled, rate: status.rate() } });
   }
 
   /** Primary keys and indexes, a transaction per table in parallel: each table is locked only while its own are built. */

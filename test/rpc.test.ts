@@ -68,3 +68,54 @@ test("zstd responses decode whether or not fetch already decoded them", async ()
     server.close();
   }
 });
+
+test("paced to what the endpoint takes: a few throttles while finding the rate, then none", async () => {
+  const LIMIT = 1_000;
+  const window: { at: number; n: number }[] = [];
+  let rejected = 0;
+  const server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const calls = [JSON.parse(body)].flat();
+      const now = Date.now();
+      while (window.length > 0 && window[0]!.at <= now - 1_000) window.shift();
+      if (window.reduce((a, w) => a + w.n, 0) + calls.length > LIMIT) {
+        rejected++;
+        res.writeHead(429).end("compute units per second exceeded");
+        return;
+      }
+      window.push({ at: now, n: calls.length });
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(calls.map((c) => ({ jsonrpc: "2.0", id: c.id, result: c.params.n }))));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const rpc = new RpcClient(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
+    const send = (from: number, count: number) =>
+      Promise.all(Array.from({ length: count / 100 }, (_, b) => rpc.batch(Array.from({ length: 100 }, (_, i) => ({ method: "m", params: { n: from + b * 100 + i } })))));
+    const first = (await send(0, 3_000)).flat();
+    expect(first).toEqual(Array.from({ length: 3_000 }, (_, i) => i));
+    const found = rejected;
+    expect(found).toBeLessThanOrEqual(5);
+    expect(rpc.rate).toBeLessThanOrEqual(LIMIT);
+    expect(rpc.rate).toBeGreaterThanOrEqual(LIMIT / 4);
+    await send(3_000, 2_000);
+    expect(rejected - found).toBeLessThanOrEqual(1);
+  } finally {
+    server.close();
+  }
+}, 30_000);
+
+test("a batch larger than a second's worth of calls goes out in pieces", async () => {
+  const n = await node((c) => c.params.n);
+  try {
+    const rpc = new RpcClient(n.url, { initialRate: 40 });
+    const calls = Array.from({ length: 100 }, (_, i) => ({ method: "m", params: { n: String(i) } }));
+    expect(await rpc.batch(calls)).toEqual(calls.map((c) => c.params.n));
+    expect(n.sent.map((s) => s.length)).toEqual([40, 40, 20]);
+  } finally {
+    n.server.close();
+  }
+});

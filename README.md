@@ -10,7 +10,7 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 
 - `src/abi/`: ABI model, event decoder and types for Cairo 0 and Cairo 1; class history, so each event decodes with
   the class its contract had at that block.
-- `src/rpc/`: JSON-RPC client (adaptive concurrency, retries, zstd), endpoint probe.
+- `src/rpc/`: JSON-RPC client (paced in calls per second, retries, zstd), endpoint probe.
 - `src/sync/fetch.ts`: backfill as an ordered event stream with a memory cap; `src/sync/live.ts`: head following
   with reorg detection.
 - `src/sources.ts`: watched addresses, their classes and decoders, factory children.
@@ -48,8 +48,8 @@ first time; one container and volume per app directory, on a free localhost port
 kept for the next run. `start` never does: it needs `DATABASE_URL`.
 
 It also writes a Dockerfile and a `docker-compose.yml` (Postgres and the indexer, health-checked, the API on
-127.0.0.1:42069 for a proxy in front): `docker compose up -d`. From a checkout, the kasbah tarball is copied into
-`vendor/` so the image can install it (`pnpm pack` first).
+127.0.0.1:42069 for a proxy in front): `docker compose up -d`. From a checkout, the dependency is the packed tarball's path (`pnpm pack` first), which
+the image can't install: the Docker build works once kasbah is published.
 
 Arguments become columns of their type (`integer`, `bignum`, `hex`, `boolean`, `text`); structs, enums and arrays
 `jsonb` (bigints as decimal strings).
