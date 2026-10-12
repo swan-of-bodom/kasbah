@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import pg from "pg";
 import type { Abi, AbiMember } from "./abi/abi.ts";
@@ -24,6 +24,8 @@ export type InitOptions = {
   database?: string;
   /** Store each event's block timestamp (`include: { block: true }`). */
   timestamps?: boolean;
+  /** New blocks over a WebSocket (`ws: true`) instead of polling. Default: yes. */
+  ws?: boolean;
   /** Take the defaults for anything not given, ask nothing. */
   yes?: boolean;
   /** The kasbah dependency, as package.json writes it. */
@@ -41,6 +43,7 @@ export type Project = {
   startBlock: number;
   events: string[];
   timestamps: boolean;
+  ws: boolean;
   dependency: string;
 };
 
@@ -94,85 +97,97 @@ export function generate(p: Project): Record<string, string> {
     tables.push(`export const ${v} = pgTable("${snake(e.name)}", {\n${columns.join("\n")}\n});`);
     handlers.push(`app.on("${p.name}:${e.name}", async ({ event, context }) => {\n  await context.db.insert(schema.${v}).values({\n    ${values.join(",\n    ")},\n  });\n});`);
   }
-  const abiFile = `${snake(p.name)}.ts`;
+  const abiName = `${camel(p.name)}Abi`;
   const schemaName = snake(basename(p.dir)).replace(/[^a-z0-9_]/g, "_");
-  const schemaTs = [
-    `import { ${[...pgImports].sort().join(", ")} } from "drizzle-orm/pg-core";`,
-    ...(indexerImports.size > 0 ? [`import { ${[...indexerImports].sort().join(", ")} } from "kasbah";`] : []),
-    "",
-    "/** One row per event: its transaction and position, its block, and its arguments. */",
-    tables.join("\n\n"),
-    "",
-  ].join("\n");
-  const appTs = [
-    `import { desc } from "drizzle-orm";`,
+  const first = camel(defs[0]!.name);
+  const lines = (...l: string[]) => `${l.join("\n")}\n`;
+  const config = lines(
     `import { kasbah } from "kasbah";`,
-    `import ${camel(p.name)}Abi from "./abis/${abiFile}";`,
-    `import * as schema from "./schema.ts";`,
+    `import ${abiName} from "./abis/${p.name}.ts";`,
+    `import * as schema from "./kasbah.schema.ts";`,
     "",
-    "const app = kasbah({",
+    "export default kasbah({",
     "  rpc: process.env.KASBAH_RPC_URL!,",
+    ...(p.ws ? ["  ws: true,"] : []),
     "  database: process.env.DATABASE_URL!,",
     `  schema: "${schemaName}",`,
     "  contracts: {",
-    `    ${p.name}: { abi: ${camel(p.name)}Abi, address: "${p.address}", startBlock: ${p.startBlock}${p.timestamps ? ", include: { block: true }" : ""} },`,
+    `    ${p.name}: { abi: ${abiName}, address: "${p.address}", startBlock: ${p.startBlock}${p.timestamps ? ", include: { block: true }" : ""} },`,
     "  },",
     "  tables: schema,",
-    "  // GraphiQL at http://localhost:42069/graphql, SQL at POST /sql; API_HOST=0.0.0.0 in a container.",
     "  api: { port: 42069, host: process.env.API_HOST },",
-    "  // Raw events and contract reads kept in Postgres: a re-index after a handler change fetches nothing again.",
     "  cache: true,",
     "});",
+  );
+  const schemaTs = lines(
+    `import { ${[...pgImports].sort().join(", ")} } from "drizzle-orm/pg-core";`,
+    ...(indexerImports.size > 0 ? [`import { ${[...indexerImports].sort().join(", ")} } from "kasbah";`] : []),
+    "",
+    tables.join("\n\n"),
+  );
+  const index = lines(
+    `import app from "../kasbah.config.ts";`,
+    `import * as schema from "../kasbah.schema.ts";`,
     "",
     ...(anyJson ? ["// jsonb can't hold bigints: they're stored as decimal strings.", "const plain = (v: unknown): unknown => JSON.parse(JSON.stringify(v, (_, x) => (typeof x === \"bigint\" ? x.toString() : x)));", ""] : []),
     handlers.join("\n\n"),
+  );
+  const api = lines(
+    `import { desc } from "drizzle-orm";`,
+    `import app from "../../kasbah.config.ts";`,
+    `import * as schema from "../../kasbah.schema.ts";`,
     "",
-    `// Your own endpoints, read-only on the tables: http://localhost:42069/${snake(defs[0]!.name)}/latest`,
-    `app.get("/${snake(defs[0]!.name)}/latest", async ({ db }) => db.select().from(schema.${camel(defs[0]!.name)}).orderBy(desc(schema.${camel(defs[0]!.name)}.block)).limit(10));`,
-    "",
-    "export default app;",
-    "",
-  ].join("\n");
+    `app.get("/${snake(defs[0]!.name)}/latest", async ({ db }) => db.select().from(schema.${first}).orderBy(desc(schema.${first}.block)).limit(10));`,
+  );
   const pkg = {
     name: basename(p.dir),
     private: true,
     type: "module",
     packageManager: "pnpm@10.12.1",
-    scripts: { dev: "kasbah dev app.ts", start: "kasbah start app.ts", typecheck: "tsc" },
+    scripts: { dev: "kasbah dev", start: "kasbah start", serve: "kasbah serve", typecheck: "tsc" },
     dependencies: { "drizzle-orm": "^0.45.4", "kasbah": p.dependency },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };
   const tsconfig = {
     compilerOptions: { target: "es2023", module: "nodenext", strict: true, noEmit: true, allowImportingTsExtensions: true, skipLibCheck: true, types: ["node"] },
-    include: ["*.ts", "abis"],
+    include: ["*.ts", "abis", "src"],
   };
+  const env = (rpc: string, database: string | undefined) =>
+    lines(`KASBAH_RPC_URL=${rpc}`, database === undefined ? "# DATABASE_URL=postgresql://…  (unset: `pnpm dev` runs Postgres in a Docker or Podman container)" : `DATABASE_URL=${database}`);
   return {
+    "kasbah.config.ts": config,
+    "kasbah.schema.ts": schemaTs,
+    [`abis/${p.name}.ts`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
+    "src/index.ts": index,
+    "src/api/index.ts": api,
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
     "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
+    ".env": env(p.rpc, p.database),
+    ".env.example": env("https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<key>", undefined),
     ".gitignore": "node_modules\n.env\n",
     ".dockerignore": "node_modules\n.env\n.git\n",
     Dockerfile: DOCKERFILE,
     "docker-compose.yml": COMPOSE,
-    ".env": `KASBAH_RPC_URL=${p.rpc}\n${p.database === undefined ? "# DATABASE_URL=postgresql://… (without it, `pnpm dev` runs Postgres in a Docker or Podman container)" : `DATABASE_URL=${p.database}`}\n`,
-    [`abis/${abiFile}`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
-    "schema.ts": schemaTs,
-    "app.ts": appTs,
-    "README.md": [
+    "README.md": lines(
       `# ${basename(p.dir)}`,
       "",
-      `A kasbah indexer of ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.`,
+      `Indexes ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.`,
+      "",
+      "- `kasbah.config.ts`: RPC, database, contracts, API",
+      "- `kasbah.schema.ts`: the tables",
+      "- `src/index.ts`: what each event writes",
+      "- `src/api/index.ts`: your own endpoints, next to `/graphql` and `/sql`",
       "",
       "```",
-      "pnpm dev               # index, follow the head, restart on every change; GraphiQL at http://localhost:42069/graphql",
+      "pnpm dev               # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql",
       "pnpm start             # the same, without watching",
-      "pnpm typecheck",
-      "docker compose up -d   # Postgres and the indexer, API on 127.0.0.1:42069 (reads KASBAH_RPC_URL from .env)",
+      "pnpm serve             # the API alone, over what was indexed",
+      "docker compose up -d   # Postgres and the indexer, the API on 127.0.0.1:42069",
       "```",
       "",
-      "`.env` holds the RPC URL and the database: keep it out of git (and out of the image: `.dockerignore`).",
-      "`GET /health` answers while the indexer and its database are up, `GET /ready` once it follows the head.",
-      "",
-    ].join("\n"),
+      "`.env` holds the RPC URL (and the database, if not the dev container): it stays out of git and the image.",
+      ...(p.dependency.startsWith("file:") ? ["", "kasbah comes from a local tarball until it's published: `docker compose` can build only after that."] : []),
+    ),
   };
 }
 
@@ -184,7 +199,7 @@ RUN pnpm install
 ENV API_HOST=0.0.0.0
 EXPOSE 42069
 # kasbah itself, not through pnpm: it gets the SIGTERM of a stop and finishes the block it's on.
-CMD ["node", "node_modules/kasbah/dist/cli.js", "start", "app.ts"]
+CMD ["node", "node_modules/kasbah/dist/cli.js", "start"]
 `;
 
 const COMPOSE = `services:
@@ -221,17 +236,14 @@ volumes:
   pgdata:
 `;
 
-/**
- * The dependency on this kasbah: from a checkout its packed tarball, copied into the project so a Docker build sees
- * it (a link would bring the checkout's own drizzle-orm); else its version.
- */
-function indexerSpec(): { spec: string; tarball?: string } {
+/** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own drizzle-orm), else its version. */
+function indexerSpec(): string {
   const root = resolve(import.meta.dirname, "..");
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
-  if (!existsSync(join(root, ".git"))) return { spec: `^${version}` };
+  if (!existsSync(join(root, ".git"))) return `^${version}`;
   const tarball = join(root, `kasbah-${version}.tgz`);
   if (!existsSync(tarball)) throw new Error(`no ${tarball}: run pnpm pack in ${root} first`);
-  return { spec: `file:./vendor/${basename(tarball)}`, tarball };
+  return `file:${tarball}`;
 }
 
 /** A name for the contract from its largest interface (`ekubo::interfaces::core::ICore` → `Core`). */
@@ -305,8 +317,9 @@ export async function init(o: InitOptions): Promise<void> {
   }
   const startBlock = Number(o.start ?? (ask ? await ui.text("Start block", { initial: String(deployed), hint: "its deployment block indexes everything; a later one only what comes after", check: (v) => (/^\d+$/.test(v) && Number(v) <= tip ? undefined : `a block number up to ${tip}`) }) : deployed));
   const timestamps = o.timestamps ?? (ask ? await ui.confirm("Store block timestamps? (one extra call per block with events)", false) : false);
+  const ws = o.ws ?? (ask ? await ui.confirm("New blocks over a WebSocket? (about a second fresher than polling)", true) : true);
 
-  let database = o.database ?? (ask ? undefined : process.env.DATABASE_URL);
+  let database = o.database === "" ? undefined : (o.database ?? (ask ? undefined : process.env.DATABASE_URL));
   for (; ask || database !== undefined; ) {
     if (database === undefined) {
       const answer = await ui.text("Postgres URL", { initial: process.env.DATABASE_URL, hint: "empty: `pnpm dev` runs one in a Docker or Podman container", check: (v) => (v === "" || /^postgres(ql)?:\/\//.test(v) ? undefined : "a postgres:// URL, or empty") });
@@ -326,19 +339,14 @@ export async function init(o: InitOptions): Promise<void> {
     }
   }
 
-  const dependency = o.dependency === undefined ? indexerSpec() : { spec: o.dependency };
-  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, dependency: dependency.spec });
+  const files = generate({ dir: target, rpc, database, name, address: canonical(address), abi, startBlock, events, timestamps, ws, dependency: o.dependency ?? indexerSpec() });
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), content);
   }
-  if (dependency.tarball !== undefined) {
-    mkdirSync(join(target, "vendor"), { recursive: true });
-    copyFileSync(dependency.tarball, join(target, "vendor", basename(dependency.tarball)));
-  }
   ui.line();
   ui.line(`${ui.green("✓")} ${ui.bold(target)}`);
-  for (const path of Object.keys(files).sort()) ui.line(`  ${path}${path === ".env" ? ui.dim("  (the RPC URL and database: kept out of git)") : ""}`);
+  for (const path of Object.keys(files)) ui.line(`  ${path}${path === ".env" ? ui.dim("  (the RPC URL and database: kept out of git)") : ""}`);
   ui.line();
 
   const pm = process.env.npm_config_user_agent?.startsWith("npm") ? "npm" : "pnpm";

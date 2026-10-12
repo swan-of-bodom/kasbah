@@ -43,7 +43,7 @@ test("the packed package installs and works outside the repo: library, types and
   const map = JSON.parse(readFileSync(join(dir, "node_modules/kasbah/dist/run.js.map"), "utf8")) as { sources: string[] };
   expect(existsSync(join(dir, "node_modules/kasbah/dist", map.sources[0]!))).toBe(true);
   expect(readdirSync(join(dir, "node_modules/kasbah/dist"))).toContain("index.d.ts.map");
-  expect(execFileSync(join(dir, "node_modules/.bin/kasbah"), ["--help"], { cwd: dir, encoding: "utf8" })).toContain("kasbah start <app.ts>");
+  expect(execFileSync(join(dir, "node_modules/.bin/kasbah"), ["--help"], { cwd: dir, encoding: "utf8" })).toContain("kasbah start [app.ts]");
 }, 120_000);
 
 test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed package", async () => {
@@ -60,7 +60,7 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
   const { stdout: out } = await promisify(execFile)(join(create, "node_modules/.bin/create-kasbah"), ["proj", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--start", "0", "--database", "postgres://nobody@127.0.0.1:1/x"], { cwd: create, encoding: "utf8" });
   expect(out).toContain("kasbah init");
   expect(JSON.parse(readFileSync(join(create, "proj/package.json"), "utf8")).dependencies.kasbah).toBe("^0.1.0");
-  expect(readFileSync(join(create, "proj/app.ts"), "utf8")).toContain(`app.on("C:Counted"`);
+  expect(readFileSync(join(create, "proj/src/index.ts"), "utf8")).toContain(`app.on("C:Counted"`);
   expect(readdirSync(join(create, "node_modules/create-kasbah"))).toContain("LICENSE");
 }, 120_000);
 
@@ -94,16 +94,18 @@ test.skipIf(url === undefined)("kasbah init writes a project that installs, type
   const bin = join(dir, "node_modules/.bin/kasbah");
   const run = promisify(execFile);
   // Without a terminal every answer is a flag; the deployment block is found on the chain.
-  const { stdout } = await run(bin, ["init", "kasbah_test_init", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--database", url!, "--timestamps", "--dependency", `file:../${tarball}`], { cwd: dir, encoding: "utf8" });
+  const { stdout } = await run(bin, ["init", "kasbah_test_init", "--rpc", rpcUrl, "--address", "0xc", "--name", "C", "--database", url!, "--timestamps", "--no-ws", "--dependency", `file:../${tarball}`], { cwd: dir, encoding: "utf8" });
   expect(stdout).toMatch(/Finding its deployment block {2}block 0/);
   const project = join(dir, "kasbah_test_init");
-  expect(readFileSync(join(project, "schema.ts"), "utf8")).toContain(`export const counted = pgTable("counted", {`);
+  expect(readFileSync(join(project, "kasbah.schema.ts"), "utf8")).toContain(`export const counted = pgTable("counted", {`);
+  expect(existsSync(join(project, "vendor"))).toBe(false);
   const pnpm = (args: string[]) => execFileSync("pnpm", args, { cwd: project, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
   pnpm(["install", "--offline", "--store-dir", execFileSync("pnpm", ["store", "path"], { cwd: root, encoding: "utf8" }).trim()]);
   pnpm(["typecheck"]);
   // Only the project's .env: variables already set would win over it.
   const { DATABASE_URL: _, KASBAH_RPC_URL: __, ...env } = process.env;
-  const started = await run(join(project, "node_modules/.bin/kasbah"), ["start", "app.ts", "--to", "15", "--reset"], { cwd: project, env, encoding: "utf8" });
+  // No app file: the project's kasbah.config.ts, src/index.ts and src/api/index.ts.
+  const started = await run(join(project, "node_modules/.bin/kasbah"), ["start", "--to", "15", "--reset"], { cwd: project, env, encoding: "utf8" });
   expect(started.stdout).toMatch(/backfill done: 16 handled/);
   const p = new pg.Pool({ connectionString: url, max: 1 });
   const rows = (await p.query(`SELECT block, timestamp, amount::text FROM kasbah_test_init.counted ORDER BY block`)).rows;

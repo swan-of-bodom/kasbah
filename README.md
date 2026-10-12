@@ -37,6 +37,12 @@ kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timest
 cd my-indexer && pnpm install && pnpm dev
 ```
 
+A project is laid out like Ponder's: `kasbah.config.ts` (`export default kasbah({ … })`: RPC, database,
+contracts, API), `kasbah.schema.ts` (the tables), `abis/<Contract>.ts`, `src/index.ts` (handlers) and `src/api/index.ts`
+(routes), both starting with `import app from "../kasbah.config.ts"`, so they're typed from the config without any
+code generation. `kasbah dev|start|serve` with no file runs the project in the working directory; with a file,
+a single-file app (`examples/jediswap/index.ts`).
+
 Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the app (`postgres:17`, pulled the
 first time; one container and volume per app directory, on a free localhost port), stopped when `dev` exits, data
 kept for the next run. `start` never does: it needs `DATABASE_URL`.
@@ -109,7 +115,7 @@ kasbah, pack and `pnpm add` the tarball again. `test/package.test.ts` does all o
 ```
 pnpm install
 pnpm test        # all tests; the Postgres ones need DATABASE_URL in .env
-node --env-file=.env --no-warnings examples/ekubo/index.ts --port 42070   # Ekubo: backfill, follow the head, serve the API
+pnpm kasbah start examples/ekubo/kasbah.config.ts --to 300000   # Ekubo: a project like init writes
 # from deployment to block 300,000: 652,647 events, 2.6 min; with timestamps, one header per block with events (79,184)
 pnpm typecheck   # includes the type tests (test/*.test-d.ts) on the real ABIs
 pnpm fixtures    # refetch test/fixtures from mainnet (needs KASBAH_RPC_URL in .env, see .env.example)

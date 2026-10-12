@@ -1,9 +1,10 @@
 #!/usr/bin/env node
-// kasbah init [dir] | kasbah start <app> | kasbah dev <app> | kasbah cache info | kasbah cache clear [--events] [--calls] [--chain <id>]
-// The app module's default export is the value `kasbah(config)` returned, with its handlers registered.
+// kasbah init [dir] | start [app] | dev [app] | serve [app] | cache info | cache clear [--events] [--calls] [--chain <id>]
+// The app module's default export is the value `kasbah(config)` returned. Without an app file, the project's
+// kasbah.config.ts, then its src/index.ts (handlers) and src/api/index.ts (routes), which import it.
 import { type ChildProcess, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readdirSync, readFileSync, watch } from "node:fs";
+import { existsSync, readdirSync, readFileSync, watch } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
@@ -19,13 +20,13 @@ const USAGE = `usage:
   kasbah init [dir]              a new indexer: asks for the RPC, a contract (its ABI and deployment block
                                         are read from the chain), events and Postgres
     [--rpc <url>] [--address <0x…>] [--name <Name>] [--handle <A,B>] [--start <block>] [--database <url>]
-    [--timestamps] [--yes]              answers as flags; --yes takes the defaults, asks nothing
-  kasbah start <app.ts>          index, then follow the head (until --to, or Ctrl-C)
-    [--to <block>] [--reset]
-  kasbah dev <app.ts>            the same, restarted on every file change (a changed build re-indexes);
+    [--timestamps] [--no-ws] [--yes]    answers as flags; --yes takes the defaults, asks nothing
+  kasbah start [app.ts]          index, then follow the head (until --to, or Ctrl-C); without app.ts, the
+    [--to <block>] [--reset]            project here: kasbah.config.ts, src/index.ts and src/api/index.ts
+  kasbah dev [app.ts]            the same, restarted on every file change (a changed build re-indexes);
                                         without DATABASE_URL, a Postgres container (Docker or Podman) for the app
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
-  kasbah serve <app.ts>          the API only, over what an indexer of the app stored (more API processes
+  kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
                                         than indexers, or a finished run)
   kasbah cache info [--chain <id>]
                                         each chain's raw-event and call cache, with its size
@@ -34,10 +35,22 @@ Reads .env from the working directory. The cache commands use DATABASE_URL (or -
 
 type App = { run: (o?: RunOptions) => Promise<void>; serve: () => Promise<{ url: string; close: () => Promise<void> }> };
 
+export const CONFIG = "kasbah.config.ts";
+/** What a project registers on the config's app, imported after it when present. */
+export const PROJECT_FILES = ["src/index.ts", "src/api/index.ts"];
+
+/** The app file given, or the project's config in the working directory. */
+function target(arg: string | undefined): string {
+  if (arg !== undefined) return arg;
+  if (!existsSync(CONFIG)) throw new Error(`no ${CONFIG} here: run it in a project, or pass the app file`);
+  return CONFIG;
+}
+
 async function load(file: string): Promise<App> {
   const mod = (await import(pathToFileURL(resolve(file)).href)) as { default?: unknown };
   const app = mod.default as App | undefined;
-  if (typeof app?.run !== "function") throw new Error(`${file}: the default export must be the app (export default kasbah(config) after its handlers)`);
+  if (typeof app?.run !== "function") throw new Error(`${file}: the default export must be the app (export default kasbah(config))`);
+  if (file.endsWith(CONFIG)) for (const f of PROJECT_FILES.map((f) => join(dirname(resolve(file)), f))) if (existsSync(f)) await import(pathToFileURL(f).href);
   return app;
 }
 
@@ -183,6 +196,7 @@ const { positionals, values } = parseArgs({
     reset: { type: "boolean" },
     dev: { type: "boolean" },
     ui: { type: "boolean" },
+    ws: { type: "boolean" },
     database: { type: "string" },
     events: { type: "boolean" },
     calls: { type: "boolean" },
@@ -202,9 +216,9 @@ const [command, arg] = positionals;
 try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
-  else if (command === "start" && arg !== undefined) await start(arg, { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
-  else if (command === "dev" && arg !== undefined) await dev(arg, values.ui);
-  else if (command === "serve" && arg !== undefined) await serve(arg);
+  else if (command === "start") await start(target(arg), { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
+  else if (command === "dev") await dev(target(arg), values.ui);
+  else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);
   else {
     console.error(USAGE);
