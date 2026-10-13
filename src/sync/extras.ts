@@ -1,8 +1,11 @@
 import type { EventCache } from "../cache.ts";
 import type { RpcClient } from "../rpc/client.ts";
-import type { EmittedEvent, Receipt, Transaction } from "../rpc/methods.ts";
+import type { EmittedEvent } from "../rpc/methods.ts";
+import { type RawReceipt, type RawTransaction, type Receipt, receiptOf, type Transaction, transactionOf } from "../transaction.ts";
 
 export type Extras = { transaction?: Transaction; receipt?: Receipt };
+/** As the node returns them: what the cache keeps. */
+export type RawExtras = { transaction?: RawTransaction; receipt?: RawReceipt };
 /** `block`: the block's header (one per block with such events; free when live). */
 export type Include = { transaction?: boolean; receipt?: boolean; block?: boolean };
 
@@ -25,8 +28,8 @@ export async function fetchExtras(
     w.receipt ||= inc.receipt === true;
     wanted.set(e.transaction_hash, w);
   }
-  const out = new Map<string, Extras>();
-  if (wanted.size === 0) return out;
+  const out = new Map<string, RawExtras>();
+  if (wanted.size === 0) return new Map();
 
   const final = [...wanted].filter(([, w]) => o.isFinal(w.block)).map(([h]) => h);
   if (o.cache !== undefined && final.length > 0) for (const [h, x] of await o.cache.transactions(final)) out.set(h, x);
@@ -37,7 +40,7 @@ export async function fetchExtras(
     if (w.transaction && have?.transaction === undefined) calls.push({ hash, kind: "transaction" });
     if (w.receipt && have?.receipt === undefined) calls.push({ hash, kind: "receipt" });
   }
-  const fetched = new Map<string, Extras>();
+  const fetched = new Map<string, RawExtras>();
   await Promise.all(
     Array.from({ length: Math.ceil(calls.length / 100) }, async (_, i) => {
       const chunk = calls.slice(i * 100, i * 100 + 100);
@@ -47,8 +50,8 @@ export async function fetchExtras(
       })));
       chunk.forEach((c, j) => {
         const x = fetched.get(c.hash) ?? {};
-        if (c.kind === "transaction") x.transaction = results[j] as Transaction;
-        else x.receipt = results[j] as Receipt;
+        if (c.kind === "transaction") x.transaction = results[j] as RawTransaction;
+        else x.receipt = results[j] as RawReceipt;
         fetched.set(c.hash, x);
       });
     }),
@@ -58,5 +61,8 @@ export async function fetchExtras(
     const block = wanted.get(hash)!.block;
     if (o.isFinal(block)) o.cache?.rememberTransaction(hash, block, x);
   }
-  return out;
+  // Converted once per transaction, however many of its events are handled.
+  return new Map(
+    [...out].map(([hash, x]) => [hash, { transaction: x.transaction && transactionOf(x.transaction), receipt: x.receipt && receiptOf(x.receipt) }]),
+  );
 }

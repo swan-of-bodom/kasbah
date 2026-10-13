@@ -96,3 +96,19 @@ routed.get("/swaps/:id", async ({ db, params }) => {
   void db.query.nope;
   return amount;
 });
+
+// include.transaction: the spec's union, narrowed by type and version.
+const withTx = kasbah({ rpc: "", database: "", tables: {}, contracts: { T: { abi: ekubo, address: "0x2", startBlock: 0, include: { transaction: true, receipt: true } } } });
+withTx.on("T:Swapped", ({ event }) => {
+  const tx = event.transaction;
+  // @ts-expect-error not every transaction has a sender (INVOKE v0, L1_HANDLER, DEPLOY*)
+  void tx.senderAddress;
+  if (tx.type === "INVOKE" && tx.version === "0x3") void (tx.resourceBounds.l2Gas.maxPricePerUnit satisfies bigint);
+  if (tx.type === "L1_HANDLER") {
+    void (tx.nonce satisfies bigint);
+    // @ts-expect-error L1 handlers carry no signature
+    void tx.signature;
+  }
+  if (event.receipt.type === "L1_HANDLER") void (event.receipt.messageHash satisfies `0x${string}`);
+  void (event.log.keys[0] satisfies `0x${string}` | undefined);
+});

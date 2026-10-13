@@ -7,7 +7,7 @@ import { Api } from "./api/server.ts";
 import type { EventArgs, EventName } from "./abi/types.ts";
 import type { Client } from "./client.ts";
 import type { Db } from "./db/store.ts";
-import type { Receipt, Transaction } from "./rpc/methods.ts";
+import type { Receipt, Transaction } from "./transaction.ts";
 import { apiUrl, DEFAULT_SCHEMA, run } from "./run.ts";
 import type { Status } from "./status.ts";
 import type { Include } from "./sync/extras.ts";
@@ -88,8 +88,10 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
           address: `0x${string}`;
           /** With `include.block`, the whole header (timestamp, gas prices, …); without, the number and hash the event carries. */
           block: IncludeOf<C, K> extends { block: true } ? Block : { number: number; hash: string | undefined };
-          /** With `include.transaction`, also the transaction's fields as the RPC returns them. */
+          /** With `include.transaction`, the whole `Transaction` (narrow it by `type` and `version`). */
           transaction: { hash: string; index: number } & (IncludeOf<C, K> extends { transaction: true } ? Transaction : {});
+          /** The event as emitted, before decoding: `keys[0]` is the selector of its name. */
+          log: { keys: `0x${string}`[]; data: `0x${string}`[] };
           /** Position of the event in its transaction. */
           index: number;
         } & (IncludeOf<C, K> extends { receipt: true } ? { receipt: Receipt } : {})

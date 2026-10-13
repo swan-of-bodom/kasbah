@@ -7,6 +7,7 @@ import { selector } from "../src/abi/selector.ts";
 import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 import { header } from "./fixtures/header.ts";
+import { invokeReceipt, invokeV3 } from "./fixtures/transaction.ts";
 
 const url = process.env.DATABASE_URL;
 const FACTORY = "0xfac";
@@ -124,8 +125,8 @@ function fakeNode() {
       case "starknet_getTransactionReceipt": {
         const e = blocks.flatMap((b) => b.events).find((x) => x.transaction_hash === params.transaction_hash);
         if (e === undefined) throw { code: 29, message: "Transaction hash not found" };
-        if (method === "starknet_getTransactionByHash") return { transaction_hash: e.transaction_hash, type: "INVOKE", version: "0x3", sender_address: `0x5e${e.transaction_index}`, calldata: [] };
-        return { transaction_hash: e.transaction_hash, type: "INVOKE", actual_fee: { amount: `0x${(e.block_number! * 10 + e.transaction_index).toString(16)}`, unit: "FRI" }, execution_status: "SUCCEEDED", finality_status: "ACCEPTED_ON_L2", events: [e], messages_sent: [], execution_resources: {} };
+        if (method === "starknet_getTransactionByHash") return invokeV3(e.transaction_hash, `0x5e${e.transaction_index}`);
+        return invokeReceipt(e.transaction_hash, { number: e.block_number!, hash: e.block_hash! }, `0x${(e.block_number! * 10 + e.transaction_index).toString(16)}`, [e]);
       }
       case "starknet_getClass":
         // The factory is a Cairo 0 style proxy: its class declares none of the events it emits.
@@ -206,8 +207,11 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
     const header = node.blocks[event.block.number]!;
     if (event.block.timestamp !== 1_000 + event.block.number * 2 || event.block.hash !== header.hash) throw new Error(`block ${event.block.number}: header ${event.block.timestamp} ${event.block.hash}`);
     const v = event.args.amount;
-    const fee = BigInt(event.receipt.actual_fee.amount);
-    await context.db.insert(txs).values({ hash: event.transaction.hash, sender: event.transaction.sender_address!, fee, events: event.receipt.events.length }).onConflictDoNothing();
+    const tx = event.transaction;
+    if (tx.type !== "INVOKE" || tx.version !== "0x3") throw new Error(`not an INVOKE v3: ${tx.type} ${tx.version}`);
+    if (tx.resourceBounds.l2Gas.maxPricePerUnit !== 0x20n || event.receipt.executionResources.l2Gas !== 1_000) throw new Error("transaction or receipt not converted");
+    if (event.log.keys[0] !== event.receipt.events[0]!.keys[0]) throw new Error("event.log is not the emitted event");
+    await context.db.insert(txs).values({ hash: tx.hash, sender: tx.senderAddress, fee: event.receipt.actualFee.amount, events: event.receipt.events.length }).onConflictDoNothing();
     await context.db.insert(pools).values({ address: event.address, total: v, events: 1, created: event.block.number })
       .onConflictDoUpdate((r) => ({ total: r.total + v, events: r.events + 1 }));
   });
@@ -414,12 +418,15 @@ function _types() {
     // @ts-expect-error no receipt without include.receipt
     void event.receipt;
     // @ts-expect-error no transaction fields without include.transaction
-    void event.transaction.sender_address;
+    void event.transaction.senderAddress;
     void event.transaction.hash;
   });
   const both = kasbah({ rpc: "", database: "", contracts: { P: { abi: childA, address: "0x1", startBlock: 0, include: { receipt: true } } }, tables: { pools } });
   both.on("P:Counted", ({ event }) => {
-    const status: "SUCCEEDED" | "REVERTED" = event.receipt.execution_status;
+    const status: "SUCCEEDED" | "REVERTED" = event.receipt.executionStatus;
+    // @ts-expect-error revertReason only once narrowed to REVERTED
+    void event.receipt.revertReason;
+    if (event.receipt.executionStatus === "REVERTED") void (event.receipt.revertReason satisfies string);
     // @ts-expect-error only the receipt was asked for
     void event.transaction.calldata;
     return void status;

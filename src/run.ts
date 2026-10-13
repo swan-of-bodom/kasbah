@@ -508,6 +508,7 @@ class Run {
         ? headers.get(e.block_number!)!
         : { number: e.block_number!, hash: e.block_hash },
       transaction: { ...x?.transaction, hash: e.transaction_hash, index: e.transaction_index },
+      log: { keys: e.keys, data: e.data },
       ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
       index: e.event_index,
     };

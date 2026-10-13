@@ -22,7 +22,7 @@ export {
 export type { Db } from "./db/store.ts";
 export { HttpError, type RouteContext, type RouteHandler } from "./api/routes.ts";
 export type { Block, GasPrice } from "./block.ts";
-export type { Receipt, Transaction } from "./rpc/methods.ts";
+export type { DaMode, Receipt, ResourceBounds, Transaction } from "./transaction.ts";
 export type { Include } from "./sync/extras.ts";
 export { bignum, hex } from "./schema.ts";
 export { type Notice, Status } from "./status.ts";

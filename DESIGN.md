@@ -164,7 +164,12 @@ one `getEvents` per 1,024–10,240 events. So headers are opt-in:
   throttles `getBlockWithTxHashes` to about 20/s whatever the batch size: header backfills go to a paid endpoint.
 
 Transactions and receipts only for handlers that declare they need them (`include: { transaction: true }`), via
-`getTransactionReceipt` or `getBlockWithReceipts` when many events share a block.
+`getTransactionReceipt` or `getBlockWithReceipts` when many events share a block. They're typed
+as the spec's unions (`TXN_WITH_HASH`: 11 shapes by type and version, query versions left out as they never reach
+a chain; `TXN_RECEIPT_WITH_BLOCK_INFO` by type and execution status), camelCase, amounts as bigints, without the
+receipt's `finality_status` (it changes as the block settles, like a header's `status`). The cache keeps the node's
+JSON; it's converted once per transaction. Checked against mainnet samples of 9 kinds (`test/fixtures/
+mainnet-transactions.json`): the node's fields matched the spec's exactly.
 
 ## 6. Following the head
 

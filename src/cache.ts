@@ -4,7 +4,9 @@ import type pg from "pg";
 import { from as copyFrom } from "pg-copy-streams";
 import { quote } from "./db/table.ts";
 import { type Block, blockOf } from "./block.ts";
-import type { BlockHeader, EmittedEvent, Receipt, Transaction } from "./rpc/methods.ts";
+import type { BlockHeader, EmittedEvent } from "./rpc/methods.ts";
+import type { RawExtras } from "./sync/extras.ts";
+import type { RawReceipt, RawTransaction } from "./transaction.ts";
 import type { Batch } from "./sync/fetch.ts";
 
 const hexBytes = (felt: string): Buffer => {
@@ -229,8 +231,8 @@ export class EventCache {
   }
 
   /** Cached transactions and receipts by hash (either may be missing). */
-  async transactions(hashes: string[]): Promise<Map<string, { transaction?: Transaction; receipt?: Receipt }>> {
-    const { rows } = await this.#pool.query<{ hash: string; transaction: Transaction | null; receipt: Receipt | null }>(
+  async transactions(hashes: string[]): Promise<Map<string, RawExtras>> {
+    const { rows } = await this.#pool.query<{ hash: string; transaction: RawTransaction | null; receipt: RawReceipt | null }>(
       `SELECT encode(hash, 'hex') AS hash, transaction, receipt FROM ${this.#schema}.transactions WHERE hash = ANY($1)`,
       [hashes.map(hexBytes)],
     );
@@ -238,7 +240,7 @@ export class EventCache {
   }
 
   /** Keeps a fetched transaction and/or receipt until the next `persist`. */
-  rememberTransaction(hash: string, block: number, x: { transaction?: Transaction; receipt?: Receipt }) {
+  rememberTransaction(hash: string, block: number, x: RawExtras) {
     const transaction = x.transaction === undefined ? null : JSON.stringify(x.transaction);
     const receipt = x.receipt === undefined ? null : JSON.stringify(x.receipt);
     this.#pendingBytes += (transaction?.length ?? 0) + (receipt?.length ?? 0);

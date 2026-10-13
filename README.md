@@ -76,9 +76,11 @@ pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--
 ```
 
 Per contract, optional:
-- `include: { transaction, receipt, block }`: the event's transaction, receipt, and block header (`Block`:
-  timestamp, gas prices, version, counts, commitments), typed only when asked for (one extra call per transaction,
-  or per block with events; cached once final, free for live blocks).
+- `include: { transaction, receipt, block }`: the event's `Transaction`, `Receipt` and block header (`Block`), typed
+  only when asked for (one extra call per transaction, or per block with events; cached once final, free for live
+  blocks). All follow the spec's shapes in camelCase, amounts as bigints, felts as hex; `Transaction` and `Receipt`
+  are unions narrowed by `type`, `version` and `executionStatus`.
+- Every event also has `event.log`: its raw `keys` and `data`, before decoding.
 - `upgradeEvents`: events that announce a class replacement, so the class is read again only when one is emitted.
   `Upgraded`, `ClassHashReplaced` and `ImplementationReplaced` are found in the ABI by default; a contract with none
   is checked at every poll, `[]` never.
