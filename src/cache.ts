@@ -3,7 +3,8 @@ import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import { from as copyFrom } from "pg-copy-streams";
 import { quote } from "./db/table.ts";
-import type { EmittedEvent, Receipt, Transaction } from "./rpc/methods.ts";
+import { type Block, blockOf } from "./block.ts";
+import type { BlockHeader, EmittedEvent, Receipt, Transaction } from "./rpc/methods.ts";
 import type { Batch } from "./sync/fetch.ts";
 
 const hexBytes = (felt: string): Buffer => {
@@ -52,6 +53,8 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE INDEX IF NOT EXISTS calls_seq ON ${s}.calls (seq)`,
   `CREATE TABLE IF NOT EXISTS ${s}.transactions (hash bytea PRIMARY KEY, block integer NOT NULL, transaction jsonb, receipt jsonb)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
+  // The whole header; rows cached before it have none and are fetched again.
+  `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
 ];
 
 const bytea = (b: Buffer) => `\\\\x${b.toString("hex")}`;
@@ -314,19 +317,18 @@ export class EventCache {
     this.#pending = [];
   }
 
-  async headers(numbers: number[]): Promise<Map<number, { hash: string; parent: string; timestamp: number }>> {
-    const { rows } = await this.#pool.query<{ block: number; hash: Buffer; parent: Buffer; timestamp: string }>(
-      `SELECT block, hash, parent, timestamp FROM ${this.#schema}.headers WHERE block = ANY($1)`,
-      [numbers],
-    );
-    return new Map(rows.map((r) => [r.block, { hash: felt(r.hash), parent: felt(r.parent), timestamp: Number(r.timestamp) }]));
+  async headers(numbers: number[]): Promise<Map<number, Block>> {
+    const { rows } = await this.#pool.query<{ header: BlockHeader }>(`SELECT header FROM ${this.#schema}.headers WHERE block = ANY($1) AND header IS NOT NULL`, [numbers]);
+    return new Map(rows.map((r) => [r.header.block_number, blockOf(r.header)]));
   }
 
-  async saveHeaders(headers: { block_number: number; block_hash: string; parent_hash: string; timestamp: number }[]) {
+  async saveHeaders(headers: BlockHeader[]) {
     if (headers.length === 0) return;
     await this.#pool.query(
-      `INSERT INTO ${this.#schema}.headers SELECT * FROM unnest($1::int[], $2::bytea[], $3::bytea[], $4::int8[]) ON CONFLICT DO NOTHING`,
-      [headers.map((h) => h.block_number), headers.map((h) => hexBytes(h.block_hash)), headers.map((h) => hexBytes(h.parent_hash)), headers.map((h) => h.timestamp)],
+      `INSERT INTO ${this.#schema}.headers (block, hash, parent, timestamp, header)
+       SELECT * FROM unnest($1::int[], $2::bytea[], $3::bytea[], $4::int8[], $5::jsonb[])
+       ON CONFLICT (block) DO UPDATE SET header = EXCLUDED.header WHERE headers.header IS NULL`,
+      [headers.map((h) => h.block_number), headers.map((h) => hexBytes(h.block_hash)), headers.map((h) => hexBytes(h.parent_hash)), headers.map((h) => h.timestamp), headers.map((h) => JSON.stringify(h))],
     );
   }
 }

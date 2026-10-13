@@ -6,6 +6,8 @@ import cairo0Pair from "./fixtures/cairo0-0.abi.ts";
 import ekubo from "./fixtures/ekubo-core.abi.ts";
 import strk from "./fixtures/strk.abi.ts";
 import { type Notice, Status } from "../src/status.ts";
+import { blockOf } from "../src/block.ts";
+import { header } from "./fixtures/header.ts";
 
 const config = (reorgWindow?: number): Config => ({
   rpc: "",
@@ -24,7 +26,7 @@ test("planOf: live backfills to the reorg window and reads classes to the tip; a
 });
 
 test("moves: what each commit writes to the meta table and then to memory", () => {
-  const block = { number: 120, hash: "0xb", parent: "0xa", timestamp: 1, events: [] };
+  const block = { ...blockOf(header({ block_hash: "0xb", parent_hash: "0xa", block_number: 120, timestamp: 1 })), events: [] };
   expect(moves({ kind: "children", through: 90, children: [] }, 50)).toEqual({ watermark: 90, phase: "backfill" });
   expect(moves({ kind: "batch", through: 90 }, 90)).toEqual({ checkpoint: 90, phase: "backfill" });
   expect(moves({ kind: "follow", head: { number: 90, hash: "0x9" } }, 90)).toEqual({ phase: "live" });

@@ -1,0 +1,20 @@
+/** A full `getBlockWithTxHashes` result, with the given hashes, number and timestamp. */
+export const header = (o: { block_hash: string; parent_hash: string; block_number: number; timestamp: number }) => ({
+  ...o,
+  status: "ACCEPTED_ON_L2",
+  new_root: "0x1",
+  sequencer_address: "0x2",
+  starknet_version: "0.14.0",
+  l1_gas_price: { price_in_fri: "0x3", price_in_wei: "0x4" },
+  l2_gas_price: { price_in_fri: "0x5", price_in_wei: "0x6" },
+  l1_data_gas_price: { price_in_fri: "0x7", price_in_wei: "0x8" },
+  l1_da_mode: "BLOB" as const,
+  event_commitment: "0x0",
+  transaction_commitment: "0x0",
+  receipt_commitment: "0x0",
+  state_diff_commitment: "0x0",
+  event_count: 0,
+  transaction_count: 0,
+  state_diff_length: 0,
+  transactions: [],
+});

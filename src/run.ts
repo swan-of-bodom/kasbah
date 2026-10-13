@@ -12,6 +12,7 @@ import { CallClient, type Client } from "./client.ts";
 import { type Db, Store } from "./db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
+import { type Block, blockOf } from "./block.ts";
 import { blockNumber, type EmittedEvent, getHeaders } from "./rpc/methods.ts";
 import { type Endpoint, probe } from "./rpc/probe.ts";
 import { canonical, type FactorySource, factoryReader, Sources, upgradeEventsOf, type Watched } from "./sources.ts";
@@ -122,8 +123,7 @@ export async function run(config: Config, handlers: ReadonlyMap<string, AnyHandl
 }
 
 type Factory = FactorySource & { reader: ReturnType<typeof factoryReader> };
-type Header = { hash: string; parent: string; timestamp: number };
-type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Header> };
+type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Block> };
 type BlockSource = BlockConfig & { name: string };
 
 /** What the startup transaction read. */
@@ -374,9 +374,10 @@ class Run {
     this.#final = Math.max(this.#final, block.number - this.#plan.window);
     await this.#s.sources.upgradesIn(block.events, block.number);
     const extras = await this.#extras(block.events);
-    const headers = new Map([[block.number, { hash: block.hash, parent: block.parent, timestamp: block.timestamp }]]);
-    for (const e of block.events) await this.#handle(e, extras, headers);
-    for (const b of this.#s.blockSources) if (firesAt(b, block.number)) await this.#fire(b.name, { number: block.number, hash: block.hash, timestamp: block.timestamp });
+    const { events, ...header } = block;
+    const headers = new Map([[block.number, header]]);
+    for (const e of events) await this.#handle(e, extras, headers);
+    for (const b of this.#s.blockSources) if (firesAt(b, block.number)) await this.#fire(b.name, header);
     await this.#commit({ kind: "block", block, children });
   }
 
@@ -455,8 +456,7 @@ class Run {
     let i = 0;
     const fireUntil = async (block: number) => {
       for (; i < fires.length && fires[i]!.number < block; i++) {
-        const h = headers.get(fires[i]!.number)!;
-        await this.#fire(fires[i]!.source, { number: fires[i]!.number, hash: h.hash, timestamp: h.timestamp });
+        await this.#fire(fires[i]!.source, headers.get(fires[i]!.number)!);
       }
     };
     for (const e of batch.events) {
@@ -475,7 +475,7 @@ class Run {
   /** What a batch's handlers need besides its events: transactions, receipts, and headers for `include.block`. */
   async #prefetch(events: EmittedEvent[]): Promise<Prefetched> {
     const blocks = this.#anyBlock ? events.filter((e) => this.#includeOf(e)?.block).map((e) => e.block_number!) : [];
-    const [extras, headers] = await Promise.all([this.#extras(events), blocks.length > 0 ? this.#headers(blocks) : new Map<number, Header>()]);
+    const [extras, headers] = await Promise.all([this.#extras(events), blocks.length > 0 ? this.#headers(blocks) : new Map<number, Block>()]);
     return { extras, headers };
   }
 
@@ -490,7 +490,7 @@ class Run {
   }
 
   /** Decodes `e` with its address's class at that block and runs its handler, if any. */
-  async #handle(e: EmittedEvent, extras: Map<string, Extras>, headers: Map<number, Header>): Promise<void> {
+  async #handle(e: EmittedEvent, extras: Map<string, Extras>, headers: Map<number, Block>): Promise<void> {
     const w = this.#watchedOf(e);
     if (w === undefined || e.block_number! < w.from) return;
     const decoded = w.decode(e.block_number!, e.keys, e.data);
@@ -505,7 +505,7 @@ class Run {
       args: decoded.args,
       address: padded(e.from_address),
       block: this.#s.config.contracts[w.contract]!.include?.block
-        ? { number: e.block_number!, hash: headers.get(e.block_number!)!.hash, timestamp: headers.get(e.block_number!)!.timestamp }
+        ? headers.get(e.block_number!)!
         : { number: e.block_number!, hash: e.block_hash },
       transaction: { ...x?.transaction, hash: e.transaction_hash, index: e.transaction_index },
       ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
@@ -535,13 +535,13 @@ class Run {
   }
 
   /** Headers for block handlers: the cache's, then RPC (final ones saved to the shared cache, outside any commit). */
-  async #headers(numbers: number[]): Promise<Map<number, Header>> {
+  async #headers(numbers: number[]): Promise<Map<number, Block>> {
     const { cache, rpc } = this.#s;
     const unique = [...new Set(numbers)];
-    const found = (await cache?.headers(unique)) ?? new Map<number, Header>();
+    const found = (await cache?.headers(unique)) ?? new Map<number, Block>();
     const fetched = await getHeaders(rpc, unique.filter((n) => !found.has(n)), 100);
     await cache?.saveHeaders(fetched.filter((h) => h.block_number <= this.#plan.backfillTo));
-    for (const h of fetched) found.set(h.block_number, { hash: h.block_hash, parent: h.parent_hash, timestamp: h.timestamp });
+    for (const h of fetched) found.set(h.block_number, blockOf(h));
     return found;
   }
 

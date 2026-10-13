@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { selector } from "../../src/abi/selector.ts";
+import { header } from "./header.ts";
 
 /** A contract emitting `Counted { amount: n + 1 }` in every block `n` of a chain of `blocks` blocks. */
 export const counterAbi = [
@@ -32,7 +33,7 @@ export function counterNode(blocks: number) {
           case "starknet_getBlockWithTxHashes": {
             const n = params.block_id.block_number;
             if (n >= BLOCKS) return { jsonrpc: "2.0", id, error: { code: 24, message: "Block not found" } };
-            return ok({ block_hash: hash(n), parent_hash: n === 0 ? "0x0" : hash(n - 1), block_number: n, timestamp: 1_000 + n, status: "ACCEPTED_ON_L2", transactions: [] });
+            return ok(header({ block_hash: hash(n), parent_hash: n === 0 ? "0x0" : hash(n - 1), block_number: n, timestamp: 1_000 + n }));
           }
           case "starknet_getClassHashAt": return ok("0xca");
           case "starknet_getClass": return ok({ abi: JSON.stringify(abi) });

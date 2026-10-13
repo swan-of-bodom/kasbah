@@ -22,12 +22,28 @@ export type EventFilter = {
   keys?: string[][];
 };
 
+type ResourcePrice = { price_in_fri: string; price_in_wei: string };
+
+/** `BLOCK_HEADER` as the node returns it (spec 0.10), without the block's `status`, which changes as it settles. */
 export type BlockHeader = {
   block_hash: string;
   parent_hash: string;
   block_number: number;
+  new_root: string;
   timestamp: number;
-  status: string;
+  sequencer_address: string;
+  l1_gas_price: ResourcePrice;
+  l2_gas_price: ResourcePrice;
+  l1_data_gas_price: ResourcePrice;
+  l1_da_mode: "BLOB" | "CALLDATA";
+  starknet_version: string;
+  event_commitment: string;
+  transaction_commitment: string;
+  receipt_commitment: string;
+  state_diff_commitment: string;
+  event_count: number;
+  transaction_count: number;
+  state_diff_length: number;
 };
 
 export const getEvents = (rpc: RpcClient, filter: EventFilter, chunkSize: number, token?: string) =>
@@ -39,9 +55,9 @@ export const blockNumber = (rpc: RpcClient) => rpc.request<number>("starknet_blo
 
 export const specVersion = (rpc: RpcClient) => rpc.request<string>("starknet_specVersion", []);
 
-/** Headers for many blocks, `batchSize` calls per HTTP request. The transaction hash list is dropped. */
+/** Headers for many blocks, `batchSize` calls per HTTP request. The transaction hash list and status are dropped. */
 export async function getHeaders(rpc: RpcClient, numbers: number[], batchSize: number): Promise<BlockHeader[]> {
-  const requests: Promise<(BlockHeader & { transactions?: unknown })[]>[] = [];
+  const requests: Promise<(BlockHeader & { transactions?: unknown; status?: string })[]>[] = [];
   for (let i = 0; i < numbers.length; i += batchSize) {
     const calls = numbers.slice(i, i + batchSize).map((n) => ({
       method: "starknet_getBlockWithTxHashes",
@@ -49,13 +65,7 @@ export async function getHeaders(rpc: RpcClient, numbers: number[], batchSize: n
     }));
     requests.push(rpc.batch(calls));
   }
-  return (await Promise.all(requests)).flat().map(({ block_hash, parent_hash, block_number, timestamp, status }) => ({
-    block_hash,
-    parent_hash,
-    block_number,
-    timestamp,
-    status,
-  }));
+  return (await Promise.all(requests)).flat().map(({ transactions: _, status: __, ...header }) => header);
 }
 
 /** A transaction as `starknet_getTransactionByHash` returns it (spec 0.10). Felts stay hex strings. */

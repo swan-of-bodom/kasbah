@@ -1,5 +1,5 @@
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
-import { createDecoder, type EventArgs, type EventName, type IndexedEvent, kasbah, type TypeOf } from "../src/index.ts";
+import { createDecoder, type EventArgs, type EventName, type IndexedEvent, type Block, kasbah, type TypeOf } from "../src/index.ts";
 import cairo0Pair from "./fixtures/cairo0-0.abi.ts";
 import ekubo from "./fixtures/ekubo-core.abi.ts";
 import strk from "./fixtures/strk.abi.ts";
@@ -68,14 +68,15 @@ assert<Equal<FunctionResult<typeof ekubo, "get_pool_liquidity">, bigint>>();
 assert<Equal<FunctionResult<typeof cairo0Pair, "getReserves">, { reserve0: bigint; reserve1: bigint; blockTimestampLast: bigint }>>();
 assert<Equal<FunctionArgs<typeof cairo0Pair, "getReserves">, {}>>();
 
-// include.block adds the block's timestamp, and its hash is then always known.
+// include.block adds the whole header, and its hash is then always known.
 const config = {
   rpc: "", database: "", tables: {},
   contracts: { Plain: { abi: ekubo, address: "0x1", startBlock: 0 }, Timed: { abi: ekubo, address: "0x2", startBlock: 0, include: { block: true } } },
 } as const;
 type Cfg = typeof config;
 assert<Equal<IndexedEvent<Cfg, "Plain:Swapped">["block"], { number: number; hash: string | undefined }>>();
-assert<Equal<IndexedEvent<Cfg, "Timed:Swapped">["block"], { number: number; hash: string; timestamp: number }>>();
+assert<Equal<IndexedEvent<Cfg, "Timed:Swapped">["block"], Block>>();
+kasbah(config).on("Timed:Swapped", ({ event }) => void (event.block.l2GasPrice.fri satisfies bigint));
 kasbah(config).on("Timed:Swapped", ({ event }) => void event.block.timestamp);
 // @ts-expect-error: no timestamp without include.block
 kasbah(config).on("Plain:Swapped", ({ event }) => void event.block.timestamp);

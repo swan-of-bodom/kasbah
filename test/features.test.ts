@@ -6,6 +6,7 @@ import { WebSocketServer } from "ws";
 import { selector } from "../src/abi/selector.ts";
 import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
+import { header } from "./fixtures/header.ts";
 
 const url = process.env.DATABASE_URL;
 const FACTORY = "0xfac";
@@ -98,7 +99,7 @@ function fakeNode() {
         return { block_hash: blocks.at(-1)!.hash, block_number: blocks.length - 1 };
       case "starknet_getBlockWithTxHashes": {
         const b = blocks[at(params)]!;
-        return { block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: 1_000 + b.number * 2, status: "ACCEPTED_ON_L2", transactions: [] };
+        return header({ block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: 1_000 + b.number * 2 });
       }
       case "starknet_getStateUpdate": {
         const n = at(params);

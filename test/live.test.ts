@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import { RpcError, type RpcClient } from "../src/rpc/client.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 import { type BlockRef, follow } from "../src/sync/live.ts";
+import { header } from "./fixtures/header.ts";
 
 type Block = { number: number; hash: string; parent: string; events: EmittedEvent[] };
 
@@ -48,7 +49,7 @@ function fakeChain(seed: number) {
       return calls.map(({ params }) => {
         const b = (rand() < 0.1 ? blocks.slice(0, -1) : view())[params.block_id.block_number];
         if (b === undefined) throw new RpcError("starknet_getBlockWithTxHashes", 24, "Block not found");
-        return { block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: 0, status: "ACCEPTED_ON_L2" };
+        return header({ block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: 0 });
       });
     },
   };
@@ -67,9 +68,9 @@ test.each([1, 2, 3, 4, 5])("follows growth and reorgs to the canonical chain (se
     rpc: chain.rpc, address: "0x1", chunkSize: 100, head, known, pollMs: 1, signal: stop.signal,
     onBlock: async (b) => {
       expect(b.number).toBe(applied.length);
-      expect(b.parent).toBe(applied.at(-1)!.hash);
+      expect(b.parentHash).toBe(applied.at(-1)!.hash);
       expect(b.events.every((e) => e.block_hash === b.hash)).toBe(true);
-      applied.push({ number: b.number, hash: b.hash, parent: b.parent, events: b.events });
+      applied.push({ number: b.number, hash: b.hash, parent: b.parentHash, events: b.events });
       known.set(b.number, b.hash);
     },
     onReorg: async (a) => {

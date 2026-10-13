@@ -1,3 +1,4 @@
+import type { Block } from "./block.ts";
 import type { Relations } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { Abi } from "./abi/abi.ts";
@@ -19,7 +20,7 @@ export type ContractConfig = {
   startBlock: number;
   /**
    * Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final), and/or
-   * its block's timestamp (one header per block with events, cached when final).
+   * its block's header, `Block` (one per block with events, cached when final).
    */
   include?: Include;
   /**
@@ -73,7 +74,7 @@ type EventHandlerName<C extends Config> = {
 
 export type HandlerName<C extends Config> = EventHandlerName<C> | `${keyof Blocks<C> & string}:block`;
 
-export type IndexedBlock<K extends string = string> = { source: K; block: { number: number; hash: string; timestamp: number } };
+export type IndexedBlock<K extends string = string> = { source: K; block: Block };
 
 type IncludeOf<C extends Config, K extends keyof Contracts<C>> = Contracts<C>[K] extends { include: infer I } ? I : {};
 
@@ -85,8 +86,8 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
           name: E;
           args: EventArgs<Contracts<C>[K]["abi"], E>;
           address: `0x${string}`;
-          /** With `include.block`, also the block's timestamp (and its hash, always known then). */
-          block: IncludeOf<C, K> extends { block: true } ? { number: number; hash: string; timestamp: number } : { number: number; hash: string | undefined };
+          /** With `include.block`, the whole header (timestamp, gas prices, …); without, the number and hash the event carries. */
+          block: IncludeOf<C, K> extends { block: true } ? Block : { number: number; hash: string | undefined };
           /** With `include.transaction`, also the transaction's fields as the RPC returns them. */
           transaction: { hash: string; index: number } & (IncludeOf<C, K> extends { transaction: true } ? Transaction : {});
           /** Position of the event in its transaction. */

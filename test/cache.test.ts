@@ -1,7 +1,8 @@
 import pg from "pg";
 import { afterAll, expect, test } from "vitest";
 import { EventCache, packFelts, unpackFelts } from "../src/cache.ts";
-import type { EmittedEvent } from "../src/rpc/methods.ts";
+import type { BlockHeader, EmittedEvent } from "../src/rpc/methods.ts";
+import { header } from "./fixtures/header.ts";
 
 const url = process.env.DATABASE_URL;
 const CHAIN = "0x7e57";
@@ -99,4 +100,22 @@ test.skipIf(url === undefined)("call results: kept up to the cap, oldest dropped
   expect(info.bytes).toBeGreaterThan(0);
   await EventCache.clear(pool, { calls: true }, CHAIN);
   expect((await EventCache.info(pool, CHAIN)).find((i) => i.schema === `kasbah_cache_${CHAIN}`)!.calls).toBe(0);
+});
+
+test.skipIf(url === undefined)("headers: the whole header round-trips; rows cached with only a timestamp are fetched again", async () => {
+  pool ??= new pg.Pool({ connectionString: url, max: 2 });
+  const cache = await EventCache.open(pool, CHAIN);
+  const s = `kasbah_cache_${CHAIN}`;
+  await pool.query(`DELETE FROM ${s}.headers`);
+  const { transactions: _, status: __, ...h } = header({ block_hash: "0xb7", parent_hash: "0xb6", block_number: 7, timestamp: 1_700_000_000 });
+  const full: BlockHeader = { ...h, l2_gas_price: { price_in_fri: "0x4d0f395fc", price_in_wei: "0x6047f" } };
+  // An old row, from before the header column.
+  await pool.query(`INSERT INTO ${s}.headers (block, hash, parent, timestamp) VALUES (8, '\\x08', '\\x07', 1)`);
+  expect([...(await cache.headers([7, 8])).keys()]).toEqual([]);
+
+  await cache.saveHeaders([full, { ...full, block_number: 8, block_hash: "0xb8", parent_hash: "0xb7" }]);
+  const found = await cache.headers([7, 8]);
+  expect(found.get(7)).toMatchObject({ number: 7, hash: "0xb7", parentHash: "0xb6", timestamp: 1_700_000_000, l1DaMode: "BLOB", starknetVersion: "0.14.0" });
+  expect(found.get(7)!.l2GasPrice).toEqual({ fri: 0x4d0f395fcn, wei: 0x6047fn });
+  expect(found.get(8)!.hash).toBe("0xb8");
 });

@@ -3,7 +3,7 @@ import type { RpcClient } from "../rpc/client.ts";
 import type { EmittedEvent, Receipt, Transaction } from "../rpc/methods.ts";
 
 export type Extras = { transaction?: Transaction; receipt?: Receipt };
-/** `block`: the block's timestamp and hash (one header per block with such events; free when live). */
+/** `block`: the block's header (one per block with such events; free when live). */
 export type Include = { transaction?: boolean; receipt?: boolean; block?: boolean };
 
 /**

@@ -6,6 +6,7 @@ import { selector } from "../src/abi/selector.ts";
 import { liveChannel } from "../src/api/server.ts";
 import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
+import { header } from "./fixtures/header.ts";
 
 const url = process.env.DATABASE_URL;
 const schema = "kasbah_test_app";
@@ -58,10 +59,10 @@ function fakeNode() {
     for (let i = 0; i < depth; i++) add();
   };
 
-  const header = (n: number) => {
+  const headerAt = (n: number) => {
     const b = blocks[n];
     if (b === undefined) throw { code: 24, message: "Block not found" };
-    return { block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: n, status: "ACCEPTED_ON_L2", transactions: [] };
+    return header({ block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: n });
   };
   const calls = new Map<string, number>();
   const call = (method: string, params: any): unknown => {
@@ -78,7 +79,7 @@ function fakeNode() {
       case "starknet_blockHashAndNumber":
         return { block_hash: blocks.at(-1)!.hash, block_number: blocks.length - 1 };
       case "starknet_getBlockWithTxHashes":
-        return header(params.block_id.block_number);
+        return headerAt(params.block_id.block_number);
       case "starknet_getClassHashAt": {
         const n = params.block_id.block_number;
         if (n > blocks.length - 1) throw { code: 24, message: "Block not found" };

@@ -157,6 +157,9 @@ one `getEvents` per 1,024–10,240 events. So headers are opt-in:
   `event.block.timestamp` exists only then), the backfill fetches the headers of its blocks with events together
   with the batch's transactions, through the shared cache when final; live blocks already have theirs, so it's
   free there. (Not built: recording which fields handlers read, Ponder's column-access proxy.)
+  `event.block` is the whole `BLOCK_HEADER` (`Block`, camelCase, gas prices as bigints, no `status`, which
+  changes as the block settles): the same call returns it, so it costs nothing more. The cache keeps it as jsonb;
+  rows cached with only a timestamp are fetched again. Blocks older than a field have `0x0`, `0` or `""` there.
 - Headers are fetched in JSON-RPC batches of 100 (Alchemy: 835/s unbatched, 7,840/s batched). PublicNode
   throttles `getBlockWithTxHashes` to about 20/s whatever the batch size: header backfills go to a paid endpoint.
 
