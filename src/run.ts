@@ -17,7 +17,7 @@ import { type Endpoint, probe } from "./rpc/probe.ts";
 import { canonical, type FactorySource, factoryReader, Sources, upgradeEventsOf, type Watched } from "./sources.ts";
 import { Status } from "./status.ts";
 import { type Extras, fetchExtras } from "./sync/extras.ts";
-import { type Batch, eventStream } from "./sync/fetch.ts";
+import { type Batch, eventStream, type FetchGauges } from "./sync/fetch.ts";
 import { HeadSubscription } from "./sync/heads.ts";
 import { type BlockRef, findAncestor, follow, type LiveBlock } from "./sync/live.ts";
 
@@ -299,10 +299,9 @@ class Run {
     let through = first - 1;
     let since = 0;
     const batches = this.#fetch(sources.addresses, sources.keys, first, to, true);
-    let idle = performance.now();
-    // Transactions and receipts of the next batch are fetched while this one is handled.
-    for await (const [batch, pre] of ahead(this.#anyInclude || this.#anyBlock ? slices(batches, 2_000) : batches, (b) => this.#prefetch(b.events))) {
-      status.time.fetch += performance.now() - idle;
+    // Headers, transactions and receipts of the next batch are fetched while this one is handled.
+    const waited = (what: "events" | "extras", ms: number) => (what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms));
+    for await (const [batch, pre] of ahead(this.#anyInclude || this.#anyBlock ? slices(batches, 2_000) : batches, (b) => this.#prefetch(b.events), waited)) {
       since += await this.#handleBatch(through + 1, batch, pre);
       through = batch.through;
       status.range.through = through;
@@ -311,7 +310,6 @@ class Run {
         await this.#commit({ kind: "batch", through });
         since = 0;
       }
-      idle = performance.now();
     }
     if (!signal.aborted) through = to;
     // What was handled since the last commit: nothing when the last batch (through `to`) just committed.
@@ -353,7 +351,10 @@ class Run {
     status.note({ kind: "following", block: last });
     const pollMs = config.pollMs ?? 2_000;
     const heads = config.ws === undefined ? undefined : new HeadSubscription(config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws, (n) => status.note(n));
-    if (heads !== undefined) closers.push(() => heads.close());
+    if (heads !== undefined) {
+      closers.push(() => heads.close());
+      status.head = () => heads.last;
+    }
     /** Children created in the blocks of the current tick, by block: committed with their block. */
     let children = new Map<number, Watched[]>();
     await follow({
@@ -438,10 +439,12 @@ class Run {
       if (start <= to) cache.track(addresses, keys[0]!, start);
     }
     if (start > to) return;
-    for await (const batch of eventStream({ rpc, address: addresses, keys, from: start, to, chunkSize: endpoint.maxChunk, concurrency: config.concurrency ?? 32 })) {
+    const gauges = (read: () => FetchGauges) => (this.#s.status.fetcher = read);
+    for await (const batch of eventStream({ rpc, address: addresses, keys, from: start, to, chunkSize: endpoint.maxChunk, concurrency: config.concurrency ?? 32, gauges })) {
       cache?.add(batch.events);
       yield batch;
     }
+    this.#s.status.fetcher = undefined;
   }
 
   /** Handles one backfill batch: events and the block handlers due in `[from, batch.through]`, in block order. Returns how many. */
@@ -761,16 +764,32 @@ async function* slices(source: AsyncIterable<Batch>, max: number): AsyncGenerato
   }
 }
 
-/** Yields each item with `prepare(item)`, preparing the next item while the caller handles this one. */
-async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Promise<U>): AsyncGenerator<[T, U]> {
+/**
+ * Yields each item with `prepare(item)`, preparing the next item while the caller handles this one. `waited` gets
+ * the time the caller waited for the source and, after that, for `prepare`.
+ */
+async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Promise<U>, waited: (what: "events" | "extras", ms: number) => void): AsyncGenerator<[T, U]> {
   let pending: Promise<[T, U]> | undefined;
+  let t = performance.now();
+  const ready = async (p: Promise<[T, U]>) => {
+    const r = await p;
+    const now = performance.now();
+    waited("extras", now - t);
+    return r;
+  };
   for await (const item of source) {
+    const now = performance.now();
+    waited("events", now - t);
+    t = now;
     const next = prepare(item).then((u): [T, U] => [item, u]);
     next.catch(() => {});
-    if (pending !== undefined) yield await pending;
+    if (pending !== undefined) {
+      yield await ready(pending);
+      t = performance.now();
+    }
     pending = next;
   }
-  if (pending !== undefined) yield await pending;
+  if (pending !== undefined) yield await ready(pending);
 }
 
 const paddedCache = new Map<string, `0x${string}`>();

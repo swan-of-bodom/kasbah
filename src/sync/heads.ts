@@ -7,6 +7,8 @@ export class HeadSubscription {
   /** Connected and subscribed. */
   healthy = false;
   readonly stats = { heads: 0, connects: 0 };
+  /** The newest head announced, and when it arrived (ms since the epoch). */
+  last: { number: number; timestamp: number; at: number } | undefined;
   readonly #url: string;
   readonly #note: (n: SocketNote) => void;
   #socket: WebSocket | undefined;
@@ -65,7 +67,7 @@ export class HeadSubscription {
     let subscription: string | undefined;
     ws.onopen = () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "starknet_subscribeNewHeads", params: {} }));
     ws.onmessage = (m) => {
-      let msg: { id?: number; result?: unknown; error?: { message: string }; method?: string; params?: { subscription_id?: string } };
+      let msg: { id?: number; result?: unknown; error?: { message: string }; method?: string; params?: { subscription_id?: string; result?: { block_number?: number; timestamp?: number } } };
       try {
         msg = JSON.parse(String(m.data));
       } catch {
@@ -88,7 +90,11 @@ export class HeadSubscription {
         return;
       }
       // New heads and reorg notices both mean "look again"; the follower checks hashes either way.
-      if (msg.method?.startsWith("starknet_subscription") && (subscription === undefined || msg.params?.subscription_id === undefined || msg.params.subscription_id === subscription)) this.#wake();
+      if (msg.method?.startsWith("starknet_subscription") && (subscription === undefined || msg.params?.subscription_id === undefined || msg.params.subscription_id === subscription)) {
+        const h = msg.params?.result;
+        if (typeof h?.block_number === "number" && typeof h.timestamp === "number" && h.block_number > (this.last?.number ?? -1)) this.last = { number: h.block_number, timestamp: h.timestamp, at: Date.now() };
+        this.#wake();
+      }
     };
     ws.onerror = () => {};
     ws.onclose = () => {

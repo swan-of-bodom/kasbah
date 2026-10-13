@@ -26,6 +26,7 @@ const USAGE = `usage:
   kasbah dev [app.ts]            the same, restarted on every file change (a changed build re-indexes);
                                         without DATABASE_URL, a Postgres container (Docker or Podman) for the app
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
+  --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
                                         than indexers, or a finished run)
   kasbah cache info [--chain <id>]
@@ -66,8 +67,9 @@ function sourceHash(file: string): string {
   return h.digest("hex").slice(0, 16);
 }
 
-async function start(file: string, o: { to?: number; reset?: boolean; dev?: boolean; ui?: boolean }) {
+async function start(file: string, o: { to?: number; reset?: boolean; dev?: boolean; ui?: boolean; debug?: boolean }) {
   const status = (o.ui ?? (o.dev && process.stdout.isTTY)) ? new Status() : undefined;
+  if (status !== undefined) status.debug = o.debug === true;
   const screen = status === undefined ? undefined : new Screen(status);
   screen?.start();
   try {
@@ -87,7 +89,7 @@ async function start(file: string, o: { to?: number; reset?: boolean; dev?: bool
  * Runs `start --dev` in a child process and restarts it on changes under the app's directory. Without
  * `DATABASE_URL`, a Postgres container for the app, stopped (data kept) when `dev` exits.
  */
-async function dev(file: string, ui: boolean | undefined) {
+async function dev(file: string, ui: boolean | undefined, debug: boolean | undefined) {
   const log = (line: string) => console.log(`[kasbah dev] ${line}`);
   let db: DevDatabase | undefined;
   if (process.env.DATABASE_URL === undefined) {
@@ -98,7 +100,7 @@ async function dev(file: string, ui: boolean | undefined) {
   let child: ChildProcess | undefined;
   let exited: Promise<void> = Promise.resolve();
   const launch = () => {
-    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev", ...(ui === undefined ? [] : [ui ? "--ui" : "--no-ui"])], { stdio: "inherit" });
+    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev", ...(ui === undefined ? [] : [ui ? "--ui" : "--no-ui"]), ...(debug ? ["--debug"] : [])], { stdio: "inherit" });
     child = c;
     exited = new Promise((r) =>
       c.once("exit", (code, signal) => {
@@ -196,6 +198,7 @@ const { positionals, values } = parseArgs({
     reset: { type: "boolean" },
     dev: { type: "boolean" },
     ui: { type: "boolean" },
+    debug: { type: "boolean" },
     ws: { type: "boolean" },
     database: { type: "string" },
     events: { type: "boolean" },
@@ -216,8 +219,8 @@ const [command, arg] = positionals;
 try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
-  else if (command === "start") await start(target(arg), { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui });
-  else if (command === "dev") await dev(target(arg), values.ui);
+  else if (command === "start") await start(target(arg), { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui, debug: values.debug });
+  else if (command === "dev") await dev(target(arg), values.ui, values.debug);
   else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);
   else {

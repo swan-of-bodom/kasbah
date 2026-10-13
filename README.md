@@ -69,6 +69,7 @@ pnpm kasbah dev app.ts       # index, follow the head, restart on every change (
                              # with `api`, GraphiQL at http://localhost:<port>/graphql in a browser
                              # with a progress screen in a terminal: phase, time left, where the time goes,
                              # handlers by time spent, RPC and cache; --no-ui for plain logs, start --ui for it
+                             # --debug adds the fetcher's state, waits and event loop delay
 pnpm kasbah start app.ts     # the same without watching; refuses a schema holding another build
 pnpm kasbah serve app.ts     # the API alone over what a run stored (a finished --to run, or more API processes)
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`

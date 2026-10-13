@@ -121,6 +121,12 @@ export function render(status: Status, { width = 100, color = false, now = perfo
       const l = status.live;
       const behind = l.timestamp > 0 ? `${p.bold(`${(Date.now() / 1000 - l.timestamp).toFixed(1)}s`)} behind the chain` : p.dim("waiting for a block");
       split(`block ${p.bold(thousands(l.block))} · ${behind}`, l.at > 0 ? p.dim(`last block ${duration((Date.now() - l.at) / 1000)} ago, ${plural(l.events, "event")}`) : "");
+      // Where the delay comes from: the node announcing the head after its timestamp, then us handling it.
+      const head = status.head?.();
+      if (head !== undefined && head.number === l.block && l.at > 0) {
+        const node = head.at / 1000 - head.timestamp;
+        label("delay", `${p.bold(`${node.toFixed(1)}s`)} block timestamp → node announced it ${p.dim("·")} ${p.bold(micros(Math.max(0, l.at - head.at)))} announced → committed`);
+      }
       label("reorgs", l.reorgs === 0 ? p.dim("none") : p.yellow(thousands(l.reorgs)));
       rate("events/s");
       break;
@@ -133,18 +139,25 @@ export function render(status: Status, { width = 100, color = false, now = perfo
       break;
   }
 
+  const recent = status.recent(now);
   const t = status.time;
-  const total = t.fetch + t.handlers + t.commit;
+  const total = t.fetch + t.extras + t.handlers + t.commit;
   if (total > 1000 && (status.phase === "factories" || status.phase === "backfill" || status.phase === "keys")) {
     line();
     const w = 30;
     const seg = (x: number) => Math.round((x / total) * w);
-    const [f, h] = [seg(t.fetch), seg(t.handlers)];
-    const c = Math.max(0, w - f - h);
-    const share = (x: number) => `${Math.round((x / total) * 100)}%`;
-    label("time", `${p.blue("█".repeat(f))}${p.magenta("█".repeat(h))}${p.yellow("█".repeat(c))}  ${p.blue("■")} fetch ${share(t.fetch)}  ${p.magenta("■")} handlers ${share(t.handlers)}  ${p.yellow("■")} commits ${share(t.commit)}`);
-    const top = Math.max(t.fetch, t.handlers, t.commit);
-    const bound = top / total < 0.5 ? "no single bottleneck" : top === t.fetch ? "bound by fetching (RPC or cache)" : top === t.handlers ? "bound by handlers" : "bound by commits (database)";
+    const [f, x, h] = [seg(t.fetch), seg(t.extras), seg(t.handlers)];
+    const c = Math.max(0, w - f - x - h);
+    const share = (v: number) => `${Math.round((v / total) * 100)}%`;
+    const extras = t.extras > 0 ? `  ${p.cyan("■")} headers/txs ${share(t.extras)}` : "";
+    label("time", `${p.blue("█".repeat(f))}${p.cyan("█".repeat(x))}${p.magenta("█".repeat(h))}${p.yellow("█".repeat(c))}  ${p.blue("■")} events ${share(t.fetch)}${extras}  ${p.magenta("■")} handlers ${share(t.handlers)}  ${p.yellow("■")} commits ${share(t.commit)}`);
+    const top = Math.max(t.fetch, t.extras, t.handlers, t.commit);
+    const bound =
+      top / total < 0.5 ? "no single bottleneck"
+      : top === t.fetch ? "bound by fetching events (RPC or cache)"
+      : top === t.extras ? "bound by fetching headers and transactions (include)"
+      : top === t.handlers ? "bound by handlers"
+      : "bound by commits (database)";
     const commit = status.lastCommit.ms > 0 ? ` · last commit ${micros(status.lastCommit.ms)}${status.lastCommit.tables > 0 ? ` (tables ${micros(status.lastCommit.tables)})` : ""}` : "";
     label("", p.dim(`${bound}${commit}`));
   }
@@ -166,8 +179,18 @@ export function render(status: Status, { width = 100, color = false, now = perfo
   line();
   if (status.rpc !== undefined) {
     const s = status.rpc;
-    const trouble = [s.retries > 0 ? p.yellow(`${thousands(s.retries)} retries`) : "", s.throttled > 0 ? p.yellow(`${thousands(s.throttled)} throttled`) : ""].filter(Boolean);
-    label("rpc", [`${thousands(s.requests)} requests`, `${thousands(s.calls)} calls`, `${bytes(s.bytes)} in`, `${thousands(status.rate())} calls/s max`, ...trouble].join(p.dim(" · ")));
+    const trouble = [
+      s.retries > 0 ? p.yellow(`${thousands(s.retries)} retries`) : "",
+      s.throttled > 0 ? p.yellow(`${thousands(s.throttled)} throttled`) : "",
+      s.timeouts > 0 ? p.yellow(`${thousands(s.timeouts)} timeouts`) : "",
+      s.failed > 0 ? p.yellow(`${thousands(s.failed)} failed`) : "",
+    ].filter(Boolean);
+    label("rpc", [`${thousands(s.requests)} requests`, `${thousands(s.calls)} calls`, `${bytes(s.bytes)} in`, ...trouble].join(p.dim(" · ")));
+    const max = status.rate();
+    const atLimit = max > 0 && recent.callsPerSecond >= 0.9 * max;
+    label("", `${thousands(recent.callsPerSecond)}/s now of ${thousands(max)} calls/s max${atLimit ? p.yellow(" · at the limit: more concurrency won't help") : ""}`);
+    const minute = [["throttled", recent.throttled], ["timeouts", recent.timeouts], ["failed", recent.failed]] as const;
+    label("", minute.every(([, n]) => n === 0) ? p.dim("last minute: no throttling, timeouts or failed requests") : `last minute: ${minute.map(([k, n]) => (n > 0 ? p.yellow(`${thousands(n)} ${k}`) : p.dim(`0 ${k}`))).join(p.dim(" · "))}`);
     const methods = Object.entries(s.methods).sort((a, b) => b[1] - a[1]);
     if (methods.length > 0) {
       const shown = methods.slice(0, 3).map(([m, n]) => `${m.replace(/^starknet_/, "")} ${compact(n)}`);
@@ -179,6 +202,20 @@ export function render(status: Status, { width = 100, color = false, now = perfo
   }
   if (status.calls !== undefined && status.calls.calls + status.calls.cached > 0) {
     label("reads", `${thousands(status.calls.calls + status.calls.cached)} contract reads · ${thousands(status.calls.cached)} cached`);
+  }
+  if (status.debug) {
+    line();
+    line(p.dim("DEBUG"));
+    const g = status.fetcher?.();
+    if (g !== undefined) {
+      label("buffer", `${compact(g.buffered)} / ${compact(g.maxBuffered)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`);
+      label("windows", `${g.running} running · ${g.paused} paused · ${g.done} done, not read · ${g.idleWorkers} idle workers ${p.dim(`of ${g.windows}`)}`);
+    }
+    label("waiting", `last 5 s: ${Math.round(recent.waitingEvents * 100)}% for events · ${Math.round(recent.waitingExtras * 100)}% for headers/txs`);
+    if (recent.lag !== undefined) {
+      const lag = `event loop delay ${micros(recent.lag.p50)} median · ${micros(recent.lag.max)} max`;
+      label("loop", recent.lag.max > 100 ? p.yellow(`${lag} · the main thread is busy`) : lag);
+    }
   }
   if (status.api !== "") label("api", `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · POST /sql · GET /live /status")}`);
 

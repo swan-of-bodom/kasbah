@@ -25,7 +25,7 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   s.record("Pool:Created", 5);
   s.time.fetch = 8000;
   s.time.commit = 1000;
-  s.rpc = { requests: 30, calls: 900, retries: 0, throttled: 0, bytes: 0, methods: { starknet_getEvents: 400, starknet_blockNumber: 300, starknet_getClassHashAt: 100, starknet_getBlockWithTxHashes: 90, starknet_call: 10 } };
+  s.rpc = { requests: 30, calls: 900, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: { starknet_getEvents: 400, starknet_blockNumber: 300, starknet_getClassHashAt: 100, starknet_getBlockWithTxHashes: 90, starknet_call: 10 } };
   const lines = render(s, { width: 100, now: t0 + 10_000 });
   // Every line is the box's width.
   for (const l of lines) expect(l.length).toBe(100);
@@ -35,7 +35,7 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   // 300 blocks in 10 s, 600 left: 20 s, the same as the phase's average.
   expect(text).toMatch(/block 400 \/ 1,000 +~20s left/);
   expect(text).toMatch(/40\.1%/);
-  expect(text).toMatch(/fetch 89% {2}■ handlers 0% {2}■ commits 11%/);
+  expect(text).toMatch(/events 89% {2}■ handlers 0% {2}■ commits 11%/);
   expect(text).toContain("bound by fetching");
   // Calls per method, the most first: what the provider bills.
   expect(text).toMatch(/getEvents 400 · blockNumber 300 · getClassHashAt 100 · \+2 more/);
@@ -108,4 +108,44 @@ test("the screen redraws in place, with notices and console output above it", as
   await new Promise((r) => setImmediate(r));
   expect(written.slice(before.length)).toBe("[kasbah] following the head from block 8\n");
   for (const line of plain(written).split("\n")) expect(line.length).toBeLessThanOrEqual(60);
+});
+
+test("rpc: calls per second now against the limit, and the last minute's throttles, timeouts and failures", () => {
+  const s = new Status();
+  s.enter("backfill");
+  s.setRange(0, 1000, 0);
+  const t0 = performance.now();
+  s.rpc = { requests: 0, calls: 0, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: {} };
+  s.rate = () => 500;
+  s.recent(t0);
+  let text = inside(render(s, { now: t0 + 500 })).join("\n");
+  expect(text).toContain("last minute: no throttling, timeouts or failed requests");
+  Object.assign(s.rpc, { calls: 2_500, retries: 4, throttled: 3, timeouts: 1 });
+  text = inside(render(s, { now: t0 + 5_000 })).join("\n");
+  expect(text).toMatch(/500\/s now of 500 calls\/s max · at the limit/);
+  expect(text).toContain("last minute: 3 throttled · 1 timeouts · 0 failed");
+});
+
+test("the time bar splits waiting for events from waiting for headers; --debug shows the fetcher", () => {
+  const s = new Status();
+  s.enter("backfill");
+  s.setRange(0, 1000, 0);
+  Object.assign(s.time, { fetch: 1000, extras: 8000, handlers: 500, commit: 500 });
+  s.debug = true;
+  s.fetcher = () => ({ buffered: 5_000, maxBuffered: 20_000, windows: 40, running: 30, paused: 6, done: 4, idleWorkers: 2 });
+  const text = inside(render(s, { width: 110 })).join("\n");
+  expect(text).toMatch(/events 10% {2}■ headers\/txs 80% {2}■ handlers 5%/);
+  expect(text).toContain("bound by fetching headers and transactions");
+  expect(text).toMatch(/buffer +5,000 \/ 20.0k events \(25% of the memory budget\)/);
+  expect(text).toContain("30 running · 6 paused · 4 done, not read · 2 idle workers");
+});
+
+test("live: the delay behind the chain, split between the node and us", () => {
+  const s = new Status();
+  s.enter("live");
+  const now = Date.now();
+  s.live = { block: 10, timestamp: Math.floor(now / 1000) - 5, events: 1, at: now, reorgs: 0 };
+  s.head = () => ({ number: 10, timestamp: s.live.timestamp, at: now - 40 });
+  const text = inside(render(s)).join("\n");
+  expect(text).toMatch(/delay +\d\.\ds block timestamp → node announced it · 40\.0 ms announced → committed/);
 });

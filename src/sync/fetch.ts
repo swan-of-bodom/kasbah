@@ -17,7 +17,12 @@ export type EventStreamOptions = {
   minSplit?: number;
   /** Events in memory before windows pause (see `mayFetch`). Default: enough for four windows per worker. */
   maxBuffered?: number;
+  /** Receives a reader of the stream's state, for `--debug`. */
+  gauges?: (read: () => FetchGauges) => void;
 };
+
+/** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
+export type FetchGauges = { buffered: number; maxBuffered: number; windows: number; running: number; paused: number; done: number; idleWorkers: number };
 
 /** Events in chain order. Every block up to `through` is complete. */
 export type Batch = { events: EmittedEvent[]; through: number };
@@ -184,6 +189,10 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
   };
 
   const workers = Array.from({ length: o.concurrency }, worker);
+  o.gauges?.(() => {
+    const count = (state: Window["state"]) => windows.filter((w) => w.state === state).length;
+    return { buffered, maxBuffered, windows: windows.length, running: count("running"), paused: count("idle"), done: count("done"), idleWorkers: waiting };
+  });
 
   return (async function* () {
     try {

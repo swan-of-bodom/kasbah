@@ -17,8 +17,11 @@ export class RpcError extends Error {
   }
 }
 
-/** `methods`: calls per JSON-RPC method (what providers bill), retries included. */
-export type RpcStats = { requests: number; calls: number; retries: number; throttled: number; bytes: number; methods: Record<string, number> };
+/**
+ * `methods`: calls per JSON-RPC method (what providers bill), retries included. Retried failures by kind:
+ * `throttled` (429), `timeouts`, `failed` (anything else retryable: 5xx, transport, node internal errors).
+ */
+export type RpcStats = { requests: number; calls: number; retries: number; throttled: number; timeouts: number; failed: number; bytes: number; methods: Record<string, number> };
 
 export type RpcClientOptions = {
   timeoutMs?: number;
@@ -52,7 +55,7 @@ function retryable(status: number | undefined, code?: number): boolean {
  * pauses sending (100 ms, then ×1.5 per throttle in a row, up to 5 s).
  */
 export class RpcClient {
-  readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, bytes: 0, methods: {} };
+  readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: {} };
   readonly #url: string;
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
@@ -139,10 +142,10 @@ export class RpcClient {
       // Throttling only slows us down: it never uses up attempts, other failures do.
       const throttled = status === 429 || code === 429 || code === -32005;
       const timeout = (failure as Error).name === "TimeoutError";
-      if (throttled || timeout) {
-        this.stats.throttled++;
-        this.#slowDown(timeout);
-      }
+      if (throttled) this.stats.throttled++;
+      else if (timeout) this.stats.timeouts++;
+      else this.stats.failed++;
+      if (throttled || timeout) this.#slowDown(timeout);
       this.stats.retries++;
       // A throttle waits out the pause and never uses up attempts; other failures back off and do.
       if (throttled) attempt--;

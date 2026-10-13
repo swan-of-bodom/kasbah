@@ -1,10 +1,29 @@
+import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { RpcStats } from "./rpc/client.ts";
+import type { FetchGauges } from "./sync/fetch.ts";
 
 export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done" | "failed";
 
 /** Seconds per point of the events/s history, and points kept (2 minutes). */
 const BUCKET_MS = 2000;
 const BUCKETS = 60;
+const LAG_RESOLUTION_MS = 10;
+
+/** The last minute of RPC and fetcher activity, from one sample per second. */
+export type Recent = {
+  /** Calls per second over the last 5 s. */
+  callsPerSecond: number;
+  throttled: number;
+  timeouts: number;
+  failed: number;
+  /** Share of the last 5 s the run spent waiting for events, and for headers and transactions. */
+  waitingEvents: number;
+  waitingExtras: number;
+  /** Event loop delay over the last second, ms (with `debug`). */
+  lag?: { max: number; p50: number };
+};
+
+type Sample = { t: number; calls: number; throttled: number; timeouts: number; failed: number; events: number; extras: number };
 
 export type Pace = {
   blocks: number;
@@ -76,8 +95,11 @@ export class Status {
   /** Events and block handlers handled. */
   handled = 0;
   readonly handlers = new Map<string, { count: number; ms: number }>();
-  /** Milliseconds spent waiting for events, in handlers and committing (backfill and live). */
-  readonly time = { fetch: 0, handlers: 0, commit: 0 };
+  /**
+   * Milliseconds spent waiting for events (`fetch`), for their headers, transactions and receipts (`extras`), in
+   * handlers and committing (backfill and live).
+   */
+  readonly time = { fetch: 0, extras: 0, handlers: 0, commit: 0 };
   lastCommit = { ms: 0, tables: 0, cache: 0 };
   keys = { tables: 0, indexes: 0 };
   live = { block: 0, timestamp: 0, events: 0, at: 0, reorgs: 0 };
@@ -86,6 +108,15 @@ export class Status {
   rate = () => 0;
   cache?: { cachedEvents: number; fetchedEvents: number };
   calls?: { calls: number; cached: number };
+  /** `--debug`: the fetcher's state and event loop delay on the screen. */
+  debug = false;
+  /** The backfill fetcher's state, while one runs. */
+  fetcher?: () => FetchGauges;
+  /** The newest head the WebSocket announced, and when it arrived (ms since the epoch). */
+  head?: () => { number: number; timestamp: number; at: number } | undefined;
+  readonly #rpcSamples: Sample[] = [];
+  #lag: ReturnType<typeof monitorEventLoopDelay> | undefined;
+  #lastLag: { max: number; p50: number } | undefined;
   /** Events handled per second, one point per 2 s, oldest first. */
   readonly history: number[] = [];
   readonly #samples: { t: number; through: number; handled: number }[] = [];
@@ -93,6 +124,39 @@ export class Status {
   #phaseStart = { through: 0 };
   #handledAtPhase = 0;
   readonly #listeners = new Set<(n: Notice) => void>();
+
+  /** Samples once a second (call it often), and returns the last minute's activity. */
+  recent(now = performance.now()): Recent {
+    const s = this.#rpcSamples;
+    if (this.debug && this.#lag === undefined) {
+      this.#lag = monitorEventLoopDelay({ resolution: LAG_RESOLUTION_MS });
+      this.#lag.enable();
+    }
+    if (s.length === 0 || now - s.at(-1)!.t >= 1000) {
+      const r = this.rpc;
+      s.push({ t: now, calls: r?.calls ?? 0, throttled: r?.throttled ?? 0, timeouts: r?.timeouts ?? 0, failed: r?.failed ?? 0, events: this.time.fetch, extras: this.time.extras });
+      while (s.length > 61) s.shift();
+      if (this.#lag !== undefined) {
+        // The histogram measures whole timer intervals: the delay is what goes past the resolution.
+        const past = (ns: number) => Math.max(0, ns / 1e6 - LAG_RESOLUTION_MS);
+        this.#lastLag = { max: past(this.#lag.max), p50: past(this.#lag.percentile(50)) };
+        this.#lag.reset();
+      }
+    }
+    const last = s.at(-1)!;
+    const minute = s[0]!;
+    const short = s[Math.max(0, s.length - 6)]!;
+    const span = last.t - short.t;
+    return {
+      callsPerSecond: span > 0 ? ((last.calls - short.calls) / span) * 1000 : 0,
+      throttled: last.throttled - minute.throttled,
+      timeouts: last.timeouts - minute.timeouts,
+      failed: last.failed - minute.failed,
+      waitingEvents: span > 0 ? (last.events - short.events) / span : 0,
+      waitingExtras: span > 0 ? (last.extras - short.extras) / span : 0,
+      lag: this.#lastLag,
+    };
+  }
 
   get contracts(): number {
     return this.watched().contracts;
