@@ -1,6 +1,7 @@
 import type { Abi, AbiEvent, AbiMember, Cairo1EventEnum, Cairo1EventStruct, EventMember } from "./abi.ts";
 import { Codec, type Cursor, DecodeError, type Reader } from "./codec.ts";
-import { selector } from "./selector.ts";
+import { felt } from "../felt.ts";
+import { rawSelector } from "./selector.ts";
 import type { DecodedEvent } from "./types.ts";
 
 /** One concrete event a contract can emit, after resolving Cairo 1 enum nesting. */
@@ -44,7 +45,7 @@ export function abiEvents(abi: Abi): EventDef[] {
       if (inner === undefined || !("kind" in inner)) throw new DecodeError(`${en.name}: unknown event type ${v.type}`);
       const flat = v.kind === "flat";
       const nextPath = flat ? path : [...path, v.name];
-      const nextSelectors = flat ? selectors : [...selectors, selector(v.name)];
+      const nextSelectors = flat ? selectors : [...selectors, rawSelector(v.name)];
       if (inner.kind === "enum") walk(inner, nextPath, nextSelectors);
       else if (flat) throw new DecodeError(`${en.name}: flat variant ${v.name} must wrap an enum`);
       else leaf(inner, nextPath.join("."), nextSelectors);
@@ -58,10 +59,10 @@ export function abiEvents(abi: Abi): EventDef[] {
 
   for (const e of events) {
     if ("keys" in e && "data" in e) {
-      out.push({ name: e.name, selectors: [selector(e.name)], keyMembers: [...e.keys], dataMembers: [...e.data] });
+      out.push({ name: e.name, selectors: [rawSelector(e.name)], keyMembers: [...e.keys], dataMembers: [...e.data] });
     } else if ("inputs" in e) {
       const name = lastSegment(e.name);
-      out.push({ name, selectors: [selector(name)], keyMembers: [], dataMembers: [...e.inputs] });
+      out.push({ name, selectors: [rawSelector(name)], keyMembers: [], dataMembers: [...e.inputs] });
     } else if (e.kind === "enum" && !referenced.has(e.name)) {
       walk(e, [], []);
     }
@@ -103,7 +104,8 @@ export function createDecoder<const TAbi extends Abi>(
       let child = node.children.get(s);
       if (child === undefined) {
         child = { children: new Map() };
-        node.children.set(s, child);
+        // Keys as the node sends them or padded (`event.log`): both decode.
+        node.children.set(s, child).set(felt(s), child);
       }
       node = child;
     }

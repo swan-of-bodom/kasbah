@@ -1,14 +1,13 @@
+import { felt, type Felt as Hex } from "./felt.ts";
 import type { BlockHeader } from "./rpc/methods.ts";
-
-type Hex = `0x${string}`;
 
 /** Gas price in fri (STRK) and wei (ETH) per unit. */
 export type GasPrice = { fri: bigint; wei: bigint };
 
 /**
  * A block header (spec `BLOCK_HEADER`), with `include: { block: true }` and in block handlers. Blocks older than a
- * field have it as the node returns it: `0x0` commitments, `0` counts and prices (`1` for l1 data gas), `""` version.
- * Hashes and addresses are the node's hex, unpadded.
+ * field have it as the node returns it: zero commitments, `0` counts and prices (`1` for l1 data gas), `""` version.
+ * Hashes and addresses are padded felts (`felt`).
  */
 export type Block = {
   number: number;
@@ -39,11 +38,11 @@ const price = (p: { price_in_fri: string; price_in_wei: string }): GasPrice => (
 export function blockOf(h: BlockHeader): Block {
   return {
     number: h.block_number,
-    hash: h.block_hash as Hex,
-    parentHash: h.parent_hash as Hex,
+    hash: felt(h.block_hash),
+    parentHash: felt(h.parent_hash),
     timestamp: h.timestamp,
-    newRoot: h.new_root as Hex,
-    sequencerAddress: h.sequencer_address as Hex,
+    newRoot: felt(h.new_root),
+    sequencerAddress: felt(h.sequencer_address),
     starknetVersion: h.starknet_version,
     l1GasPrice: price(h.l1_gas_price),
     l2GasPrice: price(h.l2_gas_price),
@@ -52,9 +51,9 @@ export function blockOf(h: BlockHeader): Block {
     eventCount: h.event_count,
     transactionCount: h.transaction_count,
     stateDiffLength: h.state_diff_length,
-    eventCommitment: h.event_commitment as Hex,
-    transactionCommitment: h.transaction_commitment as Hex,
-    receiptCommitment: h.receipt_commitment as Hex,
-    stateDiffCommitment: h.state_diff_commitment as Hex,
+    eventCommitment: felt(h.event_commitment),
+    transactionCommitment: felt(h.transaction_commitment),
+    receiptCommitment: felt(h.receipt_commitment),
+    stateDiffCommitment: felt(h.state_diff_commitment),
   };
 }

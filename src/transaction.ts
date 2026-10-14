@@ -1,4 +1,4 @@
-type Hex = `0x${string}`;
+import { felt, type Felt as Hex } from "./felt.ts";
 
 /** Spec `RESOURCE_BOUNDS`: the most gas and price per unit a v3 transaction pays. */
 export type ResourceBounds = { maxAmount: bigint; maxPricePerUnit: bigint };
@@ -16,8 +16,8 @@ type V3 = {
 type Common = { hash: Hex; signature: Hex[] };
 
 /**
- * A transaction (spec `TXN_WITH_HASH`): one shape per type and version, narrowed by `type` and `version`. Felts stay
- * hex as the node returns them (unpadded); amounts, fees and nonces are bigints. Versions with the query bit
+ * A transaction (spec `TXN_WITH_HASH`): one shape per type and version, narrowed by `type` and `version`. Felts are
+ * padded (`felt`); amounts, fees and nonces are bigints. Versions with the query bit
  * (`0x1000…0003`) only exist in simulations, never on chain, so they're not here.
  */
 export type Transaction =
@@ -62,15 +62,20 @@ const camel = (k: string) => k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpp
 
 /** Fields that are numbers in the spec (`FELT`/`u64`/`u128`/`NUM_AS_HEX` amounts), as bigints. */
 const AMOUNTS = new Set(["max_fee", "nonce", "tip"]);
+/** String fields that aren't felts. */
+const NAMES = new Set(["type", "version", "nonce_data_availability_mode", "fee_data_availability_mode"]);
+const felts = (a: string[]) => a.map(felt);
 
 export function transactionOf(raw: RawTransaction): Transaction {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(raw)) {
-    if (k === "transaction_hash") out.hash = v;
+    if (k === "transaction_hash") out.hash = felt(v as string);
     else if (k === "resource_bounds") {
       const r = v as Record<"l1_gas" | "l1_data_gas" | "l2_gas", RawBounds>;
       out.resourceBounds = { l1Gas: bounds(r.l1_gas), l1DataGas: bounds(r.l1_data_gas), l2Gas: bounds(r.l2_gas) };
-    } else out[camel(k)] = AMOUNTS.has(k) ? BigInt(v as string) : v;
+    } else if (AMOUNTS.has(k)) out[camel(k)] = BigInt(v as string);
+    else if (NAMES.has(k)) out[camel(k)] = v;
+    else out[camel(k)] = Array.isArray(v) ? felts(v as string[]) : felt(v as string);
   }
   return out as Transaction;
 }
@@ -88,17 +93,17 @@ export function receiptOf(raw: RawReceipt): Receipt {
     contract_address?: Hex;
   };
   return {
-    transactionHash: r.transaction_hash as Hex,
+    transactionHash: felt(r.transaction_hash),
     type: r.type,
     actualFee: { amount: BigInt(r.actual_fee.amount), unit: r.actual_fee.unit },
     executionStatus: r.execution_status,
     ...(r.revert_reason === undefined ? {} : { revertReason: r.revert_reason }),
-    messagesSent: r.messages_sent.map((m) => ({ fromAddress: m.from_address, toAddress: m.to_address, payload: m.payload })),
-    events: r.events.map((e) => ({ fromAddress: e.from_address, keys: e.keys, data: e.data })),
+    messagesSent: r.messages_sent.map((m) => ({ fromAddress: felt(m.from_address), toAddress: felt(m.to_address), payload: felts(m.payload) })),
+    events: r.events.map((e) => ({ fromAddress: felt(e.from_address), keys: felts(e.keys), data: felts(e.data) })),
     executionResources: { l1Gas: r.execution_resources.l1_gas, l1DataGas: r.execution_resources.l1_data_gas, l2Gas: r.execution_resources.l2_gas },
     blockNumber: r.block_number,
-    ...(r.block_hash === undefined ? {} : { blockHash: r.block_hash }),
-    ...(r.message_hash === undefined ? {} : { messageHash: r.message_hash }),
-    ...(r.contract_address === undefined ? {} : { contractAddress: r.contract_address }),
+    ...(r.block_hash === undefined ? {} : { blockHash: felt(r.block_hash) }),
+    ...(r.message_hash === undefined ? {} : { messageHash: felt(r.message_hash) }),
+    ...(r.contract_address === undefined ? {} : { contractAddress: felt(r.contract_address) }),
   } as Receipt;
 }

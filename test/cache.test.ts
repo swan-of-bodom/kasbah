@@ -3,6 +3,7 @@ import { afterAll, expect, test } from "vitest";
 import { EventCache, packFelts, unpackFelts } from "../src/cache.ts";
 import type { BlockHeader, EmittedEvent } from "../src/rpc/methods.ts";
 import { header } from "./fixtures/header.ts";
+import { felt } from "../src/felt.ts";
 
 const url = process.env.DATABASE_URL;
 const CHAIN = "0x7e57";
@@ -115,7 +116,7 @@ test.skipIf(url === undefined)("headers: the whole header round-trips; rows cach
 
   await cache.saveHeaders([full, { ...full, block_number: 8, block_hash: "0xb8", parent_hash: "0xb7" }]);
   const found = await cache.headers([7, 8]);
-  expect(found.get(7)).toMatchObject({ number: 7, hash: "0xb7", parentHash: "0xb6", timestamp: 1_700_000_000, l1DaMode: "BLOB", starknetVersion: "0.14.0" });
+  expect(found.get(7)).toMatchObject({ number: 7, hash: felt("0xb7"), parentHash: felt("0xb6"), timestamp: 1_700_000_000, l1DaMode: "BLOB", starknetVersion: "0.14.0" });
   expect(found.get(7)!.l2GasPrice).toEqual({ fri: 0x4d0f395fcn, wei: 0x6047fn });
-  expect(found.get(8)!.hash).toBe("0xb8");
+  expect(found.get(8)!.hash).toBe(felt("0xb8"));
 });

@@ -80,7 +80,10 @@ Per contract, optional:
   only when asked for (one extra call per transaction, or per block with events; cached once final, free for live
   blocks). All follow the spec's shapes in camelCase, amounts as bigints, felts as hex; `Transaction` and `Receipt`
   are unions narrowed by `type`, `version` and `executionStatus`.
-- Every event also has `event.log`: its raw `keys` and `data`, before decoding.
+- Every event also has `event.log`: its `keys` and `data`, before decoding.
+- Every felt handed to handlers and the API (addresses, hashes, selectors, calldata, `event.log`, `client.call`
+  results, decoded `ContractAddress`/`ClassHash`) has one form: `0x` and 64 lowercase digits, so `===` compares them.
+  `felt(x)` gives that form for your own values. Requests to the node use its form (no leading zeros) inside.
 - `upgradeEvents`: events that announce a class replacement, so the class is read again only when one is emitted.
   `Upgraded`, `ClassHashReplaced` and `ImplementationReplaced` are found in the ABI by default; a contract with none
   is checked at every poll, `[]` never.

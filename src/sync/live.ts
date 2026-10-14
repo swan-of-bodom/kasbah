@@ -4,7 +4,8 @@ import { type BlockHeader, type EmittedEvent, getEvents, getHeaders } from "../r
 
 export type BlockRef = { number: number; hash: string };
 
-export type LiveBlock = Block & { events: EmittedEvent[] };
+/** `hash` and `parent` as the node sends them (what reorgs are checked against); `header` for handlers. */
+export type LiveBlock = { number: number; hash: string; parent: string; header: Block; events: EmittedEvent[] };
 
 export type FollowOptions = {
   rpc: RpcClient;
@@ -113,7 +114,7 @@ export async function follow(o: FollowOptions): Promise<void> {
 
     for (const { header: h, events } of byBlock.values()) {
       if (o.signal.aborted) return true;
-      await o.onBlock({ ...blockOf(h), events });
+      await o.onBlock({ number: h.block_number, hash: h.block_hash, parent: h.parent_hash, header: blockOf(h), events });
       head = { number: h.block_number, hash: h.block_hash };
     }
     return true;

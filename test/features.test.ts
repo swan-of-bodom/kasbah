@@ -3,11 +3,12 @@ import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { WebSocketServer } from "ws";
-import { selector } from "../src/abi/selector.ts";
+import { rawSelector as selector } from "../src/abi/selector.ts";
 import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 import { header } from "./fixtures/header.ts";
 import { invokeReceipt, invokeV3 } from "./fixtures/transaction.ts";
+import { felt } from "../src/felt.ts";
 
 const url = process.env.DATABASE_URL;
 const FACTORY = "0xfac";
@@ -205,7 +206,7 @@ function app(schema: string, cache = false, extra: { ws?: string; pollMs?: numbe
   a.on("Pool:Counted", async ({ event, context }) => {
     // include.block: the node's header, in backfill and live (a run fails on a wrong one).
     const header = node.blocks[event.block.number]!;
-    if (event.block.timestamp !== 1_000 + event.block.number * 2 || event.block.hash !== header.hash) throw new Error(`block ${event.block.number}: header ${event.block.timestamp} ${event.block.hash}`);
+    if (event.block.timestamp !== 1_000 + event.block.number * 2 || event.block.hash !== felt(header.hash)) throw new Error(`block ${event.block.number}: header ${event.block.timestamp} ${event.block.hash}`);
     const v = event.args.amount;
     const tx = event.transaction;
     if (tx.type !== "INVOKE" || tx.version !== "0x3") throw new Error(`not an INVOKE v3: ${tx.type} ${tx.version}`);
@@ -263,7 +264,7 @@ function expected(to: number) {
     }
   }
   const txRows = node.blocks.slice(0, to + 1).flatMap((b) => b.events.filter((e) => BigInt(e.from_address) !== BigInt(FACTORY) && e.keys[0] === selector("Counted")))
-    .map((e) => ({ hash: e.transaction_hash, sender: `0x5e${e.transaction_index}`, fee: String(e.block_number! * 10 + e.transaction_index), events: 1 }))
+    .map((e) => ({ hash: felt(e.transaction_hash), sender: felt(`0x5e${e.transaction_index}`), fee: String(e.block_number! * 10 + e.transaction_index), events: 1 }))
     .sort((x, y) => (x.hash < y.hash ? -1 : 1));
   return {
     txs: txRows,

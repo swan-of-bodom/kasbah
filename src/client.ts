@@ -1,7 +1,8 @@
 import type { Abi } from "./abi/abi.ts";
 import { compileFunction } from "./abi/functions.ts";
 import type { FunctionArgs, FunctionName, FunctionResult } from "./abi/types.ts";
-import { selector } from "./abi/selector.ts";
+import { rawSelector } from "./abi/selector.ts";
+import { type Felt, felt, unpadded } from "./felt.ts";
 import type { EventCache } from "./cache.ts";
 import { RpcError, type RpcClient } from "./rpc/client.ts";
 
@@ -25,7 +26,7 @@ export type CallParameters = {
 export type Client = {
   read<const TAbi extends Abi, const N extends FunctionName<TAbi>>(p: ReadParameters<TAbi, N>): Promise<FunctionResult<TAbi, N>>;
   /** Raw `starknet_call`: calldata in, result felts out. */
-  call(p: CallParameters): Promise<string[]>;
+  call(p: CallParameters): Promise<Felt[]>;
 };
 
 export type CallClientOptions = {
@@ -60,8 +61,8 @@ export class CallClient implements Client {
     return f.decode(felts) as FunctionResult<TAbi, N>;
   };
 
-  call = (p: CallParameters): Promise<string[]> =>
-    this.#call(p.address, p.entrypoint.startsWith("0x") ? canonical(p.entrypoint) : selector(p.entrypoint), (p.calldata ?? []).map(canonical), p.block, p.entrypoint);
+  call = async (p: CallParameters): Promise<Felt[]> =>
+    (await this.#call(p.address, p.entrypoint.startsWith("0x") ? canonical(p.entrypoint) : rawSelector(p.entrypoint), (p.calldata ?? []).map(canonical), p.block, p.entrypoint)).map(felt);
 
   async #call(address: string, entrypoint: string, calldata: string[], at: number | undefined, label: string): Promise<string[]> {
     const block = at ?? this.current.number;
@@ -77,7 +78,8 @@ export class CallClient implements Client {
       }
     }
     // Not final: pin by hash, so a reorged or lagging node can't answer for another block at the same height.
-    const blockId = !final && at === undefined && this.current.hash !== undefined ? { block_hash: this.current.hash } : { block_number: block };
+    // Handlers see padded hashes; the node takes its own form.
+    const blockId = !final && at === undefined && this.current.hash !== undefined ? { block_hash: unpadded(this.current.hash) } : { block_number: block };
     this.stats.calls++;
     let result: string[];
     try {

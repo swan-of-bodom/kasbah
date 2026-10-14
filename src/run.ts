@@ -13,6 +13,7 @@ import { type Db, Store } from "./db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "./db/table.ts";
 import { RpcClient } from "./rpc/client.ts";
 import { type Block, blockOf } from "./block.ts";
+import { felt } from "./felt.ts";
 import { blockNumber, type EmittedEvent, getHeaders } from "./rpc/methods.ts";
 import { type Endpoint, probe } from "./rpc/probe.ts";
 import { canonical, type FactorySource, factoryReader, Sources, upgradeEventsOf, type Watched } from "./sources.ts";
@@ -374,16 +375,15 @@ class Run {
     this.#final = Math.max(this.#final, block.number - this.#plan.window);
     await this.#s.sources.upgradesIn(block.events, block.number);
     const extras = await this.#extras(block.events);
-    const { events, ...header } = block;
-    const headers = new Map([[block.number, header]]);
-    for (const e of events) await this.#handle(e, extras, headers);
-    for (const b of this.#s.blockSources) if (firesAt(b, block.number)) await this.#fire(b.name, header);
+    const headers = new Map([[block.number, block.header]]);
+    for (const e of block.events) await this.#handle(e, extras, headers);
+    for (const b of this.#s.blockSources) if (firesAt(b, block.number)) await this.#fire(b.name, block.header);
     await this.#commit({ kind: "block", block, children });
   }
 
   async #reorg(ancestor: BlockRef, replaced: BlockRef, stopped: boolean): Promise<void> {
     const { undone, forgotten } = await this.#commit({ kind: "revert", to: ancestor });
-    this.#s.status.note({ kind: "reorg", block: replaced.number, hash: replaced.hash, ancestor: ancestor.number, rows: undone, children: forgotten, stopped });
+    this.#s.status.note({ kind: "reorg", block: replaced.number, hash: felt(replaced.hash), ancestor: ancestor.number, rows: undone, children: forgotten, stopped });
   }
 
   /**
@@ -503,12 +503,15 @@ class Run {
       contract: w.contract,
       name: decoded.name,
       args: decoded.args,
-      address: padded(e.from_address),
+      address: felt(e.from_address),
       block: this.#s.config.contracts[w.contract]!.include?.block
         ? headers.get(e.block_number!)!
-        : { number: e.block_number!, hash: e.block_hash },
-      transaction: { ...x?.transaction, hash: e.transaction_hash, index: e.transaction_index },
-      log: { keys: e.keys, data: e.data },
+        : { number: e.block_number!, hash: e.block_hash === undefined ? undefined : felt(e.block_hash) },
+      transaction: { ...x?.transaction, hash: felt(e.transaction_hash), index: e.transaction_index },
+      // Padded only if a handler reads it.
+      get log() {
+        return { keys: e.keys.map(felt), data: e.data.map(felt) };
+      },
       ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
       index: e.event_index,
     };
@@ -620,7 +623,7 @@ class Run {
         for (const n of this.#known.keys()) if (n > c.to.number) this.#known.delete(n);
         break;
     }
-    const block = c.kind === "block" ? { number: c.block.number, timestamp: c.block.timestamp, events: c.block.events.length, children: c.children.length } : undefined;
+    const block = c.kind === "block" ? { number: c.block.number, timestamp: c.block.header.timestamp, events: c.block.events.length, children: c.children.length } : undefined;
     status.committed({ kind: c.kind, ms, ...parts, checkpoint: this.#checkpoint, block });
     return { undone, forgotten };
   }
@@ -793,12 +796,3 @@ async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Prom
   if (pending !== undefined) yield await ready(pending);
 }
 
-const paddedCache = new Map<string, `0x${string}`>();
-const padded = (address: string) => {
-  let p = paddedCache.get(address);
-  if (p === undefined) {
-    p = `0x${BigInt(address).toString(16).padStart(64, "0")}` as `0x${string}`;
-    if (paddedCache.size < 100_000) paddedCache.set(address, p);
-  }
-  return p;
-};

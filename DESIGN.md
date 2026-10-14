@@ -171,6 +171,12 @@ receipt's `finality_status` (it changes as the block settles, like a header's `s
 JSON; it's converted once per transaction. Checked against mainnet samples of 9 kinds (`test/fixtures/
 mainnet-transactions.json`): the node's fields matched the spec's exactly.
 
+Felts have one outside form, `felt()`: `0x` and 64 lowercase digits, everywhere a handler or API user sees one, so
+`===` compares them (`event.address` already was; hashes, `Block`, `Transaction`, `Receipt`, `event.log`,
+`client.call` and `selector` were the node's form at first). Inside, felts stay as the node sends them:
+the spec's `FELT` pattern forbids leading zeros, so requests (filters, `block_hash` pins, calls) and the reorg
+table use that form, and the decoder accepts keys in both. Exception: `EthAddress` stays 40 digits.
+
 ## 6. Following the head
 
 ### 6.1 Polling (default; works on every provider)

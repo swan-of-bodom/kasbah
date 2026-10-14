@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { index, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
-import { selector } from "../src/abi/selector.ts";
+import { rawSelector as selector } from "../src/abi/selector.ts";
 import { liveChannel } from "../src/api/server.ts";
 import { bignum, Status, kasbah } from "../src/index.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";

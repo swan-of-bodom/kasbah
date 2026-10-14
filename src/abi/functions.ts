@@ -1,6 +1,6 @@
 import type { Abi, AbiFunction } from "./abi.ts";
 import { Codec, DecodeError, type Reader } from "./codec.ts";
-import { selector } from "./selector.ts";
+import { rawSelector } from "./selector.ts";
 
 /** Every function of an ABI: top-level (Cairo 0, Cairo 1 before 2.0) and inside interfaces. */
 export function abiFunctions(abi: Abi): AbiFunction[] {
@@ -39,7 +39,7 @@ export function compileFunction(abi: Abi, name: string): CompiledFunction {
   }
   const fn: CompiledFunction = {
     name,
-    selector: selector(name),
+    selector: rawSelector(name),
     encode: (args) => {
       const out: string[] = [];
       write(args ?? {}, out);

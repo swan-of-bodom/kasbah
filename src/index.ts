@@ -3,6 +3,7 @@ export { DecodeError } from "./abi/codec.ts";
 export { abiEvents, createDecoder, type EventDef } from "./abi/events.ts";
 export { classHistory, createHistoricalDecoder } from "./abi/history.ts";
 export { selector } from "./abi/selector.ts";
+export { type Felt, felt } from "./felt.ts";
 export { abiFunctions, compileFunction } from "./abi/functions.ts";
 export type { DecodedEvent, EventArgs, EventName, FunctionArgs, FunctionName, FunctionResult, TypeOf } from "./abi/types.ts";
 export type { CallParameters, Client, ReadParameters } from "./client.ts";

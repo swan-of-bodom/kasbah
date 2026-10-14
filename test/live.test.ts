@@ -68,9 +68,9 @@ test.each([1, 2, 3, 4, 5])("follows growth and reorgs to the canonical chain (se
     rpc: chain.rpc, address: "0x1", chunkSize: 100, head, known, pollMs: 1, signal: stop.signal,
     onBlock: async (b) => {
       expect(b.number).toBe(applied.length);
-      expect(b.parentHash).toBe(applied.at(-1)!.hash);
+      expect(b.parent).toBe(applied.at(-1)!.hash);
       expect(b.events.every((e) => e.block_hash === b.hash)).toBe(true);
-      applied.push({ number: b.number, hash: b.hash, parent: b.parentHash, events: b.events });
+      applied.push({ number: b.number, hash: b.hash, parent: b.parent, events: b.events });
       known.set(b.number, b.hash);
     },
     onReorg: async (a) => {

@@ -26,7 +26,7 @@ test("planOf: live backfills to the reorg window and reads classes to the tip; a
 });
 
 test("moves: what each commit writes to the meta table and then to memory", () => {
-  const block = { ...blockOf(header({ block_hash: "0xb", parent_hash: "0xa", block_number: 120, timestamp: 1 })), events: [] };
+  const block = { number: 120, hash: "0xb", parent: "0xa", header: blockOf(header({ block_hash: "0xb", parent_hash: "0xa", block_number: 120, timestamp: 1 })), events: [] };
   expect(moves({ kind: "children", through: 90, children: [] }, 50)).toEqual({ watermark: 90, phase: "backfill" });
   expect(moves({ kind: "batch", through: 90 }, 90)).toEqual({ checkpoint: 90, phase: "backfill" });
   expect(moves({ kind: "follow", head: { number: 90, hash: "0x9" } }, 90)).toEqual({ phase: "live" });

@@ -6,6 +6,7 @@ import { CallClient } from "../src/client.ts";
 import { RpcClient } from "../src/rpc/client.ts";
 import cairo0Pair from "./fixtures/cairo0-0.abi.ts";
 import ekubo from "./fixtures/ekubo-core.abi.ts";
+import { felt } from "../src/felt.ts";
 
 const abi = [
   { type: "struct", name: "t::Point", members: [{ name: "x", type: "core::integer::i32" }, { name: "y", type: "core::integer::u256" }] },
@@ -103,7 +104,7 @@ test("reads are pinned to the indexed block, final ones cached, recent ones pinn
     expect(seen).toEqual([{ block_number: 50 }, { block_hash: "0xh150" }, { block_hash: "0xh150" }, { block_number: 60 }]);
 
     await expect(read(13)).rejects.toThrow("call get_pool_liquidity on 0xe at block 13");
-    expect(await client.call({ address: "0xe", entrypoint: "get_pool_liquidity", calldata: ["0x1", "0x2", "0x3", "0x4", "0x0"], block: 50 })).toEqual(["0x32"]);
+    expect(await client.call({ address: "0xe", entrypoint: "get_pool_liquidity", calldata: ["0x1", "0x2", "0x3", "0x4", "0x0"], block: 50 })).toEqual([felt("0x32")]);
   } finally {
     server.close();
   }

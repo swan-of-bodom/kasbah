@@ -30,7 +30,7 @@ const signed = (asNumber: boolean): Reader => (c) => {
   return asNumber ? Number(s) : s;
 };
 
-const pad = (width: number): Reader => (c) => `0x${next(c).slice(2).padStart(width, "0")}`;
+const pad = (width: number): Reader => (c) => `0x${next(c).slice(2).toLowerCase().padStart(width, "0")}`;
 
 const u256: Reader = (c) => {
   const low = BigInt(next(c));

@@ -2,6 +2,8 @@ import { readFileSync } from "node:fs";
 import { CairoCustomEnum, CairoOption, CallData, events, hash } from "starknet";
 import { describe, expect, test } from "vitest";
 import { type Abi, abiEvents, createDecoder, DecodeError, selector } from "../src/index.ts";
+import { rawSelector } from "../src/abi/selector.ts";
+import { felt, unpadded } from "../src/felt.ts";
 
 type EmittedEvent = { keys: string[]; data: string[]; from_address: string };
 
@@ -95,9 +97,9 @@ test("unknown selectors return undefined", () => {
 test("Ekubo: flat variants add no selector, nested ones do", () => {
   const defs = abiEvents(fixture<Abi>("ekubo-core.abi.json"));
   const by = Object.fromEntries(defs.map((d) => [d.name, d.selectors]));
-  expect(by.ClassHashReplaced).toEqual([selector("ClassHashReplaced")]);
-  expect(by["OwnedEvent.OwnershipTransferred"]).toEqual([selector("OwnedEvent"), selector("OwnershipTransferred")]);
-  expect(by.Swapped).toEqual([selector("Swapped")]);
+  expect(by.ClassHashReplaced).toEqual([rawSelector("ClassHashReplaced")]);
+  expect(by["OwnedEvent.OwnershipTransferred"]).toEqual([rawSelector("OwnedEvent"), rawSelector("OwnershipTransferred")]);
+  expect(by.Swapped).toEqual([rawSelector("Swapped")]);
 });
 
 test("STRK Transfer reads from/to from keys", () => {
@@ -204,4 +206,16 @@ test("an event declared twice with the same layout is accepted, with another lay
   expect(decode([selector("Transfer")], ["0x1", "0x2", "0x0"])).toEqual({ name: "Transfer", args: { from_: 1n, value: 2n } });
   const clash = [twice[0], { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }] }] as const;
   expect(() => createDecoder(clash)).toThrow("same selectors");
+});
+
+test("felts handed out: 0x and 64 lowercase digits; selectors padded, matching node keys in either form", () => {
+  expect(felt("0x0")).toBe(`0x${"0".repeat(64)}`);
+  expect(felt("0xABC")).toBe(`0x${"0".repeat(61)}abc`);
+  expect(felt(felt("0x5"))).toBe(felt("0x5"));
+  expect(unpadded(felt("0x5a"))).toBe("0x5a");
+  expect(unpadded(felt("0x0"))).toBe("0x0");
+  expect(selector("Swapped")).toBe(felt(rawSelector("Swapped")));
+  const decode = createDecoder([{ type: "event", name: "E", keys: [], data: [] }] as Abi);
+  expect(decode([rawSelector("E")], [])?.name).toBe("E");
+  expect(decode([selector("E")], [])?.name).toBe("E");
 });

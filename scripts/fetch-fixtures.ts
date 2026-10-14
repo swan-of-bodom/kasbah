@@ -1,6 +1,6 @@
 // Fetches real ABIs and events from mainnet into test/fixtures. Run: pnpm fixtures (needs KASBAH_RPC_URL in .env).
 import { mkdirSync, writeFileSync } from "node:fs";
-import { selector } from "../src/abi/selector.ts";
+import { rawSelector as selector } from "../src/abi/selector.ts";
 
 const url = process.env.KASBAH_RPC_URL;
 if (!url) throw new Error("KASBAH_RPC_URL is not set");
