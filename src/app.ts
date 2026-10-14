@@ -11,6 +11,8 @@ import type { Receipt, Transaction } from "./transaction.ts";
 import { apiUrl, DEFAULT_SCHEMA, run } from "./run.ts";
 import type { Status } from "./status.ts";
 import type { Include } from "./sync/extras.ts";
+import pg from "pg";
+import { quote } from "./db/table.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -155,5 +157,17 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     return { url: apiUrl(config.api, api.port), close: () => api.close() };
   };
 
-  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes), serve };
+  /** Drops the app's schema (its tables and progress), nothing else in the database. Returns the schema. */
+  const drop = async (): Promise<string> => {
+    const schema = config.schema ?? DEFAULT_SCHEMA;
+    const pool = new pg.Pool({ connectionString: config.database, max: 1 });
+    try {
+      await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
+    } finally {
+      await pool.end();
+    }
+    return schema;
+  };
+
+  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes), serve, drop };
 }

@@ -23,7 +23,7 @@ test("the layout: config, schema, ABI, handlers, routes", () => {
   expect(files["kasbah.config.ts"]).toContain(`schema: "pools",`);
   expect(files["src/index.ts"]).toContain(`import app from "../kasbah.config.ts";`);
   expect(files["src/api/index.ts"]).toContain(`app.get("/moved/latest"`);
-  expect(JSON.parse(files["package.json"]!).scripts.dev).toBe("kasbah dev");
+  expect(JSON.parse(files["package.json"]!).scripts).toMatchObject({ dev: "kasbah dev", fresh: "kasbah dev --reset", clean: "kasbah clean" });
 });
 
 test("one table per event, arguments as typed columns, structs as jsonb", () => {

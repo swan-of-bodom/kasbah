@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// kasbah init [dir] | start [app] | dev [app] | serve [app] | cache info | cache clear [--events] [--calls] [--chain <id>]
+// kasbah init [dir] | start [app] | dev [app] | clean [app] | serve [app] | cache info | cache clear [--events] [--calls] [--chain <id>]
 // The app module's default export is the value `kasbah(config)` returned. Without an app file, the project's
 // kasbah.config.ts, then its src/index.ts (handlers) and src/api/index.ts (routes), which import it.
 import { type ChildProcess, spawn } from "node:child_process";
@@ -12,8 +12,9 @@ import pg from "pg";
 import type { RunOptions } from "./app.ts";
 import { EventCache } from "./cache.ts";
 import { Screen } from "./dashboard.ts";
-import { type DevDatabase, devDatabase } from "./devdb.ts";
+import { type DevDatabase, devDatabase, removeDevDatabase } from "./devdb.ts";
 import { init } from "./init.ts";
+import { Prompt } from "./prompt.ts";
 import { Status } from "./status.ts";
 
 const USAGE = `usage:
@@ -24,7 +25,10 @@ const USAGE = `usage:
   kasbah start [app.ts]          index, then follow the head (until --to, or Ctrl-C); without app.ts, the
     [--to <block>] [--reset]            project here: kasbah.config.ts, src/index.ts and src/api/index.ts
   kasbah dev [app.ts]            the same, restarted on every file change (a changed build re-indexes);
-                                        without DATABASE_URL, a Postgres container (Docker or Podman) for the app
+    [--reset]                           without DATABASE_URL, a Postgres container (Docker or Podman) for the app;
+                                        --reset drops what it stored and starts over (pnpm fresh)
+  kasbah clean [app.ts] [--yes]  deletes what the app stored: the dev container and its volume, or with
+                                        DATABASE_URL only the app's schema (asks first; the cache stays)
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
   --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
@@ -34,7 +38,7 @@ const USAGE = `usage:
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
 
-type App = { run: (o?: RunOptions) => Promise<void>; serve: () => Promise<{ url: string; close: () => Promise<void> }> };
+type App = { run: (o?: RunOptions) => Promise<void>; serve: () => Promise<{ url: string; close: () => Promise<void> }>; drop: () => Promise<string> };
 
 export const CONFIG = "kasbah.config.ts";
 /** What a project registers on the config's app, imported after it when present. */
@@ -89,18 +93,22 @@ async function start(file: string, o: { to?: number; reset?: boolean; dev?: bool
  * Runs `start --dev` in a child process and restarts it on changes under the app's directory. Without
  * `DATABASE_URL`, a Postgres container for the app, stopped (data kept) when `dev` exits.
  */
-async function dev(file: string, ui: boolean | undefined, debug: boolean | undefined) {
+async function dev(file: string, ui: boolean | undefined, debug: boolean | undefined, reset: boolean | undefined) {
   const log = (line: string) => console.log(`[kasbah dev] ${line}`);
   let db: DevDatabase | undefined;
   if (process.env.DATABASE_URL === undefined) {
     db = await devDatabase(dirname(resolve(file)), log);
-    log(`DATABASE_URL=${db.url}  (delete it all: ${db.runtime} rm -fv ${db.container} && ${db.runtime} volume rm ${db.container})`);
+    log(`DATABASE_URL=${db.url}  (delete it all: kasbah clean, or pnpm clean)`);
     process.env.DATABASE_URL = db.url;
   }
   let child: ChildProcess | undefined;
   let exited: Promise<void> = Promise.resolve();
+  // --reset only on the first launch: a restart after saving a file keeps what's indexed.
+  let resetOnce = reset === true;
   const launch = () => {
-    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev", ...(ui === undefined ? [] : [ui ? "--ui" : "--no-ui"]), ...(debug ? ["--debug"] : [])], { stdio: "inherit" });
+    const flags = [...(ui === undefined ? [] : [ui ? "--ui" : "--no-ui"]), ...(debug ? ["--debug"] : []), ...(resetOnce ? ["--reset"] : [])];
+    resetOnce = false;
+    const c = spawn(process.execPath, [...process.execArgv, import.meta.filename, "start", file, "--dev", ...flags], { stdio: "inherit" });
     child = c;
     exited = new Promise((r) =>
       c.once("exit", (code, signal) => {
@@ -155,6 +163,22 @@ async function serve(file: string) {
     process.once("SIGTERM", r);
   });
   await api.close();
+}
+
+/** `clean`: the dev container and volume when `dev` made them, else only the app's schema in DATABASE_URL. */
+async function clean(file: string, yes: boolean | undefined) {
+  if (process.env.DATABASE_URL === undefined) {
+    const r = removeDevDatabase(dirname(resolve(file)));
+    console.log(r.removed ? `deleted ${r.container} and its volume (${r.runtime}); the next dev starts from scratch` : `nothing to delete: no ${r.container}`);
+    return;
+  }
+  const app = await load(file);
+  if (!yes) {
+    if (!process.stdin.isTTY) throw new Error("clean drops the app's schema in DATABASE_URL: pass --yes to confirm");
+    const ok = await new Prompt().confirm("Drop this app's schema in DATABASE_URL (its tables and progress)?", false);
+    if (!ok) return void console.log("kept");
+  }
+  console.log(`dropped schema ${await app.drop()}; the next start indexes from scratch`);
 }
 
 async function cache(command: string | undefined, o: { database?: string; events?: boolean; calls?: boolean; chain?: string }) {
@@ -220,7 +244,8 @@ try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
   else if (command === "start") await start(target(arg), { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui, debug: values.debug });
-  else if (command === "dev") await dev(target(arg), values.ui, values.debug);
+  else if (command === "dev") await dev(target(arg), values.ui, values.debug, values.reset);
+  else if (command === "clean") await clean(target(arg), values.yes);
   else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);
   else {

@@ -141,7 +141,7 @@ export function generate(p: Project): Record<string, string> {
     private: true,
     type: "module",
     packageManager: "pnpm@10.12.1",
-    scripts: { dev: "kasbah dev", start: "kasbah start", serve: "kasbah serve", typecheck: "tsc" },
+    scripts: { dev: "kasbah dev", fresh: "kasbah dev --reset", clean: "kasbah clean", start: "kasbah start", serve: "kasbah serve", typecheck: "tsc" },
     dependencies: { "drizzle-orm": "^0.45.4", "kasbah": p.dependency },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };

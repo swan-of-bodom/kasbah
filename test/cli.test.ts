@@ -102,6 +102,30 @@ test.skipIf(url === undefined)("dev: restarts on a change and re-indexes a chang
   expect(await run.exited).toBe(0);
 }, 60_000);
 
+test.skipIf(url === undefined)("dev --reset re-indexes from block 0; clean drops the app's schema (with --yes when not asked)", async () => {
+  writeFileSync(appFile, appSource(4).replace('"RPC"', JSON.stringify(rpcUrl)));
+  expect(await cli("start", appFile, "--to", String(BLOCKS - 1), "--reset").exited).toBe(0);
+  const run = cli("dev", appFile, "--reset", "--no-ui");
+  try {
+    await until(async () => /backfill done: (\d+) handled/.test(run.out.join("")));
+    // From scratch: every block through the final one again, not just the few since the last run.
+    expect(Number(/backfill done: (\d+) handled/.exec(run.out.join(""))![1])).toBeGreaterThan(30);
+  } finally {
+    run.p.kill("SIGINT");
+  }
+  expect(await run.exited).toBe(0);
+  // Stopped after the backfill (through block 35), maybe a little into live.
+  expect(Number(await total())).toBeGreaterThanOrEqual(4 * ((36 * 37) / 2));
+
+  const refused = cli("clean", appFile);
+  expect(await refused.exited).toBe(1);
+  expect(refused.out.join("")).toMatch(/pass --yes/);
+  const cleaned = cli("clean", appFile, "--yes");
+  expect(await cleaned.exited).toBe(0);
+  expect(cleaned.out.join("")).toContain(`dropped schema ${schema}`);
+  expect(await total()).toBeUndefined();
+}, 90_000);
+
 test.skipIf(url === undefined)("cache info runs", async () => {
   const run = cli("cache", "info", "--chain", "0x0");
   expect(await run.exited).toBe(0);
@@ -167,6 +191,13 @@ test.skipIf(!hasRuntime)("dev without DATABASE_URL: a Postgres container for the
     expect(second.out.join("")).not.toMatch(/backfill done: [1-9]/);
     second.p.kill("SIGINT");
     expect(await second.exited).toBe(0);
+
+    // clean deletes the container and its data.
+    const { DATABASE_URL: _, ...env } = process.env;
+    const cleaned = spawnSync(process.execPath, ["--no-warnings", resolve("src/cli.ts"), "clean", appFile], { env, cwd: dir, encoding: "utf8" });
+    expect(cleaned.stdout).toContain(`deleted ${name} and its volume`);
+    expect(spawnSync(runtime, ["inspect", name]).status).not.toBe(0);
+    expect(spawnSync(runtime, ["volume", "inspect", name]).status).not.toBe(0);
   } finally {
     remove();
   }

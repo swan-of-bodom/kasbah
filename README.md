@@ -35,6 +35,9 @@ kasbah init my-indexer          # the same: asks for the RPC, a contract address
                                        # package.json, .env, the ABI, a table and a handler per event
 kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps   # no questions without a terminal or with --yes
 cd my-indexer && pnpm install && pnpm dev
+pnpm fresh                             # dev, but drops what it stored first and indexes from scratch
+pnpm clean                             # deletes what it stored: the dev container and its volume, or with your own
+                                       # DATABASE_URL only the app's schema (asks; --yes to skip); the cache stays
 ```
 
 A project is laid out like Ponder's: `kasbah.config.ts` (`export default kasbah({ … })`: RPC, database,

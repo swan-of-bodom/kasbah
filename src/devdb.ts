@@ -66,3 +66,15 @@ export async function devDatabase(appDir: string, log: (line: string) => void): 
   }
   return { url, container, runtime, stop: () => void run(runtime, ["stop", container]) };
 }
+
+/** Deletes the app's dev container and its volume (the data). Returns what was there to delete. */
+export function removeDevDatabase(appDir: string): { container: string; runtime: string; removed: boolean } {
+  const runtime = findRuntime();
+  if (runtime === undefined) throw new Error("no DATABASE_URL and no Docker or Podman: nothing to delete");
+  const container = containerName(appDir);
+  const had = run(runtime, ["inspect", container]).status === 0;
+  const volume = run(runtime, ["volume", "inspect", container]).status === 0;
+  if (had) run(runtime, ["rm", "-fv", container]);
+  if (volume && run(runtime, ["volume", "rm", container]).status !== 0) throw new Error(`${runtime} volume rm ${container} failed`);
+  return { container, runtime, removed: had || volume };
+}
