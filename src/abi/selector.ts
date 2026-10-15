@@ -1,4 +1,4 @@
-import { type Felt, felt } from "../felt.ts";
+import { type Felt, felt } from "../types/felt.ts";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 
 const MASK_250 = (1n << 250n) - 1n;

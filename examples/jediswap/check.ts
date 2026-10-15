@@ -2,7 +2,7 @@
 // `token0`/`token1`, both through the proxy (whose ABI is the implementation's).
 //   node --env-file=.env --no-warnings examples/jediswap/check.ts
 import pg from "pg";
-import { CallClient } from "../../src/client.ts";
+import { CallClient } from "../../src/indexer/client.ts";
 import { RpcClient } from "../../src/rpc/client.ts";
 import pairAbi from "./pair-abi.ts";
 

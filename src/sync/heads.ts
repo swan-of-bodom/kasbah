@@ -1,4 +1,4 @@
-import type { Note } from "../status.ts";
+import type { Note } from "../indexer/status.ts";
 
 export type SocketNote = Extract<Note, { kind: "socket" }>;
 

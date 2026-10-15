@@ -1,6 +1,6 @@
 import type { Abi, AbiEvent, AbiMember, Cairo1EventEnum, Cairo1EventStruct, EventMember } from "./abi.ts";
 import { Codec, type Cursor, DecodeError, type Reader } from "./codec.ts";
-import { felt } from "../felt.ts";
+import { felt } from "../types/felt.ts";
 import { rawSelector } from "./selector.ts";
 import type { DecodedEvent } from "./types.ts";
 

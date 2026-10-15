@@ -1,4 +1,4 @@
-import { type Block, blockOf } from "../block.ts";
+import { type Block, blockOf } from "../types/block.ts";
 import { RpcError, type RpcClient } from "../rpc/client.ts";
 import { type BlockHeader, type EmittedEvent, getEvents, getHeaders } from "../rpc/methods.ts";
 

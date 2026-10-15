@@ -126,7 +126,7 @@ later interval missing if any factory interval is missing; the pre-pass removes 
 During live following, a new child is added at its block, and child events from that same block are fetched in
 the same step.
 
-Built (`src/sources.ts`, config `factory: { address, abi, event, parameter }`):
+Built (`src/indexer/sources.ts`, config `factory: { address, abi, event, parameter }`):
 - Pre-pass over the factory's events up to the backfill end; children stored in `_kasbah_children` with their
   creation block, and `discovered:<contract>` in `_kasbah_meta`, so a restart only scans what's new.
 - A child's classes: probed at its creation block and at the tip, bisected only if they differ (2 calls per child
@@ -268,7 +268,7 @@ is always rolled back before the next confirmed block. To decide when we get the
   classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
-- One run (`src/run.ts`): setup, then the phases factories → backfill → keys → live, each starting from the
+- One run (`src/indexer/run.ts`): setup, then the phases factories → backfill → keys → live, each starting from the
   committed position (checkpoint, factory watermark, the window's hashes) and a no-op when it has nothing left, so
   a restart resumes through the same code. Every write after startup is one of five commits (pre-pass children,
   backfill batch, entering live, live block, revert), all through one helper: `moves()` says what each moves in
@@ -402,7 +402,7 @@ pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves 
 
 ### 8.6 Dev screen
 
-`kasbah dev` (in a terminal; `--ui` / `--no-ui` override) draws `Status` (`src/status.ts`, filled in by `run`) under
+`kasbah dev` (in a terminal; `--ui` / `--no-ui` override) draws `Status` (`src/indexer/status.ts`, filled in by `run`) under
 the log and redraws it in place 4 times a second; the run's notices and handlers' `console` output print above it
 and stay in the scrollback. `Status` is the run's only reporting channel: state read whenever (phase, blocks,
 handlers, RPC, cache), and notices pushed in order to `subscribe` listeners (reorgs, class changes, phase summaries,
@@ -419,7 +419,7 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 
 ## 9. Storage and caches
 
-**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, opt-in (`cache: true`) (`src/cache.ts`):
+**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, opt-in (`cache: true`) (`src/db/cache.ts`):
 - `events(block, tx, idx, address, selector, block_hash, tx_hash, keys, data)`, primary key = the three ints.
   `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
   small numbers).
@@ -437,7 +437,7 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 
 **Call cache** (`context.client`, the readContract equivalent): key = `(block, address, selector, calldata)`,
 immutable once the block is final. Ponder never prunes its `eth_call` cache, which is where your 38 GB came from.
-Built (`src/client.ts`, `src/abi/functions.ts`):
+Built (`src/indexer/client.ts`, `src/abi/functions.ts`):
 - `context.client.read({ abi, address, functionName, args, block? })`, typed from the ABI (arguments as an object
   keyed by input name; result: one Cairo 1 output as its value, several as a tuple, Cairo 0 named outputs as an
   object). `client.call` for raw calldata. Default block: the one being indexed, state at its end.
@@ -519,14 +519,14 @@ Target size: under 10k lines for v1.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
-CLI (`src/cli.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info|clear`. The app
+CLI (`src/cli/main.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info|clear`. The app
 module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
 on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the
 reliable reload), with `onBuildChange: "reset"`. The build id now includes each handler's source and the CLI's
 hash of the app's code files: before, a handler body edit kept stale results. The compiled build for a registry
 was done the same day (`dist/`, `pnpm pack`).
 
-Database for `dev` (`src/devdb.ts`): without `DATABASE_URL`, `dev` runs `postgres:17` in Docker
+Database for `dev` (`src/cli/devdb.ts`): without `DATABASE_URL`, `dev` runs `postgres:17` in Docker
 or Podman, one container and named volume per app directory (its basename and a hash of its path), published on a
 free localhost port, and waits until TCP connects (the image's first start runs a socket-only server while it
 initialises). Stopped when `dev` exits, kept for the next run. Chosen over PGlite (single connection: no separate

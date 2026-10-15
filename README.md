@@ -8,28 +8,29 @@ Steps 0–5 of the build order (DESIGN §11), plus what Ponder apps use most: ba
 WebSocket heads), factories, block handlers, contract reads from handlers, transactions and receipts (opt-in),
 the raw-event and call cache, the read API (SQL, GraphQL with relations, live queries) and a CLI with hot reload.
 
+- `src/config/`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`, and the `bignum`/`hex` columns.
+- `src/types/`: `Block`, `Transaction`, `Receipt` (the spec's shapes) and `felt()`, the one form of a felt.
 - `src/abi/`: ABI model, event decoder and types for Cairo 0 and Cairo 1; class history, so each event decodes with
   the class its contract had at that block.
 - `src/rpc/`: JSON-RPC client (paced in calls per second, retries, zstd), endpoint probe.
-- `src/sync/fetch.ts`: backfill as an ordered event stream with a memory cap; `src/sync/live.ts`: head following
-  with reorg detection.
-- `src/sources.ts`: watched addresses, their classes and decoders, factory children.
-- `src/cache.ts`: raw-event cache with coverage per (address, selector), and cached call results.
-- `src/client.ts`: `context.client`, contract reads pinned to the block being indexed.
-- `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window.
+- `src/sync/`: backfill as an ordered event stream with a memory cap (`fetch.ts`), head following with reorg
+  detection (`live.ts`), WebSocket new heads (`heads.ts`), transactions and receipts (`extras.ts`).
+- `src/indexer/`: one run, its phases and its commits (`run.ts`); watched addresses, their classes and decoders,
+  factory children (`sources.ts`); `context.client`, reads pinned to the block being indexed (`client.ts`); what a
+  run reports (`status.ts`: state to read, notices to subscribe to).
+- `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window, and the
+  raw-event, header, transaction and call cache (`cache.ts`).
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).
-- `src/sync/heads.ts`: WebSocket new heads; `src/sync/extras.ts`: transactions and receipts.
-- `src/cli.ts`: `kasbah init | start | dev | cache`; `src/init.ts`: a new project from a contract's ABI;
-  `src/prompt.ts`: the terminal questions.
-- `src/app.ts`: `kasbah(config)`, `app.on("Contract:Event", handler)`, `app.run()`; `src/run.ts`: one run, its
-  phases and its commits; `src/status.ts`: what it reports (`Status`: state to read, notices to subscribe to).
+- `src/cli/`: the `kasbah` command (`main.ts`), `init` (a new project from a contract's ABI), the dev
+  database (`devdb.ts`), and the terminal screens (`ui/`: progress dashboard, questions).
+- `test/unit/` and `test/e2e/` (whole runs against fake nodes, the CLI, the packed package); fixtures in `test/fixtures/`.
 - `examples/ekubo/`: Ekubo pools (price, liquidity, balances), hourly and daily candles (OHLC, volume, fees, TVL),
   protocol totals every 1,800 blocks, and routes `/pools/top`, `/pools/:id/candles`, `/history`.
 
 ## A new project
 
 ```
-pnpm create kasbah my-indexer   # once published; until then: node ~/Desktop/kasbah/src/cli.ts init my-indexer
+pnpm create kasbah my-indexer   # once published; until then: node ~/Desktop/kasbah/src/cli/main.ts init my-indexer
 kasbah init my-indexer          # the same: asks for the RPC, a contract address (its ABI and deployment block
                                        # are read from the chain), events, timestamps and Postgres (or none); writes
                                        # package.json, .env, the ABI, a table and a handler per event

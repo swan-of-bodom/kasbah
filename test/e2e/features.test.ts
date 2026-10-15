@@ -1,0 +1,435 @@
+import { createServer, type Server } from "node:http";
+import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import pg from "pg";
+import { afterAll, beforeAll, expect, test } from "vitest";
+import { WebSocketServer } from "ws";
+import { rawSelector as selector } from "../../src/abi/selector.ts";
+import { bignum, Status, kasbah } from "../../src/index.ts";
+import type { EmittedEvent } from "../../src/rpc/methods.ts";
+import { header } from "../fixtures/header.ts";
+import { invokeReceipt, invokeV3 } from "../fixtures/transaction.ts";
+import { felt } from "../../src/types/felt.ts";
+
+const url = process.env.DATABASE_URL;
+const FACTORY = "0xfac";
+const FACTORY_DEPLOYED = 5;
+const UPGRADE_AT = 350;
+
+const factoryAbi = [
+  { type: "event", name: "f::Created", kind: "struct", members: [{ name: "pool", type: "core::starknet::contract_address::ContractAddress", kind: "data" }] },
+  { type: "event", name: "f::Event", kind: "enum", variants: [{ name: "Created", type: "f::Created", kind: "nested" }] },
+  { type: "function", name: "last_child", inputs: [], outputs: [{ type: "core::starknet::contract_address::ContractAddress" }], state_mutability: "view" },
+] as const;
+const proxyAbi = [{ type: "event", name: "Upgraded", keys: [], data: [{ name: "implementation", type: "felt" }] }] as const;
+const amount = { name: "amount", type: "core::integer::u128", kind: "data" } as const;
+const childA = [
+  { type: "event", name: "c::Counted", kind: "struct", members: [amount] },
+  { type: "event", name: "c::Event", kind: "enum", variants: [{ name: "Counted", type: "c::Counted", kind: "nested" }] },
+] as const;
+const childB = [
+  { type: "event", name: "c::Counted", kind: "struct", members: [amount] },
+  { type: "event", name: "c::Doubled", kind: "struct", members: [amount] },
+  { type: "event", name: "c::Event", kind: "enum", variants: [{ name: "Counted", type: "c::Counted", kind: "nested" }, { name: "Doubled", type: "c::Doubled", kind: "nested" }] },
+] as const;
+
+const pools = pgTable("pools", { address: text().primaryKey(), total: bignum().notNull(), events: integer().notNull(), created: integer().notNull() });
+const txs = pgTable("txs", { hash: text().primaryKey(), sender: text().notNull(), fee: bignum().notNull(), events: integer().notNull() });
+const ticks = pgTable("ticks", { block: integer().primaryKey(), timestamp: integer().notNull(), last: text().notNull() });
+
+type Block = { number: number; hash: string; parent: string; events: EmittedEvent[]; created: string[] };
+
+/** A chain where a factory creates children that emit events; one child is upgraded to a class with a new event. */
+function fakeNode() {
+  let s = 11;
+  const rand = (n: number) => Math.floor(((s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) * n);
+  let fork = 0;
+  const blocks: Block[] = [];
+  const createdAt = new Map<string, number>();
+  let upgraded: string | undefined;
+  const calls = new Map<string, number>();
+
+  const add = () => {
+    const number = blocks.length;
+    const hash = `0x${number.toString(16)}f${fork}`;
+    const events: EmittedEvent[] = [];
+    const created: string[] = [];
+    const live = blocks.flatMap((b) => b.created);
+    let tx = 0;
+    const emit = (address: string, name: string, value: string) =>
+      events.push({ from_address: address, keys: [selector(name)], data: [value], block_number: number, block_hash: hash, transaction_hash: `0x${number.toString(16)}${tx}f${fork}`, transaction_index: tx++, event_index: 0 });
+    if (number >= FACTORY_DEPLOYED) {
+      const n = number < 100 ? 1 + rand(2) : rand(4) === 0 ? 1 : 0;
+      for (let i = 0; i < n; i++) {
+        const child = `0x${(0x100000 + number * 16 + i).toString(16)}${fork.toString(16)}`;
+        created.push(child);
+        emit(FACTORY, "Created", child);
+      }
+      for (let i = 0; i < rand(5) && live.length > 0; i++) {
+        const child = live[rand(live.length)]!;
+        const name = child === upgraded && number >= UPGRADE_AT && rand(2) === 0 ? "Doubled" : "Counted";
+        emit(child, name, `0x${(1 + rand(9)).toString(16)}`);
+      }
+    }
+    for (const c of created) createdAt.set(c, number);
+    blocks.push({ number, hash, parent: blocks.at(-1)?.hash ?? "0x0", events, created });
+    if (upgraded === undefined && number >= 20) upgraded = blocks.flatMap((b) => b.created)[0];
+  };
+  const reorg = (depth: number) => {
+    fork++;
+    for (const b of blocks.splice(blocks.length - depth, depth)) for (const c of b.created) createdAt.delete(c);
+    for (let i = 0; i < depth; i++) add();
+  };
+
+  const notFound = { code: 24, message: "Block not found" };
+  const at = (params: any) => {
+    const n = params.block_id.block_number;
+    if (blocks[n] === undefined) throw notFound;
+    return n;
+  };
+  const call = (method: string, params: any): unknown => {
+    calls.set(method, (calls.get(method) ?? 0) + (method === "starknet_getEvents" && params.filter.address === "0x1" ? 0 : 1));
+    switch (method) {
+      case "starknet_specVersion":
+        return "0.10.4";
+      case "pathfinder_version":
+        return "fake";
+      case "starknet_chainId":
+        return "0x46414b45";
+      case "starknet_blockNumber":
+        return blocks.length - 1;
+      case "starknet_blockHashAndNumber":
+        return { block_hash: blocks.at(-1)!.hash, block_number: blocks.length - 1 };
+      case "starknet_getBlockWithTxHashes": {
+        const b = blocks[at(params)]!;
+        return header({ block_hash: b.hash, parent_hash: b.parent, block_number: b.number, timestamp: 1_000 + b.number * 2 });
+      }
+      case "starknet_getStateUpdate": {
+        const n = at(params);
+        return { state_diff: { replaced_classes: n === UPGRADE_AT && upgraded !== undefined ? [{ contract_address: upgraded, class_hash: "0xcb" }] : [] } };
+      }
+      case "starknet_getClassHashAt": {
+        const n = at(params);
+        const a = `0x${BigInt(params.contract_address).toString(16)}`;
+        if (a === FACTORY && n >= FACTORY_DEPLOYED) return "0xfa";
+        const created = createdAt.get(a);
+        if (created === undefined || n < created) throw { code: 20, message: "Contract not found" };
+        return a === upgraded && n >= UPGRADE_AT ? "0xcb" : "0xca";
+      }
+      case "starknet_call": {
+        const id = params.block_id;
+        const b = id.block_hash !== undefined ? blocks.find((x) => x.hash === id.block_hash) : blocks[id.block_number];
+        if (b === undefined) throw notFound;
+        if (BigInt(params.request.contract_address) !== BigInt(FACTORY) || params.request.entry_point_selector !== selector("last_child")) throw { code: 21, message: "Entrypoint not found" };
+        return [blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0"];
+      }
+      case "starknet_getTransactionByHash":
+      case "starknet_getTransactionReceipt": {
+        const e = blocks.flatMap((b) => b.events).find((x) => x.transaction_hash === params.transaction_hash);
+        if (e === undefined) throw { code: 29, message: "Transaction hash not found" };
+        if (method === "starknet_getTransactionByHash") return invokeV3(e.transaction_hash, `0x5e${e.transaction_index}`);
+        return invokeReceipt(e.transaction_hash, { number: e.block_number!, hash: e.block_hash! }, `0x${(e.block_number! * 10 + e.transaction_index).toString(16)}`, [e]);
+      }
+      case "starknet_getClass":
+        // The factory is a Cairo 0 style proxy: its class declares none of the events it emits.
+        return { abi: JSON.stringify(params.class_hash === "0xfa" ? proxyAbi : params.class_hash === "0xca" ? childA : childB) };
+      case "starknet_getEvents": {
+        const f = params.filter;
+        const addresses = new Set([f.address].flat().map((x: string) => BigInt(x)));
+        const wanted = f.keys?.[0] === undefined ? undefined : new Set(f.keys[0]);
+        let [from, skip] = f.continuation_token === undefined ? [f.from_block.block_number, 0] : f.continuation_token.split("-").map(Number);
+        const out: EmittedEvent[] = [];
+        for (let b = from; b <= Math.min(f.to_block.block_number, blocks.length - 1); b++) {
+          const matched = blocks[b]!.events.filter((e) => addresses.has(BigInt(e.from_address)) && (wanted === undefined || wanted.has(e.keys[0]!)));
+          for (const [i, e] of matched.entries()) {
+            if (b === from && i < skip) continue;
+            if (out.length === f.chunk_size) return { events: out, continuation_token: `${b}-${i}` };
+            out.push(e);
+          }
+          skip = 0;
+        }
+        return { events: out };
+      }
+    }
+    throw { code: -32601, message: `no ${method}` };
+  };
+  const server: Server = createServer((req, res) => {
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", () => {
+      const parsed = JSON.parse(body);
+      const answer = (r: { id: number; method: string; params: unknown }) => {
+        try {
+          return { jsonrpc: "2.0", id: r.id, result: call(r.method, r.params) };
+        } catch (e) {
+          return { jsonrpc: "2.0", id: r.id, error: e };
+        }
+      };
+      res.writeHead(200, { "content-type": "application/json" });
+      res.end(JSON.stringify(Array.isArray(parsed) ? parsed.map(answer) : answer(parsed)));
+    });
+  });
+  return { blocks, add, reorg, server, calls, children: () => blocks.flatMap((b) => b.created), upgraded: () => upgraded };
+}
+
+const node = fakeNode();
+let rpcUrl: string;
+
+beforeAll(async () => {
+  for (let i = 0; i < 300; i++) node.add();
+  await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
+  const a = node.server.address();
+  rpcUrl = `http://127.0.0.1:${typeof a === "object" && a !== null ? a.port : 0}`;
+});
+
+afterAll(async () => {
+  node.server.close();
+  if (url === undefined) return;
+  const p = new pg.Pool({ connectionString: url, max: 1 });
+  await p.query(`DROP SCHEMA IF EXISTS kasbah_test_features CASCADE; DROP SCHEMA IF EXISTS kasbah_test_cached CASCADE; DROP SCHEMA IF EXISTS kasbah_cache_0x46414b45 CASCADE`);
+  await p.end();
+});
+
+function app(schema: string, cache = false, extra: { ws?: string; pollMs?: number; rpc?: string } = {}) {
+  const a = kasbah({
+    rpc: rpcUrl,
+    database: url!,
+    schema,
+    contracts: { Pool: { abi: childB, factory: { address: FACTORY, abi: factoryAbi, event: "Created", parameter: "pool" }, startBlock: FACTORY_DEPLOYED, include: { transaction: true, receipt: true, block: true } } },
+    blocks: { Every10: { interval: 10, startBlock: 0 } },
+    tables: { pools, ticks, txs },
+    reorgWindow: 16,
+    pollMs: 5,
+    concurrency: 4,
+    cache,
+    ...extra,
+  });
+  a.on("Pool:Counted", async ({ event, context }) => {
+    // include.block: the node's header, in backfill and live (a run fails on a wrong one).
+    const header = node.blocks[event.block.number]!;
+    if (event.block.timestamp !== 1_000 + event.block.number * 2 || event.block.hash !== felt(header.hash)) throw new Error(`block ${event.block.number}: header ${event.block.timestamp} ${event.block.hash}`);
+    const v = event.args.amount;
+    const tx = event.transaction;
+    if (tx.type !== "INVOKE" || tx.version !== "0x3") throw new Error(`not an INVOKE v3: ${tx.type} ${tx.version}`);
+    if (tx.resourceBounds.l2Gas.maxPricePerUnit !== 0x20n || event.receipt.executionResources.l2Gas !== 1_000) throw new Error("transaction or receipt not converted");
+    if (event.log.keys[0] !== event.receipt.events[0]!.keys[0]) throw new Error("event.log is not the emitted event");
+    await context.db.insert(txs).values({ hash: tx.hash, sender: tx.senderAddress, fee: event.receipt.actualFee.amount, events: event.receipt.events.length }).onConflictDoNothing();
+    await context.db.insert(pools).values({ address: event.address, total: v, events: 1, created: event.block.number })
+      .onConflictDoUpdate((r) => ({ total: r.total + v, events: r.events + 1 }));
+  });
+  a.on("Pool:Doubled", async ({ event, context }) => {
+    await context.db.update(pools, { address: event.address }).set((r) => ({ total: r.total * 2n, events: r.events + 1 }));
+  });
+  a.on("Every10:block", async ({ event, context }) => {
+    const last = await context.client.read({ abi: factoryAbi, address: FACTORY, functionName: "last_child" });
+    await context.db.insert(ticks).values({ block: event.block.number, timestamp: event.block.timestamp, last });
+  });
+  return a;
+}
+
+const query = async (sql: string) => {
+  const p = new pg.Pool({ connectionString: url, max: 1 });
+  try {
+    return (await p.query(sql)).rows;
+  } finally {
+    await p.end();
+  }
+};
+const checkpoint = async (schema: string) => {
+  try {
+    return (await query(`SELECT value FROM ${schema}._kasbah_meta WHERE key = 'checkpoint'`))[0]?.value as number | undefined;
+  } catch {
+    return undefined;
+  }
+};
+async function until(condition: () => Promise<boolean>, ms = 30_000) {
+  const end = Date.now() + ms;
+  while (!(await condition())) {
+    if (Date.now() > end) throw new Error("timed out");
+    await new Promise((r) => setTimeout(r, 20));
+  }
+}
+
+/** What the tables must hold for the canonical chain up to `to`. */
+function expected(to: number) {
+  const totals = new Map<string, { total: bigint; events: number; created: number }>();
+  for (const b of node.blocks.slice(0, to + 1)) {
+    for (const e of b.events) {
+      if (BigInt(e.from_address) === BigInt(FACTORY)) continue;
+      const a = `0x${BigInt(e.from_address).toString(16).padStart(64, "0")}`;
+      const t = totals.get(a);
+      if (e.keys[0] === selector("Counted")) {
+        if (t === undefined) totals.set(a, { total: BigInt(e.data[0]!), events: 1, created: b.number });
+        else totals.set(a, { ...t, total: t.total + BigInt(e.data[0]!), events: t.events + 1 });
+      } else totals.set(a, { ...t!, total: t!.total * 2n, events: t!.events + 1 });
+    }
+  }
+  const txRows = node.blocks.slice(0, to + 1).flatMap((b) => b.events.filter((e) => BigInt(e.from_address) !== BigInt(FACTORY) && e.keys[0] === selector("Counted")))
+    .map((e) => ({ hash: felt(e.transaction_hash), sender: felt(`0x5e${e.transaction_index}`), fee: String(e.block_number! * 10 + e.transaction_index), events: 1 }))
+    .sort((x, y) => (x.hash < y.hash ? -1 : 1));
+  return {
+    txs: txRows,
+    pools: [...totals].map(([address, t]) => ({ address, total: t.total.toString(), events: t.events, created: t.created })).sort((x, y) => x.address.localeCompare(y.address)),
+    ticks: node.blocks.slice(0, to + 1).filter((b) => b.number % 10 === 0)
+      .map((b) => ({ block: b.number, timestamp: 1_000 + b.number * 2, last: `0x${BigInt(node.blocks.slice(0, b.number + 1).flatMap((x) => x.created).at(-1) ?? "0x0").toString(16).padStart(64, "0")}` })),
+  };
+}
+const actual = async (schema: string) => ({
+  txs: await query(`SELECT hash, sender, fee::text, events FROM ${schema}.txs ORDER BY hash COLLATE "C"`),
+  pools: await query(`SELECT address, total::text, events, created FROM ${schema}.pools ORDER BY address COLLATE "C"`),
+  ticks: await query(`SELECT block, timestamp, last FROM ${schema}.ticks ORDER BY block`),
+});
+
+test.skipIf(url === undefined)("factories, block handlers, reorgs and an upgrade through the state diff", async () => {
+  const schema = "kasbah_test_features";
+  const logs: string[] = [];
+  const watched = (status = new Status()) => {
+    status.subscribe((n) => logs.push(n.text));
+    return status;
+  };
+  const caughtUp = () => until(async () => (await checkpoint(schema)) === node.blocks.length - 1);
+
+  let stop = new AbortController();
+  const first = watched();
+  let run = app(schema).run({ reset: true, signal: stop.signal, status: first });
+  await caughtUp();
+  let forgotten = 0;
+  for (let i = 0; i < 160; i++) {
+    node.add();
+    if (i % 10 === 0) await new Promise((r) => setTimeout(r, 10));
+    if (i % 50 === 49) {
+      await caughtUp();
+      const depth = 8 + (i % 4);
+      forgotten += node.blocks.slice(-depth).flatMap((b) => b.created).length;
+      const reorgs = first.live.reorgs;
+      node.reorg(depth);
+      // The tip's number is unchanged: wait for the revert, then for the new blocks.
+      await until(async () => first.live.reorgs > reorgs);
+      await caughtUp();
+      // A revert forgets the children it undid: the counts follow the watched sources.
+      expect([first.children, first.contracts]).toEqual([node.children().length, node.children().length]);
+    }
+  }
+  expect(forgotten).toBeGreaterThan(0);
+  expect(logs.some((l) => /^reorg: .*, \d+ children forgotten$/.test(l))).toBe(true);
+  await caughtUp();
+  stop.abort();
+  await run;
+
+  for (let i = 0; i < 40; i++) node.add();
+  node.reorg(44);
+  stop = new AbortController();
+  // The screen's view of a restart: every stored child counted, the last block committed when it stops.
+  const status = watched();
+  run = app(schema).run({ signal: stop.signal, status });
+  await caughtUp();
+  expect(status.phase).toBe("live");
+  expect(status.children).toBe(node.children().length);
+  stop.abort();
+  await run;
+  expect(status.phase).toBe("done");
+  expect(status.checkpoint).toBe(node.blocks.length - 1);
+
+  const tip = node.blocks.length - 1;
+  expect(await actual(schema)).toEqual(expected(tip));
+  const children = await query(`SELECT count(*)::int AS n FROM ${schema}._kasbah_children`);
+  expect(children[0].n).toBe(node.children().length);
+  expect(node.children().length).toBeGreaterThan(100);
+  expect(logs.some((l) => l.includes(`class replaced at block ${UPGRADE_AT}`))).toBe(true);
+  expect(node.calls.get("starknet_getStateUpdate")).toBeGreaterThan(0);
+  expect(logs.filter((l) => l.startsWith("reorg")).length).toBeGreaterThanOrEqual(4);
+}, 120_000);
+
+test.skipIf(url === undefined)("a run that fails ends in the failed phase, not done", async () => {
+  // A node that refuses everything: the run stops at its first call.
+  const refusing = createServer((_, res) => res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "refused" } })));
+  await new Promise<void>((r) => refusing.listen(0, "127.0.0.1", r));
+  const status = new Status();
+  const rpc = `http://127.0.0.1:${(refusing.address() as { port: number }).port}`;
+  await expect(app("kasbah_test_failed", false, { rpc }).run({ reset: true, status })).rejects.toThrow();
+  refusing.close();
+  expect(status.phase).toBe("failed");
+  expect(status.error).toMatch(/refused/);
+  const p = new pg.Pool({ connectionString: url, max: 1 });
+  await p.query(`DROP SCHEMA IF EXISTS kasbah_test_failed CASCADE`);
+  await p.end();
+});
+
+test.skipIf(url === undefined)("a re-index reads the cache and fetches no events", async () => {
+  const schema = "kasbah_test_cached";
+  const to = node.blocks.length - 20;
+  await app(schema, true).run({ reset: true, to, status: new Status() });
+  expect(await actual(schema)).toEqual(expected(to));
+
+  const before = node.calls.get("starknet_getEvents") ?? 0;
+  const headersBefore = node.calls.get("starknet_getBlockWithTxHashes") ?? 0;
+  const callsBefore = node.calls.get("starknet_call") ?? 0;
+  const extrasBefore = (node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0);
+  const logs: string[] = [];
+  const status = new Status();
+  status.subscribe((n) => logs.push(n.text));
+  await app(schema, true).run({ reset: true, to, status });
+  expect(await actual(schema)).toEqual(expected(to));
+  expect(node.calls.get("starknet_getEvents")).toBe(before);
+  expect(node.calls.get("starknet_getBlockWithTxHashes")).toBe(headersBefore);
+  expect(node.calls.get("starknet_call")).toBe(callsBefore);
+  expect((node.calls.get("starknet_getTransactionByHash") ?? 0) + (node.calls.get("starknet_getTransactionReceipt") ?? 0)).toBe(extrasBefore);
+  expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
+
+  // Past the cached range, only the new blocks are fetched (up to the last final one).
+  const final = node.blocks.length - 1 - 16;
+  await app(schema, true).run({ to: final, status: new Status() });
+  expect(await actual(schema)).toEqual(expected(final));
+}, 120_000);
+
+test.skipIf(url === undefined)("with a head subscription, new blocks are indexed without waiting for the poll", async () => {
+  const schema = "kasbah_test_features";
+  const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+  await new Promise<void>((r) => wss.on("listening", r));
+  wss.on("connection", (s) => s.on("message", (m) => s.send(JSON.stringify({ jsonrpc: "2.0", id: JSON.parse(String(m)).id, result: "0x7" }))));
+  const announce = () => {
+    for (const s of wss.clients) s.send(JSON.stringify({ jsonrpc: "2.0", method: "starknet_subscriptionNewHeads", params: { subscription_id: "0x7", result: {} } }));
+  };
+  const stop = new AbortController();
+  const logs: string[] = [];
+  const status = new Status();
+  status.subscribe((n) => logs.push(n.text));
+  const run = app(schema, false, { ws: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, pollMs: 60_000 }).run({ signal: stop.signal, status });
+  try {
+    await until(async () => (await checkpoint(schema)) === node.blocks.length - 1);
+    for (let i = 0; i < 5; i++) {
+      node.add();
+      const started = Date.now();
+      announce();
+      await until(async () => (await checkpoint(schema)) === node.blocks.length - 1, 5_000);
+      expect(Date.now() - started).toBeLessThan(5_000);
+    }
+  } finally {
+    stop.abort();
+    await run;
+    wss.close();
+  }
+  expect(await actual(schema)).toEqual(expected(node.blocks.length - 1));
+  expect(logs).toContain("WebSocket: following new heads");
+}, 60_000);
+
+// Compile-time only: transaction fields and the receipt exist only with `include`.
+function _types() {
+  const plain = kasbah({ rpc: "", database: "", contracts: { P: { abi: childA, address: "0x1", startBlock: 0 } }, tables: { pools } });
+  plain.on("P:Counted", ({ event }) => {
+    // @ts-expect-error no receipt without include.receipt
+    void event.receipt;
+    // @ts-expect-error no transaction fields without include.transaction
+    void event.transaction.senderAddress;
+    void event.transaction.hash;
+  });
+  const both = kasbah({ rpc: "", database: "", contracts: { P: { abi: childA, address: "0x1", startBlock: 0, include: { receipt: true } } }, tables: { pools } });
+  both.on("P:Counted", ({ event }) => {
+    const status: "SUCCEEDED" | "REVERTED" = event.receipt.executionStatus;
+    // @ts-expect-error revertReason only once narrowed to REVERTED
+    void event.receipt.revertReason;
+    if (event.receipt.executionStatus === "REVERTED") void (event.receipt.revertReason satisfies string);
+    // @ts-expect-error only the receipt was asked for
+    void event.transaction.calldata;
+    return void status;
+  });
+}

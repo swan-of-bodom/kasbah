@@ -17,7 +17,7 @@
     "./package.json": "./package.json"
   },
   "bin": {
-    "kasbah": "./dist/cli.js"
+    "kasbah": "./dist/cli/main.js"
   },
   "files": [
     "dist",
@@ -29,8 +29,8 @@
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
     "typecheck": "tsc --noEmit",
     "fixtures": "node --env-file=.env scripts/fetch-fixtures.ts",
-    "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli.ts",
-    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli.js",
+    "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli/main.ts",
+    "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli/main.js",
     "prepack": "pnpm build"
   },
   "dependencies": {

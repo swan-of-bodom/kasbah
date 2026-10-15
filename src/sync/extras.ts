@@ -1,7 +1,7 @@
-import type { EventCache } from "../cache.ts";
+import type { EventCache } from "../db/cache.ts";
 import type { RpcClient } from "../rpc/client.ts";
 import type { EmittedEvent } from "../rpc/methods.ts";
-import { type RawReceipt, type RawTransaction, type Receipt, receiptOf, type Transaction, transactionOf } from "../transaction.ts";
+import { type RawReceipt, type RawTransaction, type Receipt, receiptOf, type Transaction, transactionOf } from "../types/transaction.ts";
 
 export type Extras = { transaction?: Transaction; receipt?: Receipt };
 /** As the node returns them: what the cache keeps. */
