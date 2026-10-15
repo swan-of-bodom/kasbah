@@ -1,6 +1,6 @@
 import { expect, test } from "vitest";
 import type { Abi } from "../../src/abi/abi.ts";
-import { generate } from "../../src/cli/init.ts";
+import { generate } from "../../src/cli/commands/init.ts";
 
 const abi = [
   { type: "struct", name: "x::Key", members: [{ name: "a", type: "core::felt252" }] },

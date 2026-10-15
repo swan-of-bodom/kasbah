@@ -21,8 +21,9 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window, and the
   raw-event, header, transaction and call cache (`cache.ts`).
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).
-- `src/cli/`: the `kasbah` command (`main.ts`), `init` (a new project from a contract's ABI), the dev
-  database (`devdb.ts`), and the terminal screens (`ui/`: progress dashboard, questions).
+- `src/cli/`: the `kasbah` command: `main.ts` parses arguments, `commands/` has one file per command (`init`
+  writes a new project from a contract's ABI), `project.ts` finds and loads the app, `devdb.ts` is the dev database,
+  `ui/` the terminal screens (progress dashboard, questions).
 - `test/unit/` and `test/e2e/` (whole runs against fake nodes, the CLI, the packed package); fixtures in `test/fixtures/`.
 - `examples/ekubo/`: Ekubo pools (price, liquidity, balances), hourly and daily candles (OHLC, volume, fees, TVL),
   protocol totals every 1,800 blocks, and routes `/pools/top`, `/pools/:id/candles`, `/history`.

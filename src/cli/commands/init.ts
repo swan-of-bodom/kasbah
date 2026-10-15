@@ -2,14 +2,14 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import pg from "pg";
-import type { Abi, AbiMember } from "../abi/abi.ts";
-import { abiEvents } from "../abi/events.ts";
-import { classHistory } from "../abi/history.ts";
-import { RpcClient } from "../rpc/client.ts";
-import { blockNumber } from "../rpc/methods.ts";
-import { probe } from "../rpc/probe.ts";
-import { Prompt } from "./ui/prompt.ts";
-import { canonical } from "../indexer/sources.ts";
+import type { Abi, AbiMember } from "../../abi/abi.ts";
+import { abiEvents } from "../../abi/events.ts";
+import { classHistory } from "../../abi/history.ts";
+import { RpcClient } from "../../rpc/client.ts";
+import { blockNumber } from "../../rpc/methods.ts";
+import { probe } from "../../rpc/probe.ts";
+import { Prompt } from "../ui/prompt.ts";
+import { canonical } from "../../indexer/sources.ts";
 
 /** What `kasbah init` asks for; every one can also be given as a flag. */
 export type InitOptions = {
@@ -235,7 +235,7 @@ volumes:
 
 /** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own drizzle-orm), else its version. */
 function indexerSpec(): string {
-  const root = resolve(import.meta.dirname, "../..");
+  const root = resolve(import.meta.dirname, "../../..");
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as { version: string };
   if (!existsSync(join(root, ".git"))) return `^${version}`;
   const tarball = join(root, `kasbah-${version}.tgz`);
