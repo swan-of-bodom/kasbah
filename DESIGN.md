@@ -268,10 +268,11 @@ is always rolled back before the next confirmed block. To decide when we get the
   classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
-- One run (`src/indexer/run.ts`): setup, then the phases factories → backfill → keys → live, each starting from the
-  committed position (checkpoint, factory watermark, the window's hashes) and a no-op when it has nothing left, so
-  a restart resumes through the same code. Every write after startup is one of five commits (pre-pass children,
-  backfill batch, entering live, live block, revert), all through one helper: `moves()` says what each moves in
+- One run (`src/indexer/run.ts`): setup (`open.ts`), then the phases factories → backfill → keys → live
+  (`phases/`), each starting from the committed position (checkpoint, factory watermark, the window's hashes) and a
+  no-op when it has nothing left, so a restart resumes through the same code. The position is a `Position`
+  (`commit.ts`) whose fields only its own `commit` sets. Every write after startup is one of five commits (pre-pass
+  children, backfill batch, entering live, live block, revert), all through that method: `moves()` says what each moves in
   `_kasbah_meta` (checkpoint and `pg_notify`, `discovered:*`, `phase`), and memory takes the same values only
   after COMMIT. Pre-pass children are resolved (classes read) before their transaction and watched after it.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.

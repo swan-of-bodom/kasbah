@@ -15,7 +15,7 @@ export type FollowOptions = {
   /** Last indexed block. */
   head: BlockRef;
   /** Hashes of the indexed blocks inside the reorg window, by number; kept up to date by the caller. */
-  known: Map<number, string>;
+  known: ReadonlyMap<number, string>;
   pollMs: number;
   /** Most blocks handled in one tick, when catching up. */
   maxBlocks?: number;
@@ -61,7 +61,7 @@ async function eventsIn(o: FollowOptions, from: number, to: number): Promise<Emi
 }
 
 /** The newest block in `known` (at or below `from`) whose hash the chain still has. */
-export async function findAncestor(rpc: RpcClient, from: number, known: Map<number, string>): Promise<BlockRef> {
+export async function findAncestor(rpc: RpcClient, from: number, known: ReadonlyMap<number, string>): Promise<BlockRef> {
   for (let n = from; known.has(n); n--) {
     const [header] = await getHeaders(rpc, [n], 1);
     if (header!.block_hash === known.get(n)) return { number: n, hash: header!.block_hash };

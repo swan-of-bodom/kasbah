@@ -15,8 +15,9 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/rpc/`: JSON-RPC client (paced in calls per second, retries, zstd), endpoint probe.
 - `src/sync/`: backfill as an ordered event stream with a memory cap (`fetch.ts`), head following with reorg
   detection (`live.ts`), WebSocket new heads (`heads.ts`), transactions and receipts (`extras.ts`).
-- `src/indexer/`: one run, its phases and its commits (`run.ts`); watched addresses, their classes and decoders,
-  factory children (`sources.ts`); `context.client`, reads pinned to the block being indexed (`client.ts`); what a
+- `src/indexer/`: one run (`run.ts`): its setup (`open.ts`), the phases (`phases/`: factories, backfill, keys,
+  live), the one way it writes (`commit.ts`), fetching events and factory children (`events.ts`), running handlers
+  (`handle.ts`); watched addresses, their classes and decoders (`sources.ts`); `context.client`, reads pinned to the block being indexed (`client.ts`); what a
   run reports (`status.ts`: state to read, notices to subscribe to).
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window, and the
   raw-event, header, transaction and call cache (`cache.ts`).

@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { Config } from "../../src/config/app.ts";
-import { moves, planOf } from "../../src/indexer/run.ts";
+import { moves } from "../../src/indexer/commit.ts";
+import { planOf } from "../../src/indexer/plan.ts";
 import { upgradeEventsOf } from "../../src/indexer/sources.ts";
 import cairo0Pair from "../fixtures/cairo0-0.abi.ts";
 import ekubo from "../fixtures/ekubo-core.abi.ts";
