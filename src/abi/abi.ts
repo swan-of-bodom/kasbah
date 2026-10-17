@@ -75,7 +75,11 @@ export type AbiInterface = {
   readonly items: readonly AbiFunction[];
 };
 
-export type AbiImpl = { readonly type: "impl"; readonly name: string; readonly interface_name: string };
+export type AbiImpl = {
+  readonly type: "impl";
+  readonly name: string;
+  readonly interface_name: string;
+};
 
 export type AbiConstructor = {
   readonly type: "constructor";

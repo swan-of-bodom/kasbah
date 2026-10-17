@@ -125,8 +125,10 @@ kasbah, pack and `pnpm add` the tarball again. `test/package.test.ts` does all o
 ## Commands
 
 ```
-pnpm install
+pnpm install     # also points git at .githooks: a commit Biome would change is refused
 pnpm test        # all tests; the Postgres ones need DATABASE_URL in .env
+pnpm lint        # Biome: formatting (100 columns), imports, lint rules; CI runs it, with typecheck and test
+pnpm lint:fix    # fixes what it can
 pnpm kasbah start examples/ekubo/kasbah.config.ts --to 300000   # Ekubo: a project like init writes
 # from deployment to block 300,000: 652,647 events, 2.6 min; with timestamps, one header per block with events (79,184)
 pnpm typecheck   # includes the type tests (test/*.test-d.ts) on the real ABIs

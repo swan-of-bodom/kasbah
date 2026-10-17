@@ -7,7 +7,12 @@ const plain = (s: string) => s.replace(/\x1b\[[0-9;]*[A-Za-z]/g, "");
 const inside = (lines: string[]) => lines.slice(1, -1).map((l) => l.slice(2, -2).trimEnd());
 
 test("durations", () => {
-  expect([duration(4.4), duration(61), duration(3599), duration(3600 * 5 + 61)]).toEqual(["4s", "1m 01s", "59m 59s", "5h 01m"]);
+  expect([duration(4.4), duration(61), duration(3599), duration(3600 * 5 + 61)]).toEqual([
+    "4s",
+    "1m 01s",
+    "59m 59s",
+    "5h 01m",
+  ]);
 });
 
 test("backfill: progress, recent pace, where the time goes, the slowest handlers first", () => {
@@ -25,7 +30,22 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   s.record("Pool:Created", 5);
   s.time.fetch = 8000;
   s.time.commit = 1000;
-  s.rpc = { requests: 30, calls: 900, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: { starknet_getEvents: 400, starknet_blockNumber: 300, starknet_getClassHashAt: 100, starknet_getBlockWithTxHashes: 90, starknet_call: 10 } };
+  s.rpc = {
+    requests: 30,
+    calls: 900,
+    retries: 0,
+    throttled: 0,
+    timeouts: 0,
+    failed: 0,
+    bytes: 0,
+    methods: {
+      starknet_getEvents: 400,
+      starknet_blockNumber: 300,
+      starknet_getClassHashAt: 100,
+      starknet_getBlockWithTxHashes: 90,
+      starknet_call: 10,
+    },
+  };
   const lines = render(s, { width: 100, now: t0 + 10_000 });
   // Every line is the box's width.
   for (const l of lines) expect(l.length).toBe(100);
@@ -79,12 +99,20 @@ test("colors don't change the layout", () => {
   s.record("A:b", 1);
   const colored = render(s, { width: 80, color: true });
   expect(colored.some((l) => l.includes("\x1b["))).toBe(true);
-  expect(colored.map(plain)).toEqual(render(s, { width: 80 }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")));
+  expect(colored.map(plain)).toEqual(
+    render(s, { width: 80 }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")),
+  );
 });
 
 test("the screen redraws in place, with notices and console output above it", async () => {
   let written = "";
-  const out = { columns: 60, write: (c: string) => ((written += c), true) } as unknown as NodeJS.WriteStream;
+  const out = {
+    columns: 60,
+    write: (c: string) => {
+      written += c;
+      return true;
+    },
+  } as unknown as NodeJS.WriteStream;
   const s = new Status();
   const screen = new Screen(s, out);
   screen.start();
@@ -99,7 +127,9 @@ test("the screen redraws in place, with notices and console output above it", as
   expect(frames.length).toBe(3);
   // Each redraw moves up exactly the lines drawn before it.
   expect(Number(frames[1])).toBe(drawn);
-  expect(plain(frames[2]!).startsWith("[kasbah] following the head from block 5\nfrom a handler 7\n")).toBe(true);
+  expect(
+    plain(frames[2]!).startsWith("[kasbah] following the head from block 5\nfrom a handler 7\n"),
+  ).toBe(true);
   // Printed after stop: below the last box, which isn't drawn again.
   console.log("late");
   screen.stop();
@@ -115,7 +145,16 @@ test("rpc: calls per second now against the limit, and the last minute's throttl
   s.enter("backfill");
   s.setRange(0, 1000, 0);
   const t0 = performance.now();
-  s.rpc = { requests: 0, calls: 0, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: {} };
+  s.rpc = {
+    requests: 0,
+    calls: 0,
+    retries: 0,
+    throttled: 0,
+    timeouts: 0,
+    failed: 0,
+    bytes: 0,
+    methods: {},
+  };
   s.rate = () => 500;
   s.recent(t0);
   let text = inside(render(s, { now: t0 + 500 })).join("\n");
@@ -132,7 +171,15 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   s.setRange(0, 1000, 0);
   Object.assign(s.time, { fetch: 1000, extras: 8000, handlers: 500, commit: 500 });
   s.debug = true;
-  s.fetcher = () => ({ buffered: 5_000, maxBuffered: 20_000, windows: 40, running: 30, paused: 6, done: 4, idleWorkers: 2 });
+  s.fetcher = () => ({
+    buffered: 5_000,
+    maxBuffered: 20_000,
+    windows: 40,
+    running: 30,
+    paused: 6,
+    done: 4,
+    idleWorkers: 2,
+  });
   const text = inside(render(s, { width: 110 })).join("\n");
   expect(text).toMatch(/events 10% {2}■ headers\/txs 80% {2}■ handlers 5%/);
   expect(text).toContain("bound by fetching headers and transactions");
@@ -147,5 +194,7 @@ test("live: the delay behind the chain, split between the node and us", () => {
   s.live = { block: 10, timestamp: Math.floor(now / 1000) - 5, events: 1, at: now, reorgs: 0 };
   s.head = () => ({ number: 10, timestamp: s.live.timestamp, at: now - 40 });
   const text = inside(render(s)).join("\n");
-  expect(text).toMatch(/delay +\d\.\ds block timestamp → node announced it · 40\.0 ms announced → committed/);
+  expect(text).toMatch(
+    /delay +\d\.\ds block timestamp → node announced it · 40\.0 ms announced → committed/,
+  );
 });

@@ -37,11 +37,23 @@ export function moves(c: Commit, watermark: number): Moves {
     case "block":
       return { checkpoint: c.block.number, watermark: c.block.number };
     case "revert":
-      return c.to.number < watermark ? { checkpoint: c.to.number, watermark: c.to.number } : { checkpoint: c.to.number };
+      return c.to.number < watermark
+        ? { checkpoint: c.to.number, watermark: c.to.number }
+        : { checkpoint: c.to.number };
   }
 }
 
-type Writers = { pool: pg.Pool; store: Store; cache: EventCache | undefined; factories: { contract: string }[]; sources: Sources; status: Status; schema: string; window: number; start: number };
+type Writers = {
+  pool: pg.Pool;
+  store: Store;
+  cache: EventCache | undefined;
+  factories: { contract: string }[];
+  sources: Sources;
+  status: Status;
+  schema: string;
+  window: number;
+  start: number;
+};
 
 /**
  * The committed position, and the one way to move it. Phases hand nothing to each other but this: each starts from
@@ -53,7 +65,10 @@ export class Position {
   #watermark: number;
   readonly #known: Map<number, string>;
 
-  constructor(w: Writers, stored: { checkpoint: number | undefined; watermark: number; known: Map<number, string> }) {
+  constructor(
+    w: Writers,
+    stored: { checkpoint: number | undefined; watermark: number; known: Map<number, string> },
+  ) {
     this.#w = w;
     this.#checkpoint = stored.checkpoint;
     this.#watermark = stored.watermark;
@@ -125,12 +140,16 @@ export class Position {
           await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [c.to.number]);
           break;
       }
-      if (m.watermark !== undefined) for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
+      if (m.watermark !== undefined)
+        for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
       if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
       if (m.checkpoint !== undefined) {
         await setMeta(tx, "checkpoint", m.checkpoint);
         // Delivered at COMMIT: API servers re-run live queries.
-        await tx.query(`SELECT pg_notify($1, $2)`, [liveChannel(schema), JSON.stringify({ checkpoint: m.checkpoint })]);
+        await tx.query(`SELECT pg_notify($1, $2)`, [
+          liveChannel(schema),
+          JSON.stringify({ checkpoint: m.checkpoint }),
+        ]);
       }
     });
     const ms = performance.now() - started;
@@ -153,18 +172,37 @@ export class Position {
         for (const n of this.#known.keys()) if (n > c.to.number) this.#known.delete(n);
         break;
     }
-    const block = c.kind === "block" ? { number: c.block.number, timestamp: c.block.header.timestamp, events: c.block.events.length, children: c.children.length } : undefined;
+    const block =
+      c.kind === "block"
+        ? {
+            number: c.block.number,
+            timestamp: c.block.header.timestamp,
+            events: c.block.events.length,
+            children: c.children.length,
+          }
+        : undefined;
     status.committed({ kind: c.kind, ms, ...parts, checkpoint: this.#checkpoint, block });
     return { undone, forgotten };
   }
 }
 
 const setMeta = (tx: pg.PoolClient, key: string, value: unknown) =>
-  tx.query(`INSERT INTO _kasbah_meta VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, [key, JSON.stringify(value)]);
+  tx.query(
+    `INSERT INTO _kasbah_meta VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [key, JSON.stringify(value)],
+  );
 
 const saveHash = (tx: pg.PoolClient, block: BlockRef) =>
-  tx.query(`INSERT INTO _kasbah_blocks VALUES ($1, $2) ON CONFLICT (number) DO UPDATE SET hash = EXCLUDED.hash`, [block.number, block.hash]);
+  tx.query(
+    `INSERT INTO _kasbah_blocks VALUES ($1, $2) ON CONFLICT (number) DO UPDATE SET hash = EXCLUDED.hash`,
+    [block.number, block.hash],
+  );
 
 const insertChildren = async (tx: pg.PoolClient, children: Watched[]) => {
-  for (const w of children) await tx.query(`INSERT INTO _kasbah_children VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [w.address, w.contract, w.from]);
+  for (const w of children)
+    await tx.query(`INSERT INTO _kasbah_children VALUES ($1, $2, $3) ON CONFLICT DO NOTHING`, [
+      w.address,
+      w.contract,
+      w.from,
+    ]);
 };

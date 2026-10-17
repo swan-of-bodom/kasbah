@@ -1,5 +1,10 @@
 /** A full `getBlockWithTxHashes` result, with the given hashes, number and timestamp. */
-export const header = (o: { block_hash: string; parent_hash: string; block_number: number; timestamp: number }) => ({
+export const header = (o: {
+  block_hash: string;
+  parent_hash: string;
+  block_number: number;
+  timestamp: number;
+}) => ({
   ...o,
   status: "ACCEPTED_ON_L2",
   new_root: "0x1",

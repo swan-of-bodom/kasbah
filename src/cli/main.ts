@@ -75,8 +75,20 @@ const [command, arg] = positionals;
 try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
-  else if (command === "start") await start(target(arg), { to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, dev: values.dev, ui: values.ui, debug: values.debug });
-  else if (command === "dev") await dev(import.meta.filename, target(arg), { ui: values.ui, debug: values.debug, reset: values.reset });
+  else if (command === "start")
+    await start(target(arg), {
+      to: values.to === undefined ? undefined : Number(values.to),
+      reset: values.reset,
+      dev: values.dev,
+      ui: values.ui,
+      debug: values.debug,
+    });
+  else if (command === "dev")
+    await dev(import.meta.filename, target(arg), {
+      ui: values.ui,
+      debug: values.debug,
+      reset: values.reset,
+    });
   else if (command === "clean") await clean(target(arg), values.yes);
   else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);

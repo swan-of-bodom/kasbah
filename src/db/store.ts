@@ -37,18 +37,27 @@ type Selected<T extends PgTable> = InferSelectModel<T>;
 /** The handler-facing database: reads and writes go to memory, `flush` writes them out in one transaction. */
 export type Db = {
   find<T extends PgTable>(table: T, key: Key<T>): Promise<Selected<T> | null>;
-  insert<T extends PgTable>(table: T): {
+  insert<T extends PgTable>(
+    table: T,
+  ): {
     values(row: Values<T>): InsertQuery<T>;
   };
-  update<T extends PgTable>(table: T, key: Key<T>): {
-    set(change: Partial<Values<T>> | ((row: Selected<T>) => Partial<Values<T>>)): Promise<Selected<T>>;
+  update<T extends PgTable>(
+    table: T,
+    key: Key<T>,
+  ): {
+    set(
+      change: Partial<Values<T>> | ((row: Selected<T>) => Partial<Values<T>>),
+    ): Promise<Selected<T>>;
   };
   delete<T extends PgTable>(table: T, key: Key<T>): Promise<boolean>;
 };
 
 export type InsertQuery<T extends PgTable> = PromiseLike<Selected<T>> & {
   onConflictDoNothing(): Promise<Selected<T> | null>;
-  onConflictDoUpdate(change: Partial<Values<T>> | ((row: Selected<T>) => Partial<Values<T>>)): Promise<Selected<T>>;
+  onConflictDoUpdate(
+    change: Partial<Values<T>> | ((row: Selected<T>) => Partial<Values<T>>),
+  ): Promise<Selected<T>>;
 };
 
 /** A row's values for `columns`, as the driver would send them, keyed by column name. */
@@ -74,7 +83,14 @@ export class Store {
     this.#maxCachedRows = options.maxCachedRows ?? 500_000;
     for (const t of tables) {
       const info = tableInfo(t);
-      this.#tables.set(t, { info, cache: new Map(), complete: options.complete, pending: new Map(), before: new Map(), keyed: !options.unkeyed?.has(info.name) });
+      this.#tables.set(t, {
+        info,
+        cache: new Map(),
+        complete: options.complete,
+        pending: new Map(),
+        before: new Map(),
+        keyed: !options.unkeyed?.has(info.name),
+      });
     }
     this.db = this.#createDb();
   }
@@ -128,11 +144,13 @@ export class Store {
           this.#write(s, row, null);
           return row;
         }
-        if (await this.#get(s, row)) throw new Error(`${s.info.name}: a row with key ${k} already exists`);
+        if (await this.#get(s, row))
+          throw new Error(`${s.info.name}: a row with key ${k} already exists`);
         this.#write(s, row, null);
         return row;
       };
       const query = {
+        // biome-ignore lint/suspicious/noThenProperty: awaitable like Drizzle's builders, `await db.insert(t).values(r)`
         then: (ok?: (v: Row) => unknown, fail?: (e: unknown) => unknown) => plain().then(ok, fail),
         onConflictDoNothing: async () => {
           if (await this.#get(s, row)) return null;
@@ -160,8 +178,12 @@ export class Store {
         set: async (change) => {
           const s = this.#state(table);
           const current = await this.#get(s, key as Row);
-          if (current === null) throw new Error(`${s.info.name}: no row with key ${s.info.keyOf(key as Row)}`);
-          const next = { ...current, ...(typeof change === "function" ? change(current as never) : change) };
+          if (current === null)
+            throw new Error(`${s.info.name}: no row with key ${s.info.keyOf(key as Row)}`);
+          const next = {
+            ...current,
+            ...(typeof change === "function" ? change(current as never) : change),
+          };
           this.#write(s, next, current);
           return next as never;
         },
@@ -200,29 +222,39 @@ export class Store {
       const inserts: Row[] = [];
       const upserts: Row[] = [];
       const deletes: Row[] = [];
-      for (const p of s.pending.values()) (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
+      for (const p of s.pending.values())
+        (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
       const table = quote(s.info.name);
 
-      if (upserts.length > 0 || deletes.length > 0) await this.#addKey(s, (sql) => client.query(sql));
+      if (upserts.length > 0 || deletes.length > 0)
+        await this.#addKey(s, (sql) => client.query(sql));
       if (deletes.length > 0) await this.#delete(client, s.info, deletes);
       if (inserts.length > 0) {
         try {
           await copyRows(client, s.info, table, inserts);
         } catch (e) {
-          if ((e as { code?: string }).code === "23505") throw new Error(`${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`, { cause: e });
+          if ((e as { code?: string }).code === "23505")
+            throw new Error(
+              `${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`,
+              { cause: e },
+            );
           throw e;
         }
       }
       if (upserts.length > 0) {
         const temp = quote(`_kasbah_${s.info.name}`);
-        await client.query(`CREATE TEMP TABLE IF NOT EXISTS ${temp} (LIKE ${table}) ON COMMIT DELETE ROWS`);
+        await client.query(
+          `CREATE TEMP TABLE IF NOT EXISTS ${temp} (LIKE ${table}) ON COMMIT DELETE ROWS`,
+        );
         await copyRows(client, s.info, temp, upserts);
         const pk = s.info.primaryKey.map((c) => quote(c.column.name)).join(", ");
         const set = s.info.columns
           .filter((c) => !s.info.primaryKey.includes(c))
           .map((c) => `${quote(c.column.name)} = EXCLUDED.${quote(c.column.name)}`);
         const onConflict = set.length > 0 ? `DO UPDATE SET ${set.join(", ")}` : "DO NOTHING";
-        await client.query(`INSERT INTO ${table} SELECT * FROM ${temp} ON CONFLICT (${pk}) ${onConflict}`);
+        await client.query(
+          `INSERT INTO ${table} SELECT * FROM ${temp} ON CONFLICT (${pk}) ${onConflict}`,
+        );
       }
       s.pending.clear();
       if (s.cache.size > this.#maxCachedRows) {
@@ -256,7 +288,10 @@ export class Store {
     } catch (e) {
       if ((e as { code?: string }).code === "23505") {
         const detail = (e as { detail?: string }).detail ?? "duplicate key";
-        throw new Error(`${s.info.name}: a handler inserted a key twice (${detail}); fix the handler and run with reset`, { cause: e });
+        throw new Error(
+          `${s.info.name}: a handler inserted a key twice (${detail}); fix the handler and run with reset`,
+          { cause: e },
+        );
       }
       throw e;
     }
@@ -291,12 +326,22 @@ export class Store {
    * caches: the database is the truth again.
    */
   async revert(client: PoolClient, ancestor: number): Promise<number> {
-    const { rows } = await client.query<{ tbl: string; pk: Record<string, unknown>; before: Record<string, unknown> | null }>(
-      `DELETE FROM _kasbah_journal WHERE block > $1 RETURNING tbl, pk, before, block, seq`,
-      [ancestor],
-    );
-    const ordered = (rows as unknown as { tbl: string; pk: Record<string, unknown>; before: Record<string, unknown> | null; block: number; seq: string }[])
-      .sort((a, b) => b.block - a.block || Number(BigInt(b.seq) - BigInt(a.seq)));
+    const { rows } = await client.query<{
+      tbl: string;
+      pk: Record<string, unknown>;
+      before: Record<string, unknown> | null;
+    }>(`DELETE FROM _kasbah_journal WHERE block > $1 RETURNING tbl, pk, before, block, seq`, [
+      ancestor,
+    ]);
+    const ordered = (
+      rows as unknown as {
+        tbl: string;
+        pk: Record<string, unknown>;
+        before: Record<string, unknown> | null;
+        block: number;
+        seq: string;
+      }[]
+    ).sort((a, b) => b.block - a.block || Number(BigInt(b.seq) - BigInt(a.seq)));
     const byName = new Map([...this.#tables.values()].map((s) => [s.info.name, s]));
     for (const r of ordered) {
       const s = byName.get(r.tbl);
@@ -305,12 +350,17 @@ export class Store {
       const pkCols = info.primaryKey.map((c) => c.column.name);
       if (r.before === null) {
         const where = pkCols.map((c, i) => `${quote(c)} = $${i + 1}`).join(" AND ");
-        await client.query(`DELETE FROM ${quote(info.name)} WHERE ${where}`, pkCols.map((c) => r.pk[c]));
+        await client.query(
+          `DELETE FROM ${quote(info.name)} WHERE ${where}`,
+          pkCols.map((c) => r.pk[c]),
+        );
       } else {
         // ON CONFLICT needs the key: a restart reverts before the keys phase, and a table may have lost it.
         await this.#addKey(s, (sql) => client.query(sql));
         const cols = info.columns.map((c) => c.column.name);
-        const set = cols.filter((c) => !pkCols.includes(c)).map((c) => `${quote(c)} = EXCLUDED.${quote(c)}`);
+        const set = cols
+          .filter((c) => !pkCols.includes(c))
+          .map((c) => `${quote(c)} = EXCLUDED.${quote(c)}`);
         await client.query(
           `INSERT INTO ${quote(info.name)} (${cols.map(quote).join(", ")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(", ")})
            ON CONFLICT (${pkCols.map(quote).join(", ")}) ${set.length > 0 ? `DO UPDATE SET ${set.join(", ")}` : "DO NOTHING"}`,
@@ -338,7 +388,10 @@ export class Store {
         });
         return `(${placeholders.join(", ")})`;
       });
-      await client.query(`DELETE FROM ${quote(info.name)} WHERE (${cols}) IN (${tuples.join(", ")})`, params);
+      await client.query(
+        `DELETE FROM ${quote(info.name)} WHERE (${cols}) IN (${tuples.join(", ")})`,
+        params,
+      );
     }
   }
 }

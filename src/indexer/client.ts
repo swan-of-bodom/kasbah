@@ -1,10 +1,10 @@
 import type { Abi } from "../abi/abi.ts";
 import { compileFunction } from "../abi/functions.ts";
-import type { FunctionArgs, FunctionName, FunctionResult } from "../abi/types.ts";
 import { rawSelector } from "../abi/selector.ts";
-import { type Felt, felt, unpadded } from "../types/felt.ts";
+import type { FunctionArgs, FunctionName, FunctionResult } from "../abi/types.ts";
 import type { EventCache } from "../db/cache.ts";
-import { RpcError, type RpcClient } from "../rpc/client.ts";
+import { type RpcClient, RpcError } from "../rpc/client.ts";
+import { type Felt, felt, unpadded } from "../types/felt.ts";
 
 export type ReadParameters<TAbi extends Abi, N extends FunctionName<TAbi>> = {
   abi: TAbi;
@@ -12,7 +12,9 @@ export type ReadParameters<TAbi extends Abi, N extends FunctionName<TAbi>> = {
   functionName: N;
   /** State at the end of this block. Default: the block being indexed. */
   block?: number;
-} & (Record<string, never> extends FunctionArgs<TAbi, N> ? { args?: FunctionArgs<TAbi, N> } : { args: FunctionArgs<TAbi, N> });
+} & (Record<string, never> extends FunctionArgs<TAbi, N>
+  ? { args?: FunctionArgs<TAbi, N> }
+  : { args: FunctionArgs<TAbi, N> });
 
 export type CallParameters = {
   address: string;
@@ -24,7 +26,9 @@ export type CallParameters = {
 
 /** Contract reads for handlers, pinned to the block being indexed. */
 export type Client = {
-  read<const TAbi extends Abi, const N extends FunctionName<TAbi>>(p: ReadParameters<TAbi, N>): Promise<FunctionResult<TAbi, N>>;
+  read<const TAbi extends Abi, const N extends FunctionName<TAbi>>(
+    p: ReadParameters<TAbi, N>,
+  ): Promise<FunctionResult<TAbi, N>>;
   /** Raw `starknet_call`: calldata in, result felts out. */
   call(p: CallParameters): Promise<Felt[]>;
 };
@@ -55,22 +59,40 @@ export class CallClient implements Client {
     this.#max = options.maxEntries ?? 100_000;
   }
 
-  read = async <const TAbi extends Abi, const N extends FunctionName<TAbi>>(p: ReadParameters<TAbi, N>): Promise<FunctionResult<TAbi, N>> => {
+  read = async <const TAbi extends Abi, const N extends FunctionName<TAbi>>(
+    p: ReadParameters<TAbi, N>,
+  ): Promise<FunctionResult<TAbi, N>> => {
     const f = compileFunction(p.abi, p.functionName);
     const felts = await this.#call(p.address, f.selector, f.encode(p.args), p.block, f.name);
     return f.decode(felts) as FunctionResult<TAbi, N>;
   };
 
   call = async (p: CallParameters): Promise<Felt[]> =>
-    (await this.#call(p.address, p.entrypoint.startsWith("0x") ? canonical(p.entrypoint) : rawSelector(p.entrypoint), (p.calldata ?? []).map(canonical), p.block, p.entrypoint)).map(felt);
+    (
+      await this.#call(
+        p.address,
+        p.entrypoint.startsWith("0x") ? canonical(p.entrypoint) : rawSelector(p.entrypoint),
+        (p.calldata ?? []).map(canonical),
+        p.block,
+        p.entrypoint,
+      )
+    ).map(felt);
 
-  async #call(address: string, entrypoint: string, calldata: string[], at: number | undefined, label: string): Promise<string[]> {
+  async #call(
+    address: string,
+    entrypoint: string,
+    calldata: string[],
+    at: number | undefined,
+    label: string,
+  ): Promise<string[]> {
     const block = at ?? this.current.number;
     const final = this.#options.isFinal(block);
     const contract = canonical(address);
     const key = final ? `${contract}:${entrypoint}:${calldata.join(",")}:${block}` : undefined;
     if (key !== undefined) {
-      const hit = this.#memory.get(key) ?? (await this.#options.cache?.getCall(contract, entrypoint, calldata, block));
+      const hit =
+        this.#memory.get(key) ??
+        (await this.#options.cache?.getCall(contract, entrypoint, calldata, block));
       if (hit !== undefined) {
         this.stats.cached++;
         this.#remember(key, hit);
@@ -79,16 +101,24 @@ export class CallClient implements Client {
     }
     // Not final: pin by hash, so a reorged or lagging node can't answer for another block at the same height.
     // Handlers see padded hashes; the node takes its own form.
-    const blockId = !final && at === undefined && this.current.hash !== undefined ? { block_hash: unpadded(this.current.hash) } : { block_number: block };
+    const blockId =
+      !final && at === undefined && this.current.hash !== undefined
+        ? { block_hash: unpadded(this.current.hash) }
+        : { block_number: block };
     this.stats.calls++;
     let result: string[];
     try {
-      result = (await this.#rpc.request<string[]>("starknet_call", {
-        request: { contract_address: contract, entry_point_selector: entrypoint, calldata },
-        block_id: blockId,
-      })).map(canonical);
+      result = (
+        await this.#rpc.request<string[]>("starknet_call", {
+          request: { contract_address: contract, entry_point_selector: entrypoint, calldata },
+          block_id: blockId,
+        })
+      ).map(canonical);
     } catch (err) {
-      if (err instanceof RpcError) throw new Error(`call ${label} on ${contract} at block ${block}: ${err.message}`, { cause: err });
+      if (err instanceof RpcError)
+        throw new Error(`call ${label} on ${contract} at block ${block}: ${err.message}`, {
+          cause: err,
+        });
       throw err;
     }
     if (key !== undefined) {

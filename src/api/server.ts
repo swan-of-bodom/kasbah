@@ -1,8 +1,15 @@
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { execute, GraphQLError, type GraphQLSchema, specifiedRules, validate } from "graphql";
-import { is, Relations } from "drizzle-orm";
+import { is, type Relations } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
+import {
+  type DocumentNode,
+  execute,
+  GraphQLError,
+  type GraphQLSchema,
+  specifiedRules,
+  validate,
+} from "graphql";
 import { tableInfo } from "../db/table.ts";
 import { createGraphqlSchema, relationsOf } from "./graphql.ts";
 import { parseLimited } from "./limits.ts";
@@ -23,7 +30,8 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
 /** The channel the indexer notifies on each commit, with `{"checkpoint": n}`. */
 export const liveChannel = (schema: string) => `kasbah_${schema}`;
 
-const stringify = (v: unknown) => JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
+const stringify = (v: unknown) =>
+  JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
 
 const MAX_BODY = 1 << 20;
 
@@ -103,7 +111,12 @@ export class Api {
   readonly #live = new Set<(checkpoint: number | undefined) => void>();
   readonly #maxLive: number;
   readonly #tables: Record<string, PgTable | Relations>;
-  readonly #routes: { method: string; path: string; match: ReturnType<typeof matcher>; handler: Route["handler"] }[];
+  readonly #routes: {
+    method: string;
+    path: string;
+    match: ReturnType<typeof matcher>;
+    handler: Route["handler"];
+  }[];
   #unlisten: (() => Promise<void>) | undefined;
 
   private constructor(reader: Reader, schema: GraphQLSchema, o: ApiOptions) {
@@ -118,17 +131,21 @@ export class Api {
   static async start(o: ApiOptions): Promise<Api> {
     const seen = new Set<string>();
     for (const r of o.routes ?? []) {
-      if (seen.has(`${r.method} ${r.path}`)) throw new Error(`route ${r.method} ${r.path} defined twice`);
+      if (seen.has(`${r.method} ${r.path}`))
+        throw new Error(`route ${r.method} ${r.path} defined twice`);
       seen.add(`${r.method} ${r.path}`);
       matcher(r.path);
     }
-    const infos = Object.fromEntries(Object.entries(o.tables).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])));
+    const infos = Object.fromEntries(
+      Object.entries(o.tables).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])),
+    );
     const reader = await Reader.connect({ ...o, tables: Object.values(infos) });
     const api = new Api(reader, createGraphqlSchema(infos, relationsOf(o.tables, infos)), o);
     api.#unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
       let checkpoint: number | undefined;
       try {
-        checkpoint = payload === "" ? undefined : (JSON.parse(payload) as { checkpoint?: number }).checkpoint;
+        checkpoint =
+          payload === "" ? undefined : (JSON.parse(payload) as { checkpoint?: number }).checkpoint;
       } catch {}
       for (const l of api.#live) l(checkpoint);
     });
@@ -168,8 +185,13 @@ export class Api {
       if (path === "/sql" && req.method === "POST") {
         const body = await json(req);
         if (typeof body.sql !== "string") throw new QueryError("`sql` must be a string");
-        if (body.params !== undefined && !Array.isArray(body.params)) throw new QueryError("`params` must be an array");
-        return send(res, 200, await this.#reader.sql(body.sql, body.params as unknown[] | undefined));
+        if (body.params !== undefined && !Array.isArray(body.params))
+          throw new QueryError("`params` must be an array");
+        return send(
+          res,
+          200,
+          await this.#reader.sql(body.sql, body.params as unknown[] | undefined),
+        );
       }
       if (path === "/graphql" && req.method === "POST") {
         const body = await json(req);
@@ -179,25 +201,39 @@ export class Api {
       if (path === "/graphql" && req.method === "GET") {
         const q = new URL(req.url ?? "/", "http://x").searchParams;
         const query = q.get("query");
-        if (query !== null) return send(res, 200, await this.#graphql(query, parseJson(q.get("variables"), "variables")));
+        if (query !== null)
+          return send(
+            res,
+            200,
+            await this.#graphql(query, parseJson(q.get("variables"), "variables")),
+          );
         if ((req.headers.accept ?? "").includes("text/html")) {
           res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
           return res.end(GRAPHIQL);
         }
-        throw new QueryError("GET /graphql takes ?query= (and ?variables=), or open it in a browser for GraphiQL");
+        throw new QueryError(
+          "GET /graphql takes ?query= (and ?variables=), or open it in a browser for GraphiQL",
+        );
       }
       if (path === "/" && req.method === "GET") {
         return send(res, 200, {
           endpoints: [
-            "POST /sql {sql, params?}", "POST /graphql {query, variables?}", "GET /graphql (GraphiQL in a browser, or ?query=)", "GET /live (?sql= or ?query=)",
-            "GET /status", "GET /health", "GET /ready", ...this.#routes.map((r) => `${r.method} ${r.path}`),
+            "POST /sql {sql, params?}",
+            "POST /graphql {query, variables?}",
+            "GET /graphql (GraphiQL in a browser, or ?query=)",
+            "GET /live (?sql= or ?query=)",
+            "GET /status",
+            "GET /health",
+            "GET /ready",
+            ...this.#routes.map((r) => `${r.method} ${r.path}`),
           ],
         });
       }
       if (path === "/live" && req.method === "GET") return await this.#stream(req, res);
       for (const r of this.#routes) {
         const params = r.match(path);
-        if (params !== undefined && r.method === req.method) return await this.#route(r.handler, params, req, res);
+        if (params !== undefined && r.method === req.method)
+          return await this.#route(r.handler, params, req, res);
       }
       send(res, 404, { error: "not found" });
     } catch (e) {
@@ -208,36 +244,55 @@ export class Api {
   }
 
   async #status(): Promise<Record<string, string>> {
-    const { rows } = await this.#reader.sql(`SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`);
+    const { rows } = await this.#reader.sql(
+      `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`,
+    );
     return Object.fromEntries(rows as [string, string][]);
   }
 
-  async #route(handler: Route["handler"], params: Record<string, string>, req: IncomingMessage, res: ServerResponse) {
+  async #route(
+    handler: Route["handler"],
+    params: Record<string, string>,
+    req: IncomingMessage,
+    res: ServerResponse,
+  ) {
     const text = req.method === "POST" ? await readBody(req) : "";
     const body = text === "" ? undefined : parseJson(text, "body");
     const query = new URL(req.url ?? "/", "http://x").searchParams;
     const out = await this.#reader.transaction(async (client) => {
-      const r = await (handler as (c: unknown) => unknown)({ db: drizzle(client, { schema: this.#tables }), params, query, body, request: req });
+      const r = await (handler as (c: unknown) => unknown)({
+        db: drizzle(client, { schema: this.#tables }),
+        params,
+        query,
+        body,
+        request: req,
+      });
       // Read inside the transaction: a streamed body could still be querying.
-      return r instanceof Response ? { response: r, bytes: Buffer.from(await r.arrayBuffer()) } : { json: r };
+      return r instanceof Response
+        ? { response: r, bytes: Buffer.from(await r.arrayBuffer()) }
+        : { json: r };
     });
     if ("json" in out) return send(res, 200, out.json ?? null);
     const headers: Record<string, string> = { "access-control-allow-origin": "*" };
-    out.response.headers.forEach((v, k) => (headers[k] = v));
+    out.response.headers.forEach((v, k) => {
+      headers[k] = v;
+    });
     res.writeHead(out.response.status, headers);
     res.end(out.bytes);
   }
 
   async #graphql(query: string, variables: unknown) {
-    let document;
+    let document: DocumentNode;
     try {
       document = parseLimited(query);
     } catch (e) {
-      if (e instanceof GraphQLError) return { errors: [{ message: e.message, locations: e.locations }] };
+      if (e instanceof GraphQLError)
+        return { errors: [{ message: e.message, locations: e.locations }] };
       throw e;
     }
     const invalid = validate(this.#schema, document, specifiedRules);
-    if (invalid.length > 0) return { errors: invalid.map((e) => ({ message: e.message, locations: e.locations })) };
+    if (invalid.length > 0)
+      return { errors: invalid.map((e) => ({ message: e.message, locations: e.locations })) };
     const result = await this.#reader.transaction(async (client) =>
       execute({
         schema: this.#schema,
@@ -249,7 +304,11 @@ export class Api {
     const errors = result.errors?.map((e) => {
       const original = e.originalError;
       // Only parse and validation errors, our own messages and Postgres errors a query can cause reach the client.
-      const safe = original === undefined || original instanceof QueryError || original instanceof TypeError || original instanceof GraphQLError;
+      const safe =
+        original === undefined ||
+        original instanceof QueryError ||
+        original instanceof TypeError ||
+        original instanceof GraphQLError;
       if (!safe) console.error("[kasbah api]", original);
       return { message: safe ? e.message : "internal error", path: e.path, locations: e.locations };
     });
@@ -268,7 +327,8 @@ export class Api {
     let run: (() => Promise<unknown>) | undefined;
     if (sql !== null) {
       const params = parseJson(q.get("params"), "params");
-      if (params !== undefined && !Array.isArray(params)) throw new QueryError("`params` must be an array");
+      if (params !== undefined && !Array.isArray(params))
+        throw new QueryError("`params` must be an array");
       run = () => this.#reader.sql(sql, params as unknown[] | undefined);
     } else if (query !== null) {
       const variables = parseJson(q.get("variables"), "variables");
@@ -294,7 +354,10 @@ export class Api {
             const next = stringify(await run!());
             if (next !== last) event("result", (last = next));
           } catch (e) {
-            event("error", stringify({ error: e instanceof QueryError ? e.message : "internal error" }));
+            event(
+              "error",
+              stringify({ error: e instanceof QueryError ? e.message : "internal error" }),
+            );
           }
         } while (again && !res.destroyed);
       } finally {
@@ -307,7 +370,11 @@ export class Api {
     };
     // Listening before the first write: a commit can't fall between the first result and the subscription.
     this.#live.add(listener);
-    res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", "access-control-allow-origin": "*" });
+    res.writeHead(200, {
+      "content-type": "text/event-stream",
+      "cache-control": "no-cache",
+      "access-control-allow-origin": "*",
+    });
     res.flushHeaders();
     if (last !== undefined) event("result", last);
     const ping = setInterval(() => res.write(": ping\n\n"), 15_000);

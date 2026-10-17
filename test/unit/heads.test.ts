@@ -1,5 +1,5 @@
 import { expect, test } from "vitest";
-import { WebSocketServer, type WebSocket as Socket } from "ws";
+import { type WebSocket as Socket, WebSocketServer } from "ws";
 import { HeadSubscription, type SocketNote } from "../../src/sync/heads.ts";
 
 async function server(onSubscribe: (socket: Socket, id: number) => void) {
@@ -14,11 +14,19 @@ async function server(onSubscribe: (socket: Socket, id: number) => void) {
     });
   });
   const head = (n: number) => {
-    for (const s of sockets) s.send(JSON.stringify({ jsonrpc: "2.0", method: "starknet_subscriptionNewHeads", params: { subscription_id: "0x1", result: { block_number: n } } }));
+    for (const s of sockets)
+      s.send(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          method: "starknet_subscriptionNewHeads",
+          params: { subscription_id: "0x1", result: { block_number: n } },
+        }),
+      );
   };
   return { url: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`, wss, sockets, head };
 }
-const accept = (s: Socket, id: number) => s.send(JSON.stringify({ jsonrpc: "2.0", id, result: "0x1" }));
+const accept = (s: Socket, id: number) =>
+  s.send(JSON.stringify({ jsonrpc: "2.0", id, result: "0x1" }));
 const until = async (c: () => boolean) => {
   for (let i = 0; i < 500 && !c(); i++) await new Promise((r) => setTimeout(r, 10));
   expect(c()).toBe(true);
@@ -58,7 +66,11 @@ test("a head wakes a waiter, a head between waits isn't lost, reconnects after a
 });
 
 test("a refused subscription gives up and leaves polling", async () => {
-  const s = await server((socket, id) => socket.send(JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } })));
+  const s = await server((socket, id) =>
+    socket.send(
+      JSON.stringify({ jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found" } }),
+    ),
+  );
   const notes: SocketNote[] = [];
   const heads = new HeadSubscription(s.url, (n) => notes.push(n));
   try {

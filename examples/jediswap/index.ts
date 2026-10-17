@@ -14,7 +14,12 @@ import { pairs, swaps } from "./schema.ts";
 const main = resolve(process.argv[1] ?? "") === import.meta.filename;
 const { values } = parseArgs({
   args: main ? process.argv.slice(2) : [],
-  options: { to: { type: "string" }, port: { type: "string" }, cache: { type: "boolean" }, reset: { type: "boolean" } },
+  options: {
+    to: { type: "string" },
+    port: { type: "string" },
+    cache: { type: "boolean" },
+    reset: { type: "boolean" },
+  },
 });
 
 const FACTORY = "0x00dad44c139a476c7a17fc8141e6db680e9abc9f56fe249a105094c44382c2fd";
@@ -26,7 +31,11 @@ const app = kasbah({
   schema: "jediswap",
   contracts: {
     Factory: { abi: factoryAbi, address: FACTORY, startBlock: START },
-    Pair: { abi: pairAbi, factory: { address: FACTORY, abi: factoryAbi, event: "PairCreated", parameter: "pair" }, startBlock: START },
+    Pair: {
+      abi: pairAbi,
+      factory: { address: FACTORY, abi: factoryAbi, event: "PairCreated", parameter: "pair" },
+      startBlock: START,
+    },
   },
   tables: schema,
   ...(values.port === undefined ? {} : { api: { port: Number(values.port) } }),
@@ -69,7 +78,9 @@ app.on("Pair:Swap", async ({ event, context }) => {
 });
 
 app.on("Pair:Sync", async ({ event, context }) => {
-  await context.db.update(pairs, { address: event.address }).set({ reserve0: event.args.reserve0, reserve1: event.args.reserve1 });
+  await context.db
+    .update(pairs, { address: event.address })
+    .set({ reserve0: event.args.reserve0, reserve1: event.args.reserve1 });
 });
 
 export default app;
@@ -77,5 +88,9 @@ export default app;
 if (main) {
   const stop = new AbortController();
   process.once("SIGINT", () => stop.abort());
-  await app.run({ to: values.to === undefined ? undefined : Number(values.to), reset: values.reset, signal: stop.signal });
+  await app.run({
+    to: values.to === undefined ? undefined : Number(values.to),
+    reset: values.reset,
+    signal: stop.signal,
+  });
 }

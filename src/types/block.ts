@@ -1,5 +1,5 @@
-import { felt, type Felt as Hex } from "./felt.ts";
 import type { BlockHeader } from "../rpc/methods.ts";
+import { felt, type Felt as Hex } from "./felt.ts";
 
 /** Gas price in fri (STRK) and wei (ETH) per unit. */
 export type GasPrice = { fri: bigint; wei: bigint };
@@ -33,7 +33,10 @@ export type Block = {
   stateDiffCommitment: Hex;
 };
 
-const price = (p: { price_in_fri: string; price_in_wei: string }): GasPrice => ({ fri: BigInt(p.price_in_fri), wei: BigInt(p.price_in_wei) });
+const price = (p: { price_in_fri: string; price_in_wei: string }): GasPrice => ({
+  fri: BigInt(p.price_in_fri),
+  wei: BigInt(p.price_in_wei),
+});
 
 export function blockOf(h: BlockHeader): Block {
   return {

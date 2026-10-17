@@ -4,7 +4,13 @@
   "private": true,
   "description": "Minimal, fast Starknet indexer",
   "license": "Apache-2.0",
-  "keywords": ["starknet", "indexer", "postgres", "graphql", "drizzle"],
+  "keywords": [
+    "starknet",
+    "indexer",
+    "postgres",
+    "graphql",
+    "drizzle"
+  ],
   "type": "module",
   "engines": {
     "node": ">=22.18"
@@ -28,10 +34,14 @@
   "scripts": {
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
     "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "lint:fix": "biome check . --write",
+    "format": "biome format . --write",
     "fixtures": "node --env-file=.env scripts/fetch-fixtures.ts",
     "kasbah": "node --env-file-if-exists=.env --no-warnings src/cli/main.ts",
     "build": "rm -rf dist && tsc -p tsconfig.build.json && chmod +x dist/cli/main.js",
-    "prepack": "pnpm build"
+    "prepack": "pnpm build",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
     "@noble/hashes": "^2.0.0",
@@ -43,6 +53,7 @@
     "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.4",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
@@ -52,5 +63,6 @@
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",
     "ws": "^8.22.0"
-  }
+  },
+  "packageManager": "pnpm@10.30.3"
 }

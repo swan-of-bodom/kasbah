@@ -24,13 +24,18 @@ const small: Reader = (c) => Number(next(c));
 const bool: Reader = (c) => next(c) !== "0x0";
 const hex: Reader = (c) => next(c);
 
-const signed = (asNumber: boolean): Reader => (c) => {
-  const v = BigInt(next(c));
-  const s = v > HALF_P ? v - P : v;
-  return asNumber ? Number(s) : s;
-};
+const signed =
+  (asNumber: boolean): Reader =>
+  (c) => {
+    const v = BigInt(next(c));
+    const s = v > HALF_P ? v - P : v;
+    return asNumber ? Number(s) : s;
+  };
 
-const pad = (width: number): Reader => (c) => `0x${next(c).slice(2).toLowerCase().padStart(width, "0")}`;
+const pad =
+  (width: number): Reader =>
+  (c) =>
+    `0x${next(c).slice(2).toLowerCase().padStart(width, "0")}`;
 
 const u256: Reader = (c) => {
   const low = BigInt(next(c));
@@ -58,19 +63,29 @@ const byteArray: Reader = (c) => {
 
 const unit: Reader = () => undefined;
 
-const array = (item: Reader): Reader => (c) => {
-  const length = Number(next(c));
-  const out = new Array<unknown>(length);
-  for (let i = 0; i < length; i++) out[i] = item(c);
-  return out;
-};
+const array =
+  (item: Reader): Reader =>
+  (c) => {
+    const length = Number(next(c));
+    const out = new Array<unknown>(length);
+    for (let i = 0; i < length; i++) out[i] = item(c);
+    return out;
+  };
 
-const option = (inner: Reader): Reader => (c) => (next(c) === "0x0" ? inner(c) : null);
+const option =
+  (inner: Reader): Reader =>
+  (c) =>
+    next(c) === "0x0" ? inner(c) : null;
 
-const result = (ok: Reader, err: Reader): Reader => (c) =>
-  next(c) === "0x0" ? { ok: ok(c) } : { err: err(c) };
+const result =
+  (ok: Reader, err: Reader): Reader =>
+  (c) =>
+    next(c) === "0x0" ? { ok: ok(c) } : { err: err(c) };
 
-const tuple = (items: Reader[]): Reader => (c) => items.map((r) => r(c));
+const tuple =
+  (items: Reader[]): Reader =>
+  (c) =>
+    items.map((r) => r(c));
 
 const PRIMITIVES: Record<string, Reader> = {
   "core::felt252": big,
@@ -116,26 +131,33 @@ const wFelt: Writer = (v, out) => {
   if (x < 0n || x >= P) throw new TypeError(`${x} is not a felt`);
   out.push(hexOf(x));
 };
-const wUint = (bits: number): Writer => (v, out) => {
-  const x = toFelt(v);
-  if (x < 0n || x >= 1n << BigInt(bits)) throw new TypeError(`${x} does not fit u${bits}`);
-  out.push(hexOf(x));
-};
-const wInt = (bits: number): Writer => (v, out) => {
-  const x = toFelt(v);
-  const half = 1n << BigInt(bits - 1);
-  if (x < -half || x >= half) throw new TypeError(`${x} does not fit i${bits}`);
-  out.push(hexOf(x < 0n ? P + x : x));
-};
+const wUint =
+  (bits: number): Writer =>
+  (v, out) => {
+    const x = toFelt(v);
+    if (x < 0n || x >= 1n << BigInt(bits)) throw new TypeError(`${x} does not fit u${bits}`);
+    out.push(hexOf(x));
+  };
+const wInt =
+  (bits: number): Writer =>
+  (v, out) => {
+    const x = toFelt(v);
+    const half = 1n << BigInt(bits - 1);
+    if (x < -half || x >= half) throw new TypeError(`${x} does not fit i${bits}`);
+    out.push(hexOf(x < 0n ? P + x : x));
+  };
 const wBool: Writer = (v, out) => {
   if (typeof v !== "boolean") throw new TypeError(`not a boolean: ${String(v)}`);
   out.push(v ? "0x1" : "0x0");
 };
-const wLimbs = (limbs: number): Writer => (v, out) => {
-  let x = toFelt(v);
-  if (x < 0n || x >= 1n << (U128 * BigInt(limbs))) throw new TypeError(`${x} does not fit ${limbs * 128} bits`);
-  for (let i = 0; i < limbs; i++, x >>= U128) out.push(hexOf(x & W128));
-};
+const wLimbs =
+  (limbs: number): Writer =>
+  (v, out) => {
+    let x = toFelt(v);
+    if (x < 0n || x >= 1n << (U128 * BigInt(limbs)))
+      throw new TypeError(`${x} does not fit ${limbs * 128} bits`);
+    for (let i = 0; i < limbs; i++, x >>= U128) out.push(hexOf(x & W128));
+  };
 const wByteArray: Writer = (v, out) => {
   if (typeof v !== "string") throw new TypeError(`not a string: ${String(v)}`);
   const bytes = new TextEncoder().encode(v);
@@ -202,7 +224,9 @@ export function splitTopLevel(s: string): string[] {
 }
 
 function generic(type: string, prefix: string): string | undefined {
-  return type.startsWith(`${prefix}::<`) && type.endsWith(">") ? type.slice(prefix.length + 3, -1) : undefined;
+  return type.startsWith(`${prefix}::<`) && type.endsWith(">")
+    ? type.slice(prefix.length + 3, -1)
+    : undefined;
 }
 
 /** Compiles ABI type strings into readers, memoized per ABI. Cairo 0 and Cairo 1 type syntax share one namespace. */
@@ -234,8 +258,13 @@ export class Codec {
     for (const [i, m] of members.entries()) {
       const pointer = m.type.endsWith("*");
       const nextMember = members[i + 1];
-      const hidden = nextMember !== undefined && nextMember.type.endsWith("*") && m.name === `${nextMember.name}_len`;
-      fields.push({ name: m.name, read: pointer ? this.reader(m.type.slice(0, -1)) : this.reader(m.type), pointer, hidden });
+      const hidden = nextMember?.type.endsWith("*") === true && m.name === `${nextMember.name}_len`;
+      fields.push({
+        name: m.name,
+        read: pointer ? this.reader(m.type.slice(0, -1)) : this.reader(m.type),
+        pointer,
+        hidden,
+      });
     }
     return (c) => {
       const out: Record<string, unknown> = {};
@@ -272,9 +301,17 @@ export class Codec {
   membersWriter(members: readonly AbiMember[]): Writer {
     const fields = members.map((m, i) => {
       const nextMember = members[i + 1];
-      const lengthOf = nextMember !== undefined && nextMember.type.endsWith("*") && m.name === `${nextMember.name}_len` ? nextMember.name : undefined;
+      const lengthOf =
+        nextMember?.type.endsWith("*") && m.name === `${nextMember.name}_len`
+          ? nextMember.name
+          : undefined;
       const pointer = m.type.endsWith("*");
-      return { name: m.name, lengthOf, pointer, write: this.writer(pointer ? m.type.slice(0, -1) : m.type) };
+      return {
+        name: m.name,
+        lengthOf,
+        pointer,
+        write: this.writer(pointer ? m.type.slice(0, -1) : m.type),
+      };
     });
     return (v, out) => {
       const o = record(v, "arguments");
@@ -340,15 +377,18 @@ export class Codec {
       const parts = splitTopLevel(type.slice(1, -1));
       const named = parts.length > 0 && parts.every((p) => p.includes(":") && !p.includes("::"));
       if (named) {
-        return this.membersWriter(parts.map((p) => {
-          const at = p.indexOf(":");
-          return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
-        }));
+        return this.membersWriter(
+          parts.map((p) => {
+            const at = p.indexOf(":");
+            return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
+          }),
+        );
       }
       const items = parts.map((p) => this.writer(p));
       return (v, out) => {
-        if (!Array.isArray(v) || v.length !== items.length) throw new TypeError(`${type}: expected ${items.length} items`);
-        items.forEach((w, i) => w(v[i], out));
+        if (!Array.isArray(v) || v.length !== items.length)
+          throw new TypeError(`${type}: expected ${items.length} items`);
+        for (const [i, w] of items.entries()) w(v[i], out);
       };
     }
 
@@ -358,9 +398,14 @@ export class Codec {
 
     const en = this.#enums.get(type);
     if (en !== undefined) {
-      const variants = new Map(en.variants.map((v, i) => [v.name, { index: i, write: this.writer(v.type) }]));
+      const variants = new Map(
+        en.variants.map((v, i) => [v.name, { index: i, write: this.writer(v.type) }]),
+      );
       return (v, out) => {
-        const [name, value] = typeof v === "string" ? [v, undefined] : [record(v, type).variant as string, record(v, type).value];
+        const [name, value] =
+          typeof v === "string"
+            ? [v, undefined]
+            : [record(v, type).variant as string, record(v, type).value];
         const variant = variants.get(name);
         if (variant === undefined) throw new TypeError(`${type}: no variant ${name}`);
         out.push(hexOf(BigInt(variant.index)));
@@ -393,10 +438,12 @@ export class Codec {
       const parts = splitTopLevel(type.slice(1, -1));
       const named = parts.length > 0 && parts.every((p) => p.includes(":") && !p.includes("::"));
       if (named) {
-        return this.members(parts.map((p) => {
-          const at = p.indexOf(":");
-          return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
-        }));
+        return this.members(
+          parts.map((p) => {
+            const at = p.indexOf(":");
+            return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
+          }),
+        );
       }
       return tuple(parts.map((p) => this.reader(p)));
     }
@@ -407,7 +454,11 @@ export class Codec {
 
     const en = this.#enums.get(type);
     if (en !== undefined) {
-      const variants = en.variants.map((v) => ({ name: v.name, read: this.reader(v.type), unit: v.type === "()" }));
+      const variants = en.variants.map((v) => ({
+        name: v.name,
+        read: this.reader(v.type),
+        unit: v.type === "()",
+      }));
       const allUnit = variants.every((v) => v.unit);
       return (c) => {
         const index = Number(next(c));

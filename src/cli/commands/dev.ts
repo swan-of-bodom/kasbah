@@ -8,7 +8,11 @@ import { CODE, IGNORED } from "../project.ts";
  * Runs `start --dev` (through `cli`, the command's entry file) in a child process and restarts it on changes under the
  * app's directory. Without `DATABASE_URL`, a Postgres container for the app, stopped (data kept) when `dev` exits.
  */
-export async function dev(cli: string, file: string, o: { ui?: boolean; debug?: boolean; reset?: boolean }) {
+export async function dev(
+  cli: string,
+  file: string,
+  o: { ui?: boolean; debug?: boolean; reset?: boolean },
+) {
   const log = (line: string) => console.log(`[kasbah dev] ${line}`);
   let db: DevDatabase | undefined;
   if (process.env.DATABASE_URL === undefined) {
@@ -21,9 +25,17 @@ export async function dev(cli: string, file: string, o: { ui?: boolean; debug?: 
   // --reset only on the first launch: a restart after saving a file keeps what's indexed.
   let resetOnce = o.reset === true;
   const launch = () => {
-    const flags = [...(o.ui === undefined ? [] : [o.ui ? "--ui" : "--no-ui"]), ...(o.debug ? ["--debug"] : []), ...(resetOnce ? ["--reset"] : [])];
+    const flags = [
+      ...(o.ui === undefined ? [] : [o.ui ? "--ui" : "--no-ui"]),
+      ...(o.debug ? ["--debug"] : []),
+      ...(resetOnce ? ["--reset"] : []),
+    ];
     resetOnce = false;
-    const c = spawn(process.execPath, [...process.execArgv, cli, "start", file, "--dev", ...flags], { stdio: "inherit" });
+    const c = spawn(
+      process.execPath,
+      [...process.execArgv, cli, "start", file, "--dev", ...flags],
+      { stdio: "inherit" },
+    );
     child = c;
     exited = new Promise((r) =>
       c.once("exit", (code, signal) => {

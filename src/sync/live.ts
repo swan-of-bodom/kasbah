@@ -1,11 +1,17 @@
-import { type Block, blockOf } from "../types/block.ts";
-import { RpcError, type RpcClient } from "../rpc/client.ts";
+import { type RpcClient, RpcError } from "../rpc/client.ts";
 import { type BlockHeader, type EmittedEvent, getEvents, getHeaders } from "../rpc/methods.ts";
+import { type Block, blockOf } from "../types/block.ts";
 
 export type BlockRef = { number: number; hash: string };
 
 /** `hash` and `parent` as the node sends them (what reorgs are checked against); `header` for handlers. */
-export type LiveBlock = { number: number; hash: string; parent: string; header: Block; events: EmittedEvent[] };
+export type LiveBlock = {
+  number: number;
+  hash: string;
+  parent: string;
+  header: Block;
+  events: EmittedEvent[];
+};
 
 export type FollowOptions = {
   rpc: RpcClient;
@@ -48,8 +54,17 @@ const lagging = (e: unknown) => e instanceof RpcError && e.code === BLOCK_NOT_FO
 
 async function eventsIn(o: FollowOptions, from: number, to: number): Promise<EmittedEvent[]> {
   // An empty address or key list would match every event on the chain.
-  if ((Array.isArray(o.address) && o.address.length === 0) || (o.keys !== undefined && o.keys[0]?.length === 0)) return [];
-  const filter = { from_block: { block_number: from }, to_block: { block_number: to }, address: o.address, keys: o.keys };
+  if (
+    (Array.isArray(o.address) && o.address.length === 0) ||
+    (o.keys !== undefined && o.keys[0]?.length === 0)
+  )
+    return [];
+  const filter = {
+    from_block: { block_number: from },
+    to_block: { block_number: to },
+    address: o.address,
+    keys: o.keys,
+  };
   const out: EmittedEvent[] = [];
   let token: string | undefined;
   do {
@@ -61,7 +76,11 @@ async function eventsIn(o: FollowOptions, from: number, to: number): Promise<Emi
 }
 
 /** The newest block in `known` (at or below `from`) whose hash the chain still has. */
-export async function findAncestor(rpc: RpcClient, from: number, known: ReadonlyMap<number, string>): Promise<BlockRef> {
+export async function findAncestor(
+  rpc: RpcClient,
+  from: number,
+  known: ReadonlyMap<number, string>,
+): Promise<BlockRef> {
   for (let n = from; known.has(n); n--) {
     const [header] = await getHeaders(rpc, [n], 1);
     if (header!.block_hash === known.get(n)) return { number: n, hash: header!.block_hash };
@@ -83,16 +102,29 @@ export async function follow(o: FollowOptions): Promise<void> {
 
   /** One poll. False when the tick learned nothing usable and should wait. */
   const tick = async (): Promise<boolean> => {
-    const tip = await o.rpc.request<{ block_hash: string; block_number: number }>("starknet_blockHashAndNumber", []);
-    if (tip.block_number < head.number || (tip.block_number === head.number && tip.block_hash === head.hash)) return false;
+    const tip = await o.rpc.request<{ block_hash: string; block_number: number }>(
+      "starknet_blockHashAndNumber",
+      [],
+    );
+    if (
+      tip.block_number < head.number ||
+      (tip.block_number === head.number && tip.block_hash === head.hash)
+    )
+      return false;
     const from = Math.min(head.number + 1, tip.block_number);
     const to = Math.min(tip.block_number, head.number + maxBlocks);
     const numbers = Array.from({ length: to - from + 1 }, (_, i) => from + i);
     await o.prepare?.(from, to);
-    const [headers, events] = await Promise.all([getHeaders(o.rpc, numbers, 100), eventsIn(o, from, to)]);
+    const [headers, events] = await Promise.all([
+      getHeaders(o.rpc, numbers, 100),
+      eventsIn(o, from, to),
+    ]);
 
     const first = headers[0]!;
-    const forked = first.block_number === head.number + 1 ? first.parent_hash !== head.hash : first.block_hash !== head.hash;
+    const forked =
+      first.block_number === head.number + 1
+        ? first.parent_hash !== head.hash
+        : first.block_hash !== head.hash;
     if (forked) {
       const a = await ancestor();
       await o.onReorg(a, head);
@@ -101,7 +133,9 @@ export async function follow(o: FollowOptions): Promise<void> {
     }
     if (first.block_number === head.number) headers.shift();
 
-    const byBlock = new Map<number, { header: BlockHeader; events: EmittedEvent[] }>(headers.map((h) => [h.block_number, { header: h, events: [] }]));
+    const byBlock = new Map<number, { header: BlockHeader; events: EmittedEvent[] }>(
+      headers.map((h) => [h.block_number, { header: h, events: [] }]),
+    );
     for (const [i, h] of headers.entries()) {
       if (i > 0 && h.parent_hash !== headers[i - 1]!.block_hash) return false;
     }
@@ -114,7 +148,13 @@ export async function follow(o: FollowOptions): Promise<void> {
 
     for (const { header: h, events } of byBlock.values()) {
       if (o.signal.aborted) return true;
-      await o.onBlock({ number: h.block_number, hash: h.block_hash, parent: h.parent_hash, header: blockOf(h), events });
+      await o.onBlock({
+        number: h.block_number,
+        hash: h.block_hash,
+        parent: h.parent_hash,
+        header: blockOf(h),
+        events,
+      });
       head = { number: h.block_number, hash: h.block_hash };
     }
     return true;

@@ -19,7 +19,10 @@ const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 export function tableInfo(table: PgTable): TableInfo {
   const config = getTableConfig(table);
-  const columns = Object.entries(getTableColumns(table)).map(([key, column]) => ({ key, column: column as PgColumn }));
+  const columns = Object.entries(getTableColumns(table)).map(([key, column]) => ({
+    key,
+    column: column as PgColumn,
+  }));
   const byName = new Map(columns.map((c) => [c.column.name, c]));
   let primaryKey = columns.filter((c) => c.column.primary);
   if (primaryKey.length === 0 && config.primaryKeys[0] !== undefined) {
@@ -101,8 +104,14 @@ export function indexSql(info: TableInfo): string[] {
   const out = config.indexes.map(({ config: c }) => {
     const columns = c.columns.map((col) => {
       if (!("name" in col) || typeof col.name !== "string") return refuse("indexes on expressions");
-      const o = (col as { indexConfig?: { order?: string; nulls?: string; opClass?: string } }).indexConfig;
-      if (o?.opClass !== undefined || (o?.order !== undefined && o.order !== "asc") || (o?.nulls !== undefined && o.nulls !== "last")) refuse("index ordering and operator classes");
+      const o = (col as { indexConfig?: { order?: string; nulls?: string; opClass?: string } })
+        .indexConfig;
+      if (
+        o?.opClass !== undefined ||
+        (o?.order !== undefined && o.order !== "asc") ||
+        (o?.nulls !== undefined && o.nulls !== "last")
+      )
+        refuse("index ordering and operator classes");
       return col.name;
     });
     if (c.where !== undefined) refuse("partial indexes");
@@ -115,10 +124,19 @@ export function indexSql(info: TableInfo): string[] {
     `CREATE UNIQUE INDEX IF NOT EXISTS ${quote(name)} ON ${quote(info.name)} (${columns.map(quote).join(", ")})${nullsNotDistinct ? " NULLS NOT DISTINCT" : ""}`;
   for (const u of config.uniqueConstraints) {
     const columns = u.columns.map((c) => c.name);
-    out.push(unique(u.name ?? `${info.name}_${columns.join("_")}_unique`, columns, u.nullsNotDistinct));
+    out.push(
+      unique(u.name ?? `${info.name}_${columns.join("_")}_unique`, columns, u.nullsNotDistinct),
+    );
   }
   for (const { column } of info.columns) {
-    if (column.isUnique && !column.primary) out.push(unique(column.uniqueName ?? `${info.name}_${column.name}_unique`, [column.name], column.uniqueType === "not distinct"));
+    if (column.isUnique && !column.primary)
+      out.push(
+        unique(
+          column.uniqueName ?? `${info.name}_${column.name}_unique`,
+          [column.name],
+          column.uniqueType === "not distinct",
+        ),
+      );
   }
   return out;
 }

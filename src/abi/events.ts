@@ -1,6 +1,13 @@
-import type { Abi, AbiEvent, AbiMember, Cairo1EventEnum, Cairo1EventStruct, EventMember } from "./abi.ts";
-import { Codec, type Cursor, DecodeError, type Reader } from "./codec.ts";
 import { felt } from "../types/felt.ts";
+import type {
+  Abi,
+  AbiEvent,
+  AbiMember,
+  Cairo1EventEnum,
+  Cairo1EventStruct,
+  EventMember,
+} from "./abi.ts";
+import { Codec, type Cursor, DecodeError, type Reader } from "./codec.ts";
 import { rawSelector } from "./selector.ts";
 import type { DecodedEvent } from "./types.ts";
 
@@ -29,7 +36,9 @@ export function abiEvents(abi: Abi): EventDef[] {
   const leaf = (struct: Cairo1EventStruct, name: string, selectors: string[]) => {
     const unsupported = struct.members.find((m) => m.kind === "nested" || m.kind === "flat");
     if (unsupported !== undefined) {
-      throw new DecodeError(`${struct.name}: event member ${unsupported.name} of kind ${unsupported.kind} is not supported`);
+      throw new DecodeError(
+        `${struct.name}: event member ${unsupported.name} of kind ${unsupported.kind} is not supported`,
+      );
     }
     out.push({
       name,
@@ -42,7 +51,8 @@ export function abiEvents(abi: Abi): EventDef[] {
   const walk = (en: Cairo1EventEnum, path: string[], selectors: string[]) => {
     for (const v of en.variants) {
       const inner = byName.get(v.type);
-      if (inner === undefined || !("kind" in inner)) throw new DecodeError(`${en.name}: unknown event type ${v.type}`);
+      if (inner === undefined || !("kind" in inner))
+        throw new DecodeError(`${en.name}: unknown event type ${v.type}`);
       const flat = v.kind === "flat";
       const nextPath = flat ? path : [...path, v.name];
       const nextSelectors = flat ? selectors : [...selectors, rawSelector(v.name)];
@@ -54,15 +64,26 @@ export function abiEvents(abi: Abi): EventDef[] {
 
   const referenced = new Set<string>();
   for (const e of events) {
-    if ("variants" in e) for (const v of e.variants as readonly EventMember[]) referenced.add(v.type);
+    if ("variants" in e)
+      for (const v of e.variants as readonly EventMember[]) referenced.add(v.type);
   }
 
   for (const e of events) {
     if ("keys" in e && "data" in e) {
-      out.push({ name: e.name, selectors: [rawSelector(e.name)], keyMembers: [...e.keys], dataMembers: [...e.data] });
+      out.push({
+        name: e.name,
+        selectors: [rawSelector(e.name)],
+        keyMembers: [...e.keys],
+        dataMembers: [...e.data],
+      });
     } else if ("inputs" in e) {
       const name = lastSegment(e.name);
-      out.push({ name, selectors: [rawSelector(name)], keyMembers: [], dataMembers: [...e.inputs] });
+      out.push({
+        name,
+        selectors: [rawSelector(name)],
+        keyMembers: [],
+        dataMembers: [...e.inputs],
+      });
     } else if (e.kind === "enum" && !referenced.has(e.name)) {
       walk(e, [], []);
     }
@@ -70,7 +91,8 @@ export function abiEvents(abi: Abi): EventDef[] {
 
   // Some Cairo 0 ABIs declare an event twice (JediSwap pairs: Transfer with `from_` and with `from_address`).
   // The same layout decodes the same felts: keep the first. A different layout is ambiguous.
-  const layout = (e: EventDef) => `${e.keyMembers.map((m) => m.type).join(",")}|${e.dataMembers.map((m) => m.type).join(",")}`;
+  const layout = (e: EventDef) =>
+    `${e.keyMembers.map((m) => m.type).join(",")}|${e.dataMembers.map((m) => m.type).join(",")}`;
   const seen = new Map<string, EventDef>();
   const kept: EventDef[] = [];
   for (const e of out) {

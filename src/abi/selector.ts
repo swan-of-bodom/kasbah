@@ -1,5 +1,5 @@
-import { type Felt, felt } from "../types/felt.ts";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { type Felt, felt } from "../types/felt.ts";
 
 const MASK_250 = (1n << 250n) - 1n;
 const encoder = new TextEncoder();

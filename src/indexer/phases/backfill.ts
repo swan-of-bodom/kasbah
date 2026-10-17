@@ -20,8 +20,13 @@ export async function backfill(run: Run): Promise<void> {
   let since = 0;
   const batches = events(run, sources.addresses, sources.keys, first, to, true);
   // Headers, transactions and receipts of the next batch are fetched while this one is handled.
-  const waited = (what: "events" | "extras", ms: number) => (what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms));
-  for await (const [batch, pre] of ahead(run.anyInclude || run.anyBlock ? slices(batches, 2_000) : batches, (b) => prefetch(run, b.events), waited)) {
+  const waited = (what: "events" | "extras", ms: number) =>
+    what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);
+  for await (const [batch, pre] of ahead(
+    run.anyInclude || run.anyBlock ? slices(batches, 2_000) : batches,
+    (b) => prefetch(run, b.events),
+    waited,
+  )) {
     since += await handleBatch(run, through + 1, batch, pre);
     through = batch.through;
     status.range.through = through;
@@ -33,16 +38,34 @@ export async function backfill(run: Run): Promise<void> {
   }
   if (!signal.aborted) through = to;
   // What was handled since the last commit: nothing when the last batch (through `to`) just committed.
-  if (through !== (position.checkpoint ?? first - 1)) await position.commit({ kind: "batch", through });
+  if (through !== (position.checkpoint ?? first - 1))
+    await position.commit({ kind: "batch", through });
   cache?.untrack();
   if (signal.aborted) return;
   const calls = run.client.stats;
   const c = cache?.stats;
-  status.note({ kind: "backfill", handled: status.handled - handledBefore, seconds: (performance.now() - started) / 1000, cache: c && { ...c }, reads: calls.calls, cachedReads: calls.cached, rpc: status.rpc && { calls: status.rpc.calls, throttled: status.rpc.throttled, rate: status.rate() } });
+  status.note({
+    kind: "backfill",
+    handled: status.handled - handledBefore,
+    seconds: (performance.now() - started) / 1000,
+    cache: c && { ...c },
+    reads: calls.calls,
+    cachedReads: calls.cached,
+    rpc: status.rpc && {
+      calls: status.rpc.calls,
+      throttled: status.rpc.throttled,
+      rate: status.rate(),
+    },
+  });
 }
 
 /** Handles one batch: events and the block handlers due in `[from, batch.through]`, in block order. Returns how many. */
-async function handleBatch(run: Run, from: number, batch: Batch, { extras, headers }: Prefetched): Promise<number> {
+async function handleBatch(
+  run: Run,
+  from: number,
+  batch: Batch,
+  { extras, headers }: Prefetched,
+): Promise<number> {
   const fires = firesIn(run.blockSources, from, batch.through);
   const missing = fires.map((f) => f.number).filter((n) => !headers.has(n));
   if (missing.length > 0) for (const [n, h] of await blockHeaders(run, missing)) headers.set(n, h);
@@ -61,12 +84,21 @@ async function handleBatch(run: Run, from: number, batch: Batch, { extras, heade
 }
 
 /** Block handlers due in `[from, to]`, in block order. */
-function firesIn(blockSources: BlockSource[], from: number, to: number): { source: string; number: number }[] {
+function firesIn(
+  blockSources: BlockSource[],
+  from: number,
+  to: number,
+): { source: string; number: number }[] {
   const out: { source: string; number: number }[] = [];
   for (const b of blockSources) {
     const lo = Math.max(from, b.startBlock);
     const hi = Math.min(to, b.endBlock ?? to);
-    for (let n = b.startBlock + Math.ceil((lo - b.startBlock) / b.interval) * b.interval; n <= hi; n += b.interval) out.push({ source: b.name, number: n });
+    for (
+      let n = b.startBlock + Math.ceil((lo - b.startBlock) / b.interval) * b.interval;
+      n <= hi;
+      n += b.interval
+    )
+      out.push({ source: b.name, number: n });
   }
   return out.sort((x, y) => x.number - y.number);
 }
@@ -83,10 +115,16 @@ async function* slices(source: AsyncIterable<Batch>, max: number): AsyncGenerato
       const block = batch.events[end - 1]!.block_number!;
       while (end < batch.events.length && batch.events[end]!.block_number === block) end++;
       if (end === batch.events.length) break;
-      yield { events: batch.events.slice(start, end), through: batch.events[end]!.block_number! - 1 };
+      yield {
+        events: batch.events.slice(start, end),
+        through: batch.events[end]!.block_number! - 1,
+      };
       start = end;
     }
-    yield { events: start === 0 ? batch.events : batch.events.slice(start), through: batch.through };
+    yield {
+      events: start === 0 ? batch.events : batch.events.slice(start),
+      through: batch.through,
+    };
   }
 }
 
@@ -94,7 +132,11 @@ async function* slices(source: AsyncIterable<Batch>, max: number): AsyncGenerato
  * Yields each item with `prepare(item)`, preparing the next item while the caller handles this one. `waited` gets
  * the time the caller waited for the source and, after that, for `prepare`.
  */
-async function* ahead<T, U>(source: AsyncIterable<T>, prepare: (item: T) => Promise<U>, waited: (what: "events" | "extras", ms: number) => void): AsyncGenerator<[T, U]> {
+async function* ahead<T, U>(
+  source: AsyncIterable<T>,
+  prepare: (item: T) => Promise<U>,
+  waited: (what: "events" | "extras", ms: number) => void,
+): AsyncGenerator<[T, U]> {
   let pending: Promise<[T, U]> | undefined;
   let t = performance.now();
   const ready = async (p: Promise<[T, U]>) => {

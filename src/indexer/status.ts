@@ -23,7 +23,15 @@ export type Recent = {
   lag?: { max: number; p50: number };
 };
 
-type Sample = { t: number; calls: number; throttled: number; timeouts: number; failed: number; events: number; extras: number };
+type Sample = {
+  t: number;
+  calls: number;
+  throttled: number;
+  timeouts: number;
+  failed: number;
+  events: number;
+  extras: number;
+};
 
 export type Pace = {
   blocks: number;
@@ -41,20 +49,67 @@ export type Note =
   | { kind: "api"; url: string }
   /** `to` was inside the reorg window: indexing stops at `through`, the last final block. */
   | { kind: "clamped"; to: number; through: number; tip: number; window: number }
-  | { kind: "endpoint"; node: string; spec: string; tip: number; contracts: number; factories: number; blockSources: number }
+  | {
+      kind: "endpoint";
+      node: string;
+      spec: string;
+      tip: number;
+      contracts: number;
+      factories: number;
+      blockSources: number;
+    }
   /** Blocks after `ancestor` were replaced (`block`, the newest indexed, among them) and are undone. */
-  | { kind: "reorg"; block: number; hash: string; ancestor: number; rows: number; children: number; stopped: boolean }
-  | { kind: "class"; contract: string; address: string; changes: { block: number; classHash: string }[] }
+  | {
+      kind: "reorg";
+      block: number;
+      hash: string;
+      ancestor: number;
+      rows: number;
+      children: number;
+      stopped: boolean;
+    }
+  | {
+      kind: "class";
+      contract: string;
+      address: string;
+      changes: { block: number; classHash: string }[];
+    }
   /** Events of a contract's class that its configured ABI lacks: once per contract and event name. */
   | { kind: "skipped"; contract: string; events: string[]; classHash: string }
   | { kind: "socket"; state: "on" | "refused" | "reconnected" | "closed"; reason?: string }
   | { kind: "factories"; children: number; through: number; seconds: number }
-  | { kind: "backfill"; handled: number; seconds: number; cache?: { cachedEvents: number; fetchedEvents: number }; reads: number; cachedReads: number; rpc?: { calls: number; throttled: number; rate: number } }
+  | {
+      kind: "backfill";
+      handled: number;
+      seconds: number;
+      cache?: { cachedEvents: number; fetchedEvents: number };
+      reads: number;
+      cachedReads: number;
+      rpc?: { calls: number; throttled: number; rate: number };
+    }
   | { kind: "keys"; keys: number; indexes: number; seconds: number }
   | { kind: "following"; block: number }
   /** Every backfill commit, and every live block with events or new children: what the screen's box shows. */
-  | { kind: "progress"; phase: "backfill"; through: number; first: number; to: number; handled: number; seconds: number; ms: number; tables: number; cache?: number }
-  | { kind: "progress"; phase: "live"; block: number; events: number; children: number; behind: number };
+  | {
+      kind: "progress";
+      phase: "backfill";
+      through: number;
+      first: number;
+      to: number;
+      handled: number;
+      seconds: number;
+      ms: number;
+      tables: number;
+      cache?: number;
+    }
+  | {
+      kind: "progress";
+      phase: "live";
+      block: number;
+      events: number;
+      children: number;
+      behind: number;
+    };
 
 /** A note as listeners get it: with its time (ms since the epoch) and its line of text. */
 export type Notice = Note & { at: number; text: string };
@@ -134,7 +189,15 @@ export class Status {
     }
     if (s.length === 0 || now - s.at(-1)!.t >= 1000) {
       const r = this.rpc;
-      s.push({ t: now, calls: r?.calls ?? 0, throttled: r?.throttled ?? 0, timeouts: r?.timeouts ?? 0, failed: r?.failed ?? 0, events: this.time.fetch, extras: this.time.extras });
+      s.push({
+        t: now,
+        calls: r?.calls ?? 0,
+        throttled: r?.throttled ?? 0,
+        timeouts: r?.timeouts ?? 0,
+        failed: r?.failed ?? 0,
+        events: this.time.fetch,
+        extras: this.time.extras,
+      });
       while (s.length > 61) s.shift();
       if (this.#lag !== undefined) {
         // The histogram measures whole timer intervals: the delay is what goes past the resolution.
@@ -206,13 +269,38 @@ export class Status {
       const { first, to } = this.range;
       const handled = this.handled - this.#handledAtPhase;
       const seconds = (performance.now() - this.phaseStarted) / 1000;
-      this.note({ kind: "progress", phase: "backfill", through: this.checkpoint, first, to, handled, seconds, ms: r.ms, tables: r.tables, cache: this.cache === undefined ? undefined : r.cache });
+      this.note({
+        kind: "progress",
+        phase: "backfill",
+        through: this.checkpoint,
+        first,
+        to,
+        handled,
+        seconds,
+        ms: r.ms,
+        tables: r.tables,
+        cache: this.cache === undefined ? undefined : r.cache,
+      });
     } else if (r.kind === "block" && r.block !== undefined) {
       const b = r.block;
       this.lastCommit = { ms: r.ms, tables: r.tables, cache: r.cache };
-      this.live = { ...this.live, block: b.number, timestamp: b.timestamp, events: b.events, at: Date.now() };
+      this.live = {
+        ...this.live,
+        block: b.number,
+        timestamp: b.timestamp,
+        events: b.events,
+        at: Date.now(),
+      };
       this.tip = Math.max(this.tip, b.number);
-      if (b.events > 0 || b.children > 0) this.note({ kind: "progress", phase: "live", block: b.number, events: b.events, children: b.children, behind: Date.now() / 1000 - b.timestamp });
+      if (b.events > 0 || b.children > 0)
+        this.note({
+          kind: "progress",
+          phase: "live",
+          block: b.number,
+          events: b.events,
+          children: b.children,
+          behind: Date.now() / 1000 - b.timestamp,
+        });
     }
   }
 
@@ -242,7 +330,8 @@ export class Status {
       this.#bucket = { t: now, handled: this.handled };
     }
     const s = this.#samples;
-    if (s.length === 0 || s.at(-1)!.through !== this.range.through || now - s.at(-1)!.t > 1000) s.push({ t: now, through: this.range.through, handled: this.handled });
+    if (s.length === 0 || s.at(-1)!.through !== this.range.through || now - s.at(-1)!.t > 1000)
+      s.push({ t: now, through: this.range.through, handled: this.handled });
     while (s.length > 2 && now - s[0]!.t > 30_000) s.shift();
     const a = s[0]!;
     const seconds = (now - a.t) / 1000;
@@ -251,9 +340,13 @@ export class Status {
     const events = (this.handled - a.handled) / seconds;
     const remaining = this.range.to - this.range.through;
     const left = blocks > 0 ? remaining / blocks : undefined;
-    const average = (this.range.through - this.#phaseStart.through) / ((now - this.phaseStarted) / 1000);
+    const average =
+      (this.range.through - this.#phaseStart.through) / ((now - this.phaseStarted) / 1000);
     const overall = average > 0 ? remaining / average : undefined;
-    const range = left === undefined || overall === undefined ? undefined : ([Math.min(left, overall), Math.max(left, overall)] as [number, number]);
+    const range =
+      left === undefined || overall === undefined
+        ? undefined
+        : ([Math.min(left, overall), Math.max(left, overall)] as [number, number]);
     return { blocks, events, left, range };
   }
 }
@@ -274,17 +367,22 @@ function describe(n: Note): string {
       return `${n.node} endpoint, spec ${n.spec}, tip ${n.tip}; ${plural(n.contracts, "contract")}${n.factories > 0 ? `, ${plural(n.factories, "factory", "factories")}` : ""}${n.blockSources > 0 ? `, ${plural(n.blockSources, "block source")}` : ""}`;
     case "reorg": {
       const undone = `${n.rows} row changes undone${n.children > 0 ? `, ${n.children} children forgotten` : ""}`;
-      return n.stopped ? `reorg while stopped: block ${n.block} replaced, back to ${n.ancestor}: ${undone}` : `reorg: block ${n.block} (${n.hash}) replaced, back to ${n.ancestor}: ${undone}`;
+      return n.stopped
+        ? `reorg while stopped: block ${n.block} replaced, back to ${n.ancestor}: ${undone}`
+        : `reorg: block ${n.block} (${n.hash}) replaced, back to ${n.ancestor}: ${undone}`;
     }
     case "class":
       return `${n.contract} ${n.address}: class replaced at block ${n.changes.map((c) => `${c.block} (${c.classHash})`).join(", ")}`;
     case "skipped":
       return `${n.contract}: events not in the configured ABI are skipped: ${n.events.join(", ")} (first in class ${n.classHash})`;
     case "socket":
-      return n.state === "on" ? "WebSocket: following new heads"
-        : n.state === "refused" ? `WebSocket: subscribeNewHeads refused (${n.reason}), polling instead`
-        : n.state === "reconnected" ? "WebSocket: reconnected"
-        : "WebSocket: closed, polling until it reconnects";
+      return n.state === "on"
+        ? "WebSocket: following new heads"
+        : n.state === "refused"
+          ? `WebSocket: subscribeNewHeads refused (${n.reason}), polling instead`
+          : n.state === "reconnected"
+            ? "WebSocket: reconnected"
+            : "WebSocket: closed, polling until it reconnects";
     case "factories":
       return `factories: ${n.children} children up to block ${n.through} in ${seconds(n.seconds)}`;
     case "backfill": {

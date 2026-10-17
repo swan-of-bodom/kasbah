@@ -2,12 +2,12 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import { from as copyFrom } from "pg-copy-streams";
-import { quote } from "./table.ts";
-import { type Block, blockOf } from "../types/block.ts";
 import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
-import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import type { Batch } from "../sync/fetch.ts";
+import { type Block, blockOf } from "../types/block.ts";
+import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
+import { quote } from "./table.ts";
 
 const hexBytes = (felt: string): Buffer => {
   let h = BigInt(felt).toString(16);
@@ -16,8 +16,8 @@ const hexBytes = (felt: string): Buffer => {
   return Buffer.from(h, "hex");
 };
 /** Minimal big-endian bytes, as hex, to a felt: only the first nibble can be a zero to drop. */
-const hexFelt = (h: string): string => (h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`);
-const felt = (b: Buffer): string => hexFelt(b.toString("hex"));
+const hexFelt = (h: string): string =>
+  h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
 
 /** Felts as one bytea: per felt, a length byte then its minimal big-endian bytes. */
 export function packFelts(felts: readonly string[]): Buffer {
@@ -74,8 +74,19 @@ export class EventCache {
   #pendingFrom: number | undefined;
   #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
   /** As JSON text: far smaller than the parsed objects while they wait for the commit. */
-  #transactions: { hash: Buffer; block: number; transaction: string | null; receipt: string | null }[] = [];
-  #calls: { address: Buffer; entrypoint: Buffer; calldata: Buffer; block: number; result: Buffer }[] = [];
+  #transactions: {
+    hash: Buffer;
+    block: number;
+    transaction: string | null;
+    receipt: string | null;
+  }[] = [];
+  #calls: {
+    address: Buffer;
+    entrypoint: Buffer;
+    calldata: Buffer;
+    block: number;
+    result: Buffer;
+  }[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
   #pendingBytes = 0;
   readonly #maxCalls: number;
@@ -89,11 +100,17 @@ export class EventCache {
   }
 
   /** `maxCalls`: call results kept; past it the oldest are dropped down to 90%. Default 1M. */
-  static async open(pool: pg.Pool, chainId: string, o: { maxCalls?: number } = {}): Promise<EventCache> {
+  static async open(
+    pool: pg.Pool,
+    chainId: string,
+    o: { maxCalls?: number } = {},
+  ): Promise<EventCache> {
     const schema = quote(`kasbah_cache_${chainId.toLowerCase()}`);
     for (const sql of SCHEMA_SQL(schema)) await pool.query(sql);
     const cache = new EventCache(pool, schema, o.maxCalls ?? 1_000_000);
-    cache.#callRows = Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${schema}.calls`)).rows[0]!.n);
+    cache.#callRows = Number(
+      (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${schema}.calls`)).rows[0]!.n,
+    );
     await cache.#pruneCalls(pool);
     return cache;
   }
@@ -101,12 +118,27 @@ export class EventCache {
   async #pruneCalls(q: pg.Pool | pg.PoolClient) {
     if (this.#callRows <= this.#maxCalls) return;
     const drop = this.#callRows - Math.floor(this.#maxCalls * 0.9);
-    const r = await q.query(`DELETE FROM ${this.#schema}.calls WHERE seq IN (SELECT seq FROM ${this.#schema}.calls ORDER BY seq LIMIT $1)`, [drop]);
+    const r = await q.query(
+      `DELETE FROM ${this.#schema}.calls WHERE seq IN (SELECT seq FROM ${this.#schema}.calls ORDER BY seq LIMIT $1)`,
+      [drop],
+    );
     this.#callRows -= r.rowCount ?? 0;
   }
 
   /** Every chain's cache in the database (or one chain's), with its size. */
-  static async info(pool: pg.Pool, chainId?: string): Promise<{ schema: string; events: number; calls: number; transactions: number; headers: number; bytes: number }[]> {
+  static async info(
+    pool: pg.Pool,
+    chainId?: string,
+  ): Promise<
+    {
+      schema: string;
+      events: number;
+      calls: number;
+      transactions: number;
+      headers: number;
+      bytes: number;
+    }[]
+  > {
     const { rows } = await pool.query<{ schema: string; bytes: string }>(
       `SELECT n.nspname AS schema, coalesce(sum(pg_total_relation_size(c.oid)), 0)::text AS bytes FROM pg_namespace n
        LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind = 'r' WHERE n.nspname LIKE 'kasbah\\_cache\\_%' GROUP BY 1 ORDER BY 1`,
@@ -117,10 +149,22 @@ export class EventCache {
       const s = quote(r.schema);
       // A cache made by an older version may lack a table.
       const n = async (t: string) => {
-        const exists = (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.${t}`])).rows[0].r !== null;
-        return exists ? Number((await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${s}.${t}`)).rows[0]!.n) : 0;
+        const exists =
+          (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.${t}`])).rows[0].r !== null;
+        return exists
+          ? Number(
+              (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${s}.${t}`)).rows[0]!.n,
+            )
+          : 0;
       };
-      out.push({ schema: r.schema, events: await n("events"), calls: await n("calls"), transactions: await n("transactions"), headers: await n("headers"), bytes: Number(r.bytes) });
+      out.push({
+        schema: r.schema,
+        events: await n("events"),
+        calls: await n("calls"),
+        transactions: await n("transactions"),
+        headers: await n("headers"),
+        bytes: Number(r.bytes),
+      });
     }
     return out;
   }
@@ -130,8 +174,16 @@ export class EventCache {
     for (const { schema } of await EventCache.info(pool, chainId)) {
       const s = quote(schema);
       if (what.events) await pool.query(`TRUNCATE ${s}.events, ${s}.coverage, ${s}.headers`);
-      if (what.events && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.transactions`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.transactions`);
-      if (what.calls && (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.calls`])).rows[0].r !== null) await pool.query(`TRUNCATE ${s}.calls`);
+      if (
+        what.events &&
+        (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.transactions`])).rows[0].r !== null
+      )
+        await pool.query(`TRUNCATE ${s}.transactions`);
+      if (
+        what.calls &&
+        (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.calls`])).rows[0].r !== null
+      )
+        await pool.query(`TRUNCATE ${s}.calls`);
     }
   }
 
@@ -140,10 +192,11 @@ export class EventCache {
     if (addresses.length === 0 || selectors.length === 0) return from;
     const a: Buffer[] = [];
     const s: Buffer[] = [];
-    for (const x of addresses) for (const y of selectors) {
-      a.push(hexBytes(x));
-      s.push(hexBytes(y));
-    }
+    for (const x of addresses)
+      for (const y of selectors) {
+        a.push(hexBytes(x));
+        s.push(hexBytes(y));
+      }
     const { rows } = await this.#pool.query<{ end: string }>(
       `SELECT min(coalesce(x.up, $1::int8))::text AS end FROM unnest($2::bytea[], $3::bytea[]) AS p(address, selector)
        LEFT JOIN LATERAL (SELECT upper(r) AS up FROM ${this.#schema}.coverage c, unnest(c.ranges) r
@@ -157,18 +210,35 @@ export class EventCache {
    * Cached events of `addresses` × `selectors` in `[from, to]`, in chain order, at most about `limit` per batch:
    * paged by position, and a batch never ends inside a block.
    */
-  async *read(addresses: string[], selectors: string[], from: number, to: number, limit = 50_000): AsyncGenerator<Batch> {
+  async *read(
+    addresses: string[],
+    selectors: string[],
+    from: number,
+    to: number,
+    limit = 50_000,
+  ): AsyncGenerator<Batch> {
     const a = addresses.map(hexBytes);
     const s = selectors.map(hexBytes);
     // Hex text straight from Postgres: no Buffer round trip.
-    type Row = { block: number; tx: number; idx: number; address: string; block_hash: string; tx_hash: string; keys: string; data: string };
+    type Row = {
+      block: number;
+      tx: number;
+      idx: number;
+      address: string;
+      block_hash: string;
+      tx_hash: string;
+      keys: string;
+      data: string;
+    };
     const query = async (lo: number, hi: number, n: number | null) =>
-      (await this.#pool.query<Row>(
-        `SELECT block, tx, idx, encode(address, 'hex') AS address, encode(block_hash, 'hex') AS block_hash, encode(tx_hash, 'hex') AS tx_hash,
+      (
+        await this.#pool.query<Row>(
+          `SELECT block, tx, idx, encode(address, 'hex') AS address, encode(block_hash, 'hex') AS block_hash, encode(tx_hash, 'hex') AS tx_hash,
                 encode(keys, 'hex') AS keys, encode(data, 'hex') AS data FROM ${this.#schema}.events
          WHERE block BETWEEN $1 AND $2 AND address = ANY($3) AND selector = ANY($4) ORDER BY block, tx, idx LIMIT $5`,
-        [lo, hi, a, s, n],
-      )).rows;
+          [lo, hi, a, s, n],
+        )
+      ).rows;
     /** The events from `lo` up to a block boundary, and the last complete block. */
     const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
       const rows = await query(lo, to, limit);
@@ -212,7 +282,12 @@ export class EventCache {
   }
 
   /** A cached `starknet_call` result at a final block. */
-  async getCall(address: string, entrypoint: string, calldata: string[], block: number): Promise<string[] | undefined> {
+  async getCall(
+    address: string,
+    entrypoint: string,
+    calldata: string[],
+    block: number,
+  ): Promise<string[] | undefined> {
     const { rows } = await this.#pool.query<{ result: string }>(
       `SELECT encode(result, 'hex') AS result FROM ${this.#schema}.calls WHERE address = $1 AND entrypoint = $2 AND calldata = $3 AND block = $4`,
       [hexBytes(address), hexBytes(entrypoint), packFelts(calldata), block],
@@ -221,8 +296,20 @@ export class EventCache {
   }
 
   /** Keeps a call result until the next `persist`. */
-  rememberCall(address: string, entrypoint: string, calldata: string[], block: number, result: string[]) {
-    this.#calls.push({ address: hexBytes(address), entrypoint: hexBytes(entrypoint), calldata: packFelts(calldata), block, result: packFelts(result) });
+  rememberCall(
+    address: string,
+    entrypoint: string,
+    calldata: string[],
+    block: number,
+    result: string[],
+  ) {
+    this.#calls.push({
+      address: hexBytes(address),
+      entrypoint: hexBytes(entrypoint),
+      calldata: packFelts(calldata),
+      block,
+      result: packFelts(result),
+    });
   }
 
   /** Transaction and receipt JSON waiting for the next `persist`: the caller commits early past a limit. */
@@ -232,11 +319,23 @@ export class EventCache {
 
   /** Cached transactions and receipts by hash (either may be missing). */
   async transactions(hashes: string[]): Promise<Map<string, RawExtras>> {
-    const { rows } = await this.#pool.query<{ hash: string; transaction: RawTransaction | null; receipt: RawReceipt | null }>(
+    const { rows } = await this.#pool.query<{
+      hash: string;
+      transaction: RawTransaction | null;
+      receipt: RawReceipt | null;
+    }>(
       `SELECT encode(hash, 'hex') AS hash, transaction, receipt FROM ${this.#schema}.transactions WHERE hash = ANY($1)`,
       [hashes.map(hexBytes)],
     );
-    return new Map(rows.map((r) => [hexFelt(r.hash), { ...(r.transaction === null ? {} : { transaction: r.transaction }), ...(r.receipt === null ? {} : { receipt: r.receipt }) }]));
+    return new Map(
+      rows.map((r) => [
+        hexFelt(r.hash),
+        {
+          ...(r.transaction === null ? {} : { transaction: r.transaction }),
+          ...(r.receipt === null ? {} : { receipt: r.receipt }),
+        },
+      ]),
+    );
   }
 
   /** Keeps a fetched transaction and/or receipt until the next `persist`. */
@@ -263,7 +362,12 @@ export class EventCache {
       await tx.query(
         `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
          ON CONFLICT (hash) DO UPDATE SET transaction = coalesce(EXCLUDED.transaction, transactions.transaction), receipt = coalesce(EXCLUDED.receipt, transactions.receipt)`,
-        [t.map((x) => x.hash), t.map((x) => x.block), t.map((x) => x.transaction), t.map((x) => x.receipt)],
+        [
+          t.map((x) => x.hash),
+          t.map((x) => x.block),
+          t.map((x) => x.transaction),
+          t.map((x) => x.receipt),
+        ],
       );
     }
     if (this.#calls.length > 0) {
@@ -272,7 +376,13 @@ export class EventCache {
       const r = await tx.query(
         `INSERT INTO ${this.#schema}.calls (address, entrypoint, calldata, block, result)
          SELECT * FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::int[], $5::bytea[]) ON CONFLICT DO NOTHING`,
-        [c.map((x) => x.address), c.map((x) => x.entrypoint), c.map((x) => x.calldata), c.map((x) => x.block), c.map((x) => x.result)],
+        [
+          c.map((x) => x.address),
+          c.map((x) => x.entrypoint),
+          c.map((x) => x.calldata),
+          c.map((x) => x.block),
+          c.map((x) => x.result),
+        ],
       );
       this.#callRows += r.rowCount ?? 0;
       await this.#pruneCalls(tx);
@@ -281,7 +391,9 @@ export class EventCache {
     const pairs = this.#pendingPairs;
     if (from === undefined || pairs === undefined || through < from) return;
     if (this.#pending.length > 0) {
-      await tx.query(`CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`);
+      await tx.query(
+        `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
+      );
       const lines = (function* (events: EmittedEvent[]) {
         let chunk = "";
         for (const e of events) {
@@ -294,14 +406,17 @@ export class EventCache {
         if (chunk !== "") yield chunk;
       })(this.#pending);
       await pipeline(Readable.from(lines), tx.query(copyFrom(`COPY _kasbah_cache_in FROM STDIN`)));
-      await tx.query(`INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`);
+      await tx.query(
+        `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
+      );
     }
     const a: Buffer[] = [];
     const s: Buffer[] = [];
-    for (const x of pairs.addresses) for (const y of pairs.selectors) {
-      a.push(hexBytes(x));
-      s.push(hexBytes(y));
-    }
+    for (const x of pairs.addresses)
+      for (const y of pairs.selectors) {
+        a.push(hexBytes(x));
+        s.push(hexBytes(y));
+      }
     await tx.query(
       `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
        SELECT address, selector, int8multirange(int8range($1, $2)) FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
@@ -320,7 +435,10 @@ export class EventCache {
   }
 
   async headers(numbers: number[]): Promise<Map<number, Block>> {
-    const { rows } = await this.#pool.query<{ header: BlockHeader }>(`SELECT header FROM ${this.#schema}.headers WHERE block = ANY($1) AND header IS NOT NULL`, [numbers]);
+    const { rows } = await this.#pool.query<{ header: BlockHeader }>(
+      `SELECT header FROM ${this.#schema}.headers WHERE block = ANY($1) AND header IS NOT NULL`,
+      [numbers],
+    );
     return new Map(rows.map((r) => [r.header.block_number, blockOf(r.header)]));
   }
 
@@ -330,7 +448,13 @@ export class EventCache {
       `INSERT INTO ${this.#schema}.headers (block, hash, parent, timestamp, header)
        SELECT * FROM unnest($1::int[], $2::bytea[], $3::bytea[], $4::int8[], $5::jsonb[])
        ON CONFLICT (block) DO UPDATE SET header = EXCLUDED.header WHERE headers.header IS NULL`,
-      [headers.map((h) => h.block_number), headers.map((h) => hexBytes(h.block_hash)), headers.map((h) => hexBytes(h.parent_hash)), headers.map((h) => h.timestamp), headers.map((h) => JSON.stringify(h))],
+      [
+        headers.map((h) => h.block_number),
+        headers.map((h) => hexBytes(h.block_hash)),
+        headers.map((h) => hexBytes(h.parent_hash)),
+        headers.map((h) => h.timestamp),
+        headers.map((h) => JSON.stringify(h)),
+      ],
     );
   }
 }

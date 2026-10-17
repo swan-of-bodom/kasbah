@@ -65,9 +65,21 @@ export class HeadSubscription {
     const ws = new WebSocket(this.#url);
     this.#socket = ws;
     let subscription: string | undefined;
-    ws.onopen = () => ws.send(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "starknet_subscribeNewHeads", params: {} }));
+    ws.onopen = () =>
+      ws.send(
+        JSON.stringify({ jsonrpc: "2.0", id: 1, method: "starknet_subscribeNewHeads", params: {} }),
+      );
     ws.onmessage = (m) => {
-      let msg: { id?: number; result?: unknown; error?: { message: string }; method?: string; params?: { subscription_id?: string; result?: { block_number?: number; timestamp?: number } } };
+      let msg: {
+        id?: number;
+        result?: unknown;
+        error?: { message: string };
+        method?: string;
+        params?: {
+          subscription_id?: string;
+          result?: { block_number?: number; timestamp?: number };
+        };
+      };
       try {
         msg = JSON.parse(String(m.data));
       } catch {
@@ -75,7 +87,11 @@ export class HeadSubscription {
       }
       if (msg.id === 1) {
         if (msg.error !== undefined || typeof msg.result !== "string") {
-          this.#note({ kind: "socket", state: "refused", reason: msg.error?.message ?? "no subscription id" });
+          this.#note({
+            kind: "socket",
+            state: "refused",
+            reason: msg.error?.message ?? "no subscription id",
+          });
           this.#closed = true;
           ws.close();
           return;
@@ -90,9 +106,19 @@ export class HeadSubscription {
         return;
       }
       // New heads and reorg notices both mean "look again"; the follower checks hashes either way.
-      if (msg.method?.startsWith("starknet_subscription") && (subscription === undefined || msg.params?.subscription_id === undefined || msg.params.subscription_id === subscription)) {
+      if (
+        msg.method?.startsWith("starknet_subscription") &&
+        (subscription === undefined ||
+          msg.params?.subscription_id === undefined ||
+          msg.params.subscription_id === subscription)
+      ) {
         const h = msg.params?.result;
-        if (typeof h?.block_number === "number" && typeof h.timestamp === "number" && h.block_number > (this.last?.number ?? -1)) this.last = { number: h.block_number, timestamp: h.timestamp, at: Date.now() };
+        if (
+          typeof h?.block_number === "number" &&
+          typeof h.timestamp === "number" &&
+          h.block_number > (this.last?.number ?? -1)
+        )
+          this.last = { number: h.block_number, timestamp: h.timestamp, at: Date.now() };
         this.#wake();
       }
     };

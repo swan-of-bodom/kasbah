@@ -1,6 +1,11 @@
 import type { RpcClient } from "./client.ts";
 
-export type BlockId = { block_number: number } | { block_hash: string } | "latest" | "l1_accepted" | "pre_confirmed";
+export type BlockId =
+  | { block_number: number }
+  | { block_hash: string }
+  | "latest"
+  | "l1_accepted"
+  | "pre_confirmed";
 
 export type EmittedEvent = {
   from_address: string;
@@ -48,7 +53,11 @@ export type BlockHeader = {
 
 export const getEvents = (rpc: RpcClient, filter: EventFilter, chunkSize: number, token?: string) =>
   rpc.request<EventsPage>("starknet_getEvents", {
-    filter: { ...filter, chunk_size: chunkSize, ...(token === undefined ? {} : { continuation_token: token }) },
+    filter: {
+      ...filter,
+      chunk_size: chunkSize,
+      ...(token === undefined ? {} : { continuation_token: token }),
+    },
   });
 
 export const blockNumber = (rpc: RpcClient) => rpc.request<number>("starknet_blockNumber", []);
@@ -56,7 +65,11 @@ export const blockNumber = (rpc: RpcClient) => rpc.request<number>("starknet_blo
 export const specVersion = (rpc: RpcClient) => rpc.request<string>("starknet_specVersion", []);
 
 /** Headers for many blocks, `batchSize` calls per HTTP request. The transaction hash list and status are dropped. */
-export async function getHeaders(rpc: RpcClient, numbers: number[], batchSize: number): Promise<BlockHeader[]> {
+export async function getHeaders(
+  rpc: RpcClient,
+  numbers: number[],
+  batchSize: number,
+): Promise<BlockHeader[]> {
   const requests: Promise<(BlockHeader & { transactions?: unknown; status?: string })[]>[] = [];
   for (let i = 0; i < numbers.length; i += batchSize) {
     const calls = numbers.slice(i, i + batchSize).map((n) => ({
@@ -65,6 +78,7 @@ export async function getHeaders(rpc: RpcClient, numbers: number[], batchSize: n
     }));
     requests.push(rpc.batch(calls));
   }
-  return (await Promise.all(requests)).flat().map(({ transactions: _, status: __, ...header }) => header);
+  return (await Promise.all(requests))
+    .flat()
+    .map(({ transactions: _, status: __, ...header }) => header);
 }
-

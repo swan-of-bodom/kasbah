@@ -22,12 +22,26 @@ export type EventStreamOptions = {
 };
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
-export type FetchGauges = { buffered: number; maxBuffered: number; windows: number; running: number; paused: number; done: number; idleWorkers: number };
+export type FetchGauges = {
+  buffered: number;
+  maxBuffered: number;
+  windows: number;
+  running: number;
+  paused: number;
+  done: number;
+  idleWorkers: number;
+};
 
 /** Events in chain order. Every block up to `through` is complete. */
 export type Batch = { events: EmittedEvent[]; through: number };
 
-export type FetchStats = { events: number; pages: number; windows: number; splits: number; peakBuffered: number };
+export type FetchStats = {
+  events: number;
+  pages: number;
+  windows: number;
+  splits: number;
+  peakBuffered: number;
+};
 
 type Window = {
   from: number;
@@ -53,11 +67,24 @@ const tokenBlock = (token: string): number | undefined => {
  * `windowEvents` in, keeps the front part and its token, and hands the rest to a new window. Work stays near the
  * front, so the consumer, reading the lowest window as its pages arrive, rarely waits.
  */
-export function eventStream(o: EventStreamOptions, stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 }): AsyncGenerator<Batch> {
+export function eventStream(
+  o: EventStreamOptions,
+  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 },
+): AsyncGenerator<Batch> {
   const minSplit = o.minSplit ?? 64;
   const windowEvents = o.windowEvents ?? 2 * o.chunkSize;
   const maxBuffered = o.maxBuffered ?? Math.max(10_000, 4 * o.concurrency * windowEvents);
-  const windows: Window[] = [{ from: o.from, to: o.to, stop: o.to + 1, at: o.from, token: undefined, events: [], state: "idle" }];
+  const windows: Window[] = [
+    {
+      from: o.from,
+      to: o.to,
+      stop: o.to + 1,
+      at: o.from,
+      token: undefined,
+      events: [],
+      state: "idle",
+    },
+  ];
   stats.windows = 1;
   let buffered = 0;
   let waiting = 0;
@@ -104,7 +131,10 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
   };
 
   /** Blocks that hold about `windowEvents` at the density seen lately. */
-  const span = () => (recentBlocks === 0 ? Number.POSITIVE_INFINITY : windowEvents / (Math.max(recentEvents, 0.5) / recentBlocks));
+  const span = () =>
+    recentBlocks === 0
+      ? Number.POSITIVE_INFINITY
+      : windowEvents / (Math.max(recentEvents, 0.5) / recentBlocks);
   /** What a window other than the front may hold before it pauses, so one dense window can't take the budget. */
   const perWindow = Math.max(4 * windowEvents, Math.floor(maxBuffered / o.concurrency));
 
@@ -113,7 +143,15 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
     const left = w.stop - w.at;
     if (left < 2 * minSplit) return undefined;
     const cut = w.at + Math.round(Math.max(minSplit, Math.min(left / 2, span())));
-    const rest: Window = { from: cut, to: w.stop - 1, stop: w.stop, at: cut, token: undefined, events: [], state: "idle" };
+    const rest: Window = {
+      from: cut,
+      to: w.stop - 1,
+      stop: w.stop,
+      at: cut,
+      token: undefined,
+      events: [],
+      state: "idle",
+    };
     windows.splice(windows.indexOf(w) + 1, 0, rest);
     w.stop = cut;
     stats.windows++;
@@ -131,7 +169,12 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
   };
 
   const run = async (w: Window) => {
-    const filter = { from_block: { block_number: w.from }, to_block: { block_number: w.to }, address: o.address, keys: o.keys };
+    const filter = {
+      from_block: { block_number: w.from },
+      to_block: { block_number: w.to },
+      address: o.address,
+      keys: o.keys,
+    };
     for (;;) {
       if (stopped) return;
       if (!mayFetch(w)) {
@@ -150,7 +193,10 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
       stats.events += kept;
       if (buffered > stats.peakBuffered) stats.peakBuffered = buffered;
       const token = page.continuation_token;
-      const at = token === undefined ? w.stop : Math.min(w.stop, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.at);
+      const at =
+        token === undefined
+          ? w.stop
+          : Math.min(w.stop, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.at);
       recentEvents = recentEvents * 0.9 + kept;
       recentBlocks = recentBlocks * 0.9 + Math.max(0, at - w.at);
       if (at >= w.stop) {
@@ -191,7 +237,15 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
   const workers = Array.from({ length: o.concurrency }, worker);
   o.gauges?.(() => {
     const count = (state: Window["state"]) => windows.filter((w) => w.state === state).length;
-    return { buffered, maxBuffered, windows: windows.length, running: count("running"), paused: count("idle"), done: count("done"), idleWorkers: waiting };
+    return {
+      buffered,
+      maxBuffered,
+      windows: windows.length,
+      running: count("running"),
+      paused: count("idle"),
+      done: count("done"),
+      idleWorkers: waiting,
+    };
   });
 
   return (async function* () {
@@ -229,7 +283,9 @@ export function eventStream(o: EventStreamOptions, stats: FetchStats = { events:
 }
 
 /** Fetches a whole range, handing each ordered batch to `onEvents`. */
-export async function fetchEvents(o: EventStreamOptions & { onEvents: (events: EmittedEvent[], through: number) => void }): Promise<FetchStats> {
+export async function fetchEvents(
+  o: EventStreamOptions & { onEvents: (events: EmittedEvent[], through: number) => void },
+): Promise<FetchStats> {
   const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 };
   for await (const batch of eventStream(o, stats)) o.onEvents(batch.events, batch.through);
   return stats;

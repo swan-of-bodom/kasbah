@@ -26,4 +26,6 @@ export const swaps = pgTable("swaps", {
 });
 
 export const pairsRelations = relations(pairs, ({ many }) => ({ swapList: many(swaps) }));
-export const swapsRelations = relations(swaps, ({ one }) => ({ pair: one(pairs, { fields: [swaps.pairAddress], references: [pairs.address] }) }));
+export const swapsRelations = relations(swaps, ({ one }) => ({
+  pair: one(pairs, { fields: [swaps.pairAddress], references: [pairs.address] }),
+}));

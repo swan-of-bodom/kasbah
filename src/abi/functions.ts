@@ -4,7 +4,13 @@ import { rawSelector } from "./selector.ts";
 
 /** Every function of an ABI: top-level (Cairo 0, Cairo 1 before 2.0) and inside interfaces. */
 export function abiFunctions(abi: Abi): AbiFunction[] {
-  return abi.flatMap((i) => (i.type === "function" ? [i] : i.type === "interface" ? i.items.filter((f) => f.type === "function") : []));
+  return abi.flatMap((i) =>
+    i.type === "function"
+      ? [i]
+      : i.type === "interface"
+        ? i.items.filter((f) => f.type === "function")
+        : [],
+  );
 }
 
 export type CompiledFunction = {
@@ -31,7 +37,8 @@ export function compileFunction(abi: Abi, name: string): CompiledFunction {
   const codec = new Codec(abi);
   const write = codec.membersWriter(f.inputs);
   let read: Reader;
-  if (f.outputs.length > 0 && f.outputs.every((o) => o.name !== undefined)) read = codec.members(f.outputs as { name: string; type: string }[]);
+  if (f.outputs.length > 0 && f.outputs.every((o) => o.name !== undefined))
+    read = codec.members(f.outputs as { name: string; type: string }[]);
   else if (f.outputs.length === 1) read = codec.reader(f.outputs[0]!.type);
   else {
     const items = f.outputs.map((o) => codec.reader(o.type));
@@ -48,7 +55,8 @@ export function compileFunction(abi: Abi, name: string): CompiledFunction {
     decode: (felts) => {
       const c = { felts, i: 0 };
       const value = read(c);
-      if (c.i !== felts.length) throw new DecodeError(`${name}: ${felts.length - c.i} result felts left over`);
+      if (c.i !== felts.length)
+        throw new DecodeError(`${name}: ${felts.length - c.i} result felts left over`);
       return value;
     },
   };

@@ -2,7 +2,9 @@ import { createServer } from "node:http";
 import { expect, test } from "vitest";
 import { RpcClient } from "../../src/rpc/client.ts";
 
-async function node(answer: (call: { id: number; method: string; params: any }, seen: number) => unknown) {
+async function node(
+  answer: (call: { id: number; method: string; params: any }, seen: number) => unknown,
+) {
   const seen = new Map<string, number>();
   const sent: string[][] = [];
   const server = createServer((req, res) => {
@@ -15,7 +17,9 @@ async function node(answer: (call: { id: number; method: string; params: any }, 
         const n = (seen.get(c.params.n) ?? 0) + 1;
         seen.set(c.params.n, n);
         const r = answer(c, n) as { error?: unknown };
-        return r !== null && typeof r === "object" && "error" in r ? { jsonrpc: "2.0", id: c.id, error: r.error } : { jsonrpc: "2.0", id: c.id, result: r };
+        return r !== null && typeof r === "object" && "error" in r
+          ? { jsonrpc: "2.0", id: c.id, error: r.error }
+          : { jsonrpc: "2.0", id: c.id, result: r };
       });
       res.writeHead(200, { "content-type": "application/json" });
       res.end(JSON.stringify(Array.isArray(JSON.parse(body)) ? out : out[0]));
@@ -26,7 +30,11 @@ async function node(answer: (call: { id: number; method: string; params: any }, 
 }
 
 test("throttled calls inside a batch are retried alone, the rest kept", async () => {
-  const n = await node((c, seen) => (Number(c.params.n) % 3 === 0 && seen === 1 ? { error: { code: 429, message: "compute units exceeded" } } : `r${c.params.n}`));
+  const n = await node((c, seen) =>
+    Number(c.params.n) % 3 === 0 && seen === 1
+      ? { error: { code: 429, message: "compute units exceeded" } }
+      : `r${c.params.n}`,
+  );
   try {
     const rpc = new RpcClient(n.url);
     const calls = Array.from({ length: 10 }, (_, i) => ({ method: "m", params: { n: String(i) } }));
@@ -41,10 +49,17 @@ test("throttled calls inside a batch are retried alone, the rest kept", async ()
 });
 
 test("a call error that retrying can't fix rejects at once", async () => {
-  const n = await node((c) => (c.params.n === "1" ? { error: { code: 29, message: "Transaction hash not found" } } : "ok"));
+  const n = await node((c) =>
+    c.params.n === "1" ? { error: { code: 29, message: "Transaction hash not found" } } : "ok",
+  );
   try {
     const rpc = new RpcClient(n.url);
-    await expect(rpc.batch([{ method: "m", params: { n: "0" } }, { method: "m", params: { n: "1" } }])).rejects.toThrow("29 Transaction hash not found");
+    await expect(
+      rpc.batch([
+        { method: "m", params: { n: "0" } },
+        { method: "m", params: { n: "1" } },
+      ]),
+    ).rejects.toThrow("29 Transaction hash not found");
     expect(n.sent).toHaveLength(1);
   } finally {
     n.server.close();
@@ -57,7 +72,9 @@ test("zstd responses decode whether or not fetch already decoded them", async ()
     req.resume();
     req.on("end", () => {
       res.writeHead(200, { "content-type": "application/json", "content-encoding": "zstd" });
-      res.end(zstdCompressSync(JSON.stringify({ jsonrpc: "2.0", id: 0, result: "x".repeat(1_000) })));
+      res.end(
+        zstdCompressSync(JSON.stringify({ jsonrpc: "2.0", id: 0, result: "x".repeat(1_000) })),
+      );
     });
   });
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -94,7 +111,16 @@ test("paced to what the endpoint takes: a few throttles while finding the rate, 
   try {
     const rpc = new RpcClient(`http://127.0.0.1:${(server.address() as { port: number }).port}`);
     const send = (from: number, count: number) =>
-      Promise.all(Array.from({ length: count / 100 }, (_, b) => rpc.batch(Array.from({ length: 100 }, (_, i) => ({ method: "m", params: { n: from + b * 100 + i } })))));
+      Promise.all(
+        Array.from({ length: count / 100 }, (_, b) =>
+          rpc.batch(
+            Array.from({ length: 100 }, (_, i) => ({
+              method: "m",
+              params: { n: from + b * 100 + i },
+            })),
+          ),
+        ),
+      );
     const first = (await send(0, 3_000)).flat();
     expect(first).toEqual(Array.from({ length: 3_000 }, (_, i) => i));
     const found = rejected;
@@ -112,7 +138,10 @@ test("a batch larger than a second's worth of calls goes out in pieces", async (
   const n = await node((c) => c.params.n);
   try {
     const rpc = new RpcClient(n.url, { initialRate: 40 });
-    const calls = Array.from({ length: 100 }, (_, i) => ({ method: "m", params: { n: String(i) } }));
+    const calls = Array.from({ length: 100 }, (_, i) => ({
+      method: "m",
+      params: { n: String(i) },
+    }));
     expect(await rpc.batch(calls)).toEqual(calls.map((c) => c.params.n));
     expect(n.sent.map((s) => s.length)).toEqual([40, 40, 20]);
   } finally {

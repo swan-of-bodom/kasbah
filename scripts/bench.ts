@@ -40,7 +40,12 @@ const head = await blockNumber(rpc);
 if (a["first-block"]) {
   let token: string | undefined;
   for (;;) {
-    const page = await getEvents(rpc, { from_block: { block_number: 0 }, to_block: { block_number: head }, address: EKUBO_CORE }, 1, token);
+    const page = await getEvents(
+      rpc,
+      { from_block: { block_number: 0 }, to_block: { block_number: head }, address: EKUBO_CORE },
+      1,
+      token,
+    );
     if (page.events.length > 0) {
       console.log("first Ekubo Core event at block", page.events[0]!.block_number);
       break;
@@ -53,14 +58,24 @@ if (a["first-block"]) {
 
 const from = Number(a.from ?? head - 100_000);
 const to = Number(a.to ?? head);
-const todayDecode = createDecoder(JSON.parse(readFileSync(new URL("../test/fixtures/ekubo-core.abi.json", import.meta.url), "utf8")) as Abi);
-let decode = (_block: number, keys: readonly string[], data: readonly string[]) => todayDecode(keys, data);
+const todayDecode = createDecoder(
+  JSON.parse(
+    readFileSync(new URL("../test/fixtures/ekubo-core.abi.json", import.meta.url), "utf8"),
+  ) as Abi,
+);
+let decode = (_block: number, keys: readonly string[], data: readonly string[]) =>
+  todayDecode(keys, data);
 if (a.history) {
   const spans = await classHistory(rpc, EKUBO_CORE, from, to);
-  const withAbis = await Promise.all(spans.map(async (s) => {
-    const cls = await rpc.request<{ abi: string | Abi }>("starknet_getClass", { block_id: "latest", class_hash: s.classHash });
-    return { ...s, abi: (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi };
-  }));
+  const withAbis = await Promise.all(
+    spans.map(async (s) => {
+      const cls = await rpc.request<{ abi: string | Abi }>("starknet_getClass", {
+        block_id: "latest",
+        class_hash: s.classHash,
+      });
+      return { ...s, abi: (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi };
+    }),
+  );
   decode = createHistoricalDecoder(withAbis);
   console.error(`decoding with ${spans.length} classes`);
 }
@@ -85,7 +100,10 @@ const stats = await fetchEvents({
   minSplit: a.sequential ? Number.POSITIVE_INFINITY : 64,
   onEvents(events) {
     for (const e of events) {
-      checksum += (BigInt(e.block_number!) << 40n) + (BigInt(e.transaction_index) << 20n) + BigInt(e.event_index);
+      checksum +=
+        (BigInt(e.block_number!) << 40n) +
+        (BigInt(e.transaction_index) << 20n) +
+        BigInt(e.event_index);
       blocks.add(e.block_number!);
     }
     if (!a.decode) return;

@@ -1,7 +1,11 @@
 import type { Abi } from "../abi/abi.ts";
 import { abiEvents, createDecoder } from "../abi/events.ts";
-import { type ClassSpan, classHistory, createHistoricalDecoder, type Decode } from "../abi/history.ts";
-import { selector } from "../abi/selector.ts";
+import {
+  type ClassSpan,
+  classHistory,
+  createHistoricalDecoder,
+  type Decode,
+} from "../abi/history.ts";
 import type { RpcClient } from "../rpc/client.ts";
 import type { Note } from "./status.ts";
 
@@ -41,10 +45,16 @@ const UPGRADE_EVENTS = ["Upgraded", "ClassHashReplaced", "ImplementationReplaced
  * A contract's upgrade events: the configured ones (each must be in the ABI; `[]` for a contract that never
  * upgrades), else the common ones its ABI declares, else undefined.
  */
-export function upgradeEventsOf(contract: string, abi: Abi, configured: readonly string[] | undefined): Set<string> | undefined {
+export function upgradeEventsOf(
+  contract: string,
+  abi: Abi,
+  configured: readonly string[] | undefined,
+): Set<string> | undefined {
   const names = abiEvents(abi).map((e) => e.name);
   if (configured !== undefined) {
-    for (const n of configured) if (!names.includes(n)) throw new Error(`${contract}: upgradeEvents: the ABI has no event ${n}`);
+    for (const n of configured)
+      if (!names.includes(n))
+        throw new Error(`${contract}: upgradeEvents: the ABI has no event ${n}`);
     return new Set(configured);
   }
   const found = names.filter((n) => UPGRADE_EVENTS.some((u) => n === u || n.endsWith(`.${u}`)));
@@ -54,7 +64,9 @@ export function upgradeEventsOf(contract: string, abi: Abi, configured: readonly
 /** Above this many addresses, live class checks read each block's state diff instead of asking per address. */
 const PER_ADDRESS_CHECKS = 100;
 
-type StateUpdate = { state_diff: { replaced_classes: { contract_address: string; class_hash: string }[] } };
+type StateUpdate = {
+  state_diff: { replaced_classes: { contract_address: string; class_hash: string }[] };
+};
 
 /**
  * Everything the fetcher watches: `addresses` and `keys` (shared with the fetchers, changed in place), each
@@ -83,7 +95,15 @@ export class Sources {
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
       this.#fallback.set(c.name, createDecoder(c.abi));
-      if (c.upgrades !== undefined) this.#upgradeSelectors.set(c.name, new Set(abiEvents(c.abi).filter((e) => c.upgrades!.has(e.name)).map((e) => e.selectors[0]!)));
+      if (c.upgrades !== undefined)
+        this.#upgradeSelectors.set(
+          c.name,
+          new Set(
+            abiEvents(c.abi)
+              .filter((e) => c.upgrades!.has(e.name))
+              .map((e) => e.selectors[0]!),
+          ),
+        );
       // Handled events of the configured ABI are always fetched, whatever the classes say (Cairo 0 proxies).
       this.#join(c, c.abi);
     }
@@ -98,7 +118,11 @@ export class Sources {
   /** Handled and upgrade events of `abi` join the `keys` filter. */
   #join(c: ContractSource, abi: Abi) {
     for (const e of abiEvents(abi)) {
-      if ((c.handled.has(e.name) || c.upgrades?.has(e.name)) && !this.keys[0]!.includes(e.selectors[0]!)) this.keys[0]!.push(e.selectors[0]!);
+      if (
+        (c.handled.has(e.name) || c.upgrades?.has(e.name)) &&
+        !this.keys[0]!.includes(e.selectors[0]!)
+      )
+        this.keys[0]!.push(e.selectors[0]!);
     }
   }
 
@@ -110,14 +134,19 @@ export class Sources {
   #decoder(contract: string, spans: (ClassSpan & { abi: Abi })[]) {
     const byClass = createHistoricalDecoder(spans, this.#decoderFor);
     const fallback = this.#fallback.get(contract)!;
-    return (block: number, keys: readonly string[], data: readonly string[]) => byClass(block, keys, data) ?? (block < (spans[0]?.from ?? Infinity) ? undefined : fallback(keys, data));
+    return (block: number, keys: readonly string[], data: readonly string[]) =>
+      byClass(block, keys, data) ??
+      (block < (spans[0]?.from ?? Infinity) ? undefined : fallback(keys, data));
   }
 
   abiOf(classHash: string): Promise<Abi> {
     let abi = this.#abis.get(classHash);
     if (abi === undefined) {
       abi = this.#rpc
-        .request<{ abi: string | Abi }>("starknet_getClass", { block_id: "latest", class_hash: classHash })
+        .request<{ abi: string | Abi }>("starknet_getClass", {
+          block_id: "latest",
+          class_hash: classHash,
+        })
         .then((cls) => (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi);
       this.#abis.set(classHash, abi);
     }
@@ -142,12 +171,19 @@ export class Sources {
     const c = this.#contracts.get(w.contract)!;
     const configured = new Set(abiEvents(c.abi).map((e) => e.name));
     for (const s of await this.#withAbis(spans)) {
-      const missing = abiEvents(s.abi).filter((e) => !configured.has(e.name)).map((e) => e.name);
+      const missing = abiEvents(s.abi)
+        .filter((e) => !configured.has(e.name))
+        .map((e) => e.name);
       // Once per contract and event name: a contract upgraded 20 times reports the same event once.
       const unreported = missing.filter((m) => !this.#reported.has(`${c.name}:${m}`));
       if (unreported.length > 0) {
         for (const m of unreported) this.#reported.add(`${c.name}:${m}`);
-        this.#note({ kind: "skipped", contract: c.name, events: unreported, classHash: s.classHash });
+        this.#note({
+          kind: "skipped",
+          contract: c.name,
+          events: unreported,
+          classHash: s.classHash,
+        });
       }
       w.spans.push(s);
       if (this.byAddress.get(w.address) === w) this.#join(c, s.abi);
@@ -160,12 +196,32 @@ export class Sources {
    * watched). Configured contracts get a full class history; children are probed at creation and at `to`, and
    * bisected only if those differ.
    */
-  async resolve(contract: string, address: string, from: number, to: number, child: boolean): Promise<Watched | undefined> {
+  async resolve(
+    contract: string,
+    address: string,
+    from: number,
+    to: number,
+    child: boolean,
+  ): Promise<Watched | undefined> {
     const a = canonical(address);
     if (this.byAddress.has(a)) return undefined;
-    const spans = await classHistory(this.#rpc, a, from, Math.max(from, to), child ? Number.MAX_SAFE_INTEGER : undefined);
+    const spans = await classHistory(
+      this.#rpc,
+      a,
+      from,
+      Math.max(from, to),
+      child ? Number.MAX_SAFE_INTEGER : undefined,
+    );
     if (spans.length === 0) throw new Error(`${contract}: nothing deployed at ${a} by block ${to}`);
-    const w: Watched = { contract, address: a, from, child, spans: [], decode: createHistoricalDecoder([]), checked: Math.max(from, to) };
+    const w: Watched = {
+      contract,
+      address: a,
+      from,
+      child,
+      spans: [],
+      decode: createHistoricalDecoder([]),
+      checked: Math.max(from, to),
+    };
     await this.#extend(w, spans);
     return w;
   }
@@ -182,7 +238,13 @@ export class Sources {
   }
 
   /** `resolve`, then `watch`. */
-  async add(contract: string, address: string, from: number, to: number, child: boolean): Promise<Watched | undefined> {
+  async add(
+    contract: string,
+    address: string,
+    from: number,
+    to: number,
+    child: boolean,
+  ): Promise<Watched | undefined> {
     const w = await this.resolve(contract, address, from, to, child);
     return w !== undefined && this.watch(w) ? w : undefined;
   }
@@ -209,20 +271,33 @@ export class Sources {
    * Before a live block's events are handled: an address that emitted one of its upgrade events in it has its class
    * read at the block, and decodes the block with the new one.
    */
-  async upgradesIn(events: readonly { from_address: string; keys: string[] }[], block: number): Promise<void> {
+  async upgradesIn(
+    events: readonly { from_address: string; keys: string[] }[],
+    block: number,
+  ): Promise<void> {
     const due = new Set<Watched>();
     for (const e of events) {
       const w = this.byAddress.get(canonical(e.from_address));
       if (w !== undefined && this.#upgradeSelectors.get(w.contract)?.has(e.keys[0]!)) due.add(w);
     }
-    await Promise.all([...due].map(async (w) => {
-      const hash = await this.#rpc.request<string>("starknet_getClassHashAt", { block_id: { block_number: block }, contract_address: w.address });
-      if (hash !== w.spans.at(-1)!.classHash) {
-        this.#note({ kind: "class", contract: w.contract, address: w.address, changes: [{ block, classHash: hash }] });
-        await this.#extend(w, [{ from: block, classHash: hash }]);
-      }
-      w.checked = Math.max(w.checked, block);
-    }));
+    await Promise.all(
+      [...due].map(async (w) => {
+        const hash = await this.#rpc.request<string>("starknet_getClassHashAt", {
+          block_id: { block_number: block },
+          contract_address: w.address,
+        });
+        if (hash !== w.spans.at(-1)!.classHash) {
+          this.#note({
+            kind: "class",
+            contract: w.contract,
+            address: w.address,
+            changes: [{ block, classHash: hash }],
+          });
+          await this.#extend(w, [{ from: block, classHash: hash }]);
+        }
+        w.checked = Math.max(w.checked, block);
+      }),
+    );
   }
 
   /**
@@ -231,34 +306,56 @@ export class Sources {
    * only a changed one. Many: each block's `replaced_classes`.
    */
   async checkClasses(from: number, to: number): Promise<void> {
-    const due = [...this.byAddress.values()].filter((w) => w.checked < to && this.#contracts.get(w.contract)!.upgrades === undefined);
+    const due = [...this.byAddress.values()].filter(
+      (w) => w.checked < to && this.#contracts.get(w.contract)!.upgrades === undefined,
+    );
     if (due.length === 0) return;
     if (due.length <= PER_ADDRESS_CHECKS) {
       const current = await this.#rpc.batch<string[]>(
-        due.map((w) => ({ method: "starknet_getClassHashAt", params: { block_id: { block_number: to }, contract_address: w.address } })),
+        due.map((w) => ({
+          method: "starknet_getClassHashAt",
+          params: { block_id: { block_number: to }, contract_address: w.address },
+        })),
       );
-      await Promise.all(due.map(async (w, i) => {
-        if (current[i] !== w.spans.at(-1)!.classHash) {
-          const changes = (await classHistory(this.#rpc, w.address, w.checked, to, Number.MAX_SAFE_INTEGER)).slice(1);
-          this.#note({ kind: "class", contract: w.contract, address: w.address, changes: changes.map((s) => ({ block: s.from, classHash: s.classHash })) });
-          await this.#extend(w, changes);
-        }
-        w.checked = to;
-      }));
+      await Promise.all(
+        due.map(async (w, i) => {
+          if (current[i] !== w.spans.at(-1)!.classHash) {
+            const changes = (
+              await classHistory(this.#rpc, w.address, w.checked, to, Number.MAX_SAFE_INTEGER)
+            ).slice(1);
+            this.#note({
+              kind: "class",
+              contract: w.contract,
+              address: w.address,
+              changes: changes.map((s) => ({ block: s.from, classHash: s.classHash })),
+            });
+            await this.#extend(w, changes);
+          }
+          w.checked = to;
+        }),
+      );
       return;
     }
     const start = Math.min(...due.map((w) => w.checked + 1), from);
     const blocks = Array.from({ length: to - start + 1 }, (_, i) => start + i);
     for (let i = 0; i < blocks.length; i += 100) {
       const updates = await this.#rpc.batch<StateUpdate[]>(
-        blocks.slice(i, i + 100).map((n) => ({ method: "starknet_getStateUpdate", params: { block_id: { block_number: n } } })),
+        blocks.slice(i, i + 100).map((n) => ({
+          method: "starknet_getStateUpdate",
+          params: { block_id: { block_number: n } },
+        })),
       );
       for (const [j, u] of updates.entries()) {
         const n = blocks[i + j]!;
         for (const r of u.state_diff.replaced_classes) {
           const w = this.byAddress.get(canonical(r.contract_address));
           if (w === undefined || n <= w.checked) continue;
-          this.#note({ kind: "class", contract: w.contract, address: w.address, changes: [{ block: n, classHash: r.class_hash }] });
+          this.#note({
+            kind: "class",
+            contract: w.contract,
+            address: w.address,
+            changes: [{ block: n, classHash: r.class_hash }],
+          });
           await this.#extend(w, [{ from: n, classHash: r.class_hash }]);
         }
       }
@@ -282,10 +379,13 @@ export function factoryReader(f: FactorySource, spans: (ClassSpan & { abi: Abi }
   const byClass = createHistoricalDecoder(spans);
   // A proxy factory's class doesn't declare the creation event: the configured ABI does.
   const fallback = createDecoder(f.abi);
-  const decode = (block: number, keys: readonly string[], data: readonly string[]) => byClass(block, keys, data) ?? fallback(keys, data);
+  const decode = (block: number, keys: readonly string[], data: readonly string[]) =>
+    byClass(block, keys, data) ?? fallback(keys, data);
   const selectors = new Set<string>();
-  for (const abi of [...spans.map((s) => s.abi), f.abi]) for (const e of abiEvents(abi)) if (e.name === f.event) selectors.add(e.selectors[0]!);
-  if (selectors.size === 0) throw new Error(`${f.contract}: the factory ABI has no event ${f.event}`);
+  for (const abi of [...spans.map((s) => s.abi), f.abi])
+    for (const e of abiEvents(abi)) if (e.name === f.event) selectors.add(e.selectors[0]!);
+  if (selectors.size === 0)
+    throw new Error(`${f.contract}: the factory ABI has no event ${f.event}`);
   return {
     selectors: [...selectors],
     child(e: { block_number?: number; keys: string[]; data: string[] }): string | undefined {
@@ -294,7 +394,8 @@ export function factoryReader(f: FactorySource, spans: (ClassSpan & { abi: Abi }
       const value = (decoded.args as Record<string, unknown>)[f.parameter];
       // A ContractAddress decodes to hex, a Cairo 0 `felt` to a bigint.
       if (typeof value === "bigint") return `0x${value.toString(16)}`;
-      if (typeof value !== "string") throw new Error(`${f.contract}: ${f.event}.${f.parameter} is not an address`);
+      if (typeof value !== "string")
+        throw new Error(`${f.contract}: ${f.event}.${f.parameter} is not an address`);
       return canonical(value);
     },
   };

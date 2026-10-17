@@ -18,9 +18,18 @@ export async function factories(run: Run): Promise<void> {
     status.range.through = through;
     if (signal.aborted) break;
   }
-  const resolved = await Promise.all([...found.values()].map((c) => sources.resolve(c.contract, c.address, c.block, plan.classTo, true)));
+  const resolved = await Promise.all(
+    [...found.values()].map((c) =>
+      sources.resolve(c.contract, c.address, c.block, plan.classTo, true),
+    ),
+  );
   const watched = resolved.filter((w) => w !== undefined);
   await position.commit({ kind: "children", through, children: watched });
   cache?.untrack();
-  status.note({ kind: "factories", children: watched.length, through, seconds: (performance.now() - started) / 1000 });
+  status.note({
+    kind: "factories",
+    children: watched.length,
+    through,
+    seconds: (performance.now() - started) / 1000,
+  });
 }

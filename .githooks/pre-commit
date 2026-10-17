@@ -1,0 +1,4 @@
+#!/bin/sh
+# Refuses a commit whose staged files Biome would change or flags: `pnpm lint:fix` fixes most of it.
+command -v node >/dev/null 2>&1 || . "$HOME/.nvm/nvm.sh"
+exec node_modules/.bin/biome check --staged --no-errors-on-unmatched

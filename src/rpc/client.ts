@@ -21,7 +21,16 @@ export class RpcError extends Error {
  * `methods`: calls per JSON-RPC method (what providers bill), retries included. Retried failures by kind:
  * `throttled` (429), `timeouts`, `failed` (anything else retryable: 5xx, transport, node internal errors).
  */
-export type RpcStats = { requests: number; calls: number; retries: number; throttled: number; timeouts: number; failed: number; bytes: number; methods: Record<string, number> };
+export type RpcStats = {
+  requests: number;
+  calls: number;
+  retries: number;
+  throttled: number;
+  timeouts: number;
+  failed: number;
+  bytes: number;
+  methods: Record<string, number>;
+};
 
 export type RpcClientOptions = {
   timeoutMs?: number;
@@ -38,7 +47,11 @@ const INITIAL_PAUSE_MS = 100;
 const MAX_PAUSE_MS = 5_000;
 
 type Call = { method: string; params: unknown };
-type Response = { id: number; result?: unknown; error?: { code: number; message: string; data?: unknown } };
+type Response = {
+  id: number;
+  result?: unknown;
+  error?: { code: number; message: string; data?: unknown };
+};
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
@@ -55,7 +68,16 @@ function retryable(status: number | undefined, code?: number): boolean {
  * pauses sending (100 ms, then ×1.5 per throttle in a row, up to 5 s).
  */
 export class RpcClient {
-  readonly stats: RpcStats = { requests: 0, calls: 0, retries: 0, throttled: 0, timeouts: 0, failed: 0, bytes: 0, methods: {} };
+  readonly stats: RpcStats = {
+    requests: 0,
+    calls: 0,
+    retries: 0,
+    throttled: 0,
+    timeouts: 0,
+    failed: 0,
+    bytes: 0,
+    methods: {},
+  };
   readonly #url: string;
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
@@ -119,7 +141,10 @@ export class RpcClient {
       let status: number | undefined;
       let failure: unknown;
       try {
-        const answers = await this.#send(pending.map((i) => calls[i]!), (s) => (status = s));
+        const answers = await this.#send(
+          pending.map((i) => calls[i]!),
+          (s) => (status = s),
+        );
         const again: number[] = [];
         answers.forEach((a, j) => {
           if (!(a instanceof RpcError)) results[pending[j]!] = a;
@@ -163,7 +188,10 @@ export class RpcClient {
           await sleep(this.#pausedUntil - now);
           continue;
         }
-        this.#tokens = Math.min(this.#rate, this.#tokens + ((now - this.#refilled) * this.#rate) / 1000);
+        this.#tokens = Math.min(
+          this.#rate,
+          this.#tokens + ((now - this.#refilled) * this.#rate) / 1000,
+        );
         this.#refilled = now;
         const need = Math.min(n, this.#rate);
         if (this.#tokens >= need) {
@@ -205,7 +233,12 @@ export class RpcClient {
   /** One HTTP request: per call its result or its `RpcError`. Throws for transport and HTTP errors. */
   async #send(calls: Call[], onStatus: (status: number) => void): Promise<unknown[]> {
     const first = this.#id;
-    const body = calls.map((c, i) => ({ jsonrpc: "2.0", id: first + i, method: c.method, params: c.params }));
+    const body = calls.map((c, i) => ({
+      jsonrpc: "2.0",
+      id: first + i,
+      method: c.method,
+      params: c.params,
+    }));
     this.#id += calls.length;
     this.stats.requests++;
     this.stats.calls += calls.length;
@@ -219,23 +252,31 @@ export class RpcClient {
     onStatus(res.status);
     // fetch decodes br and gzip itself, and zstd too in newer Node 24 (still labelled zstd): the frame magic tells.
     const bytes = new Uint8Array(await res.arrayBuffer());
-    const zstd = res.headers.get("content-encoding") === "zstd" && bytes[0] === 0x28 && bytes[1] === 0xb5 && bytes[2] === 0x2f && bytes[3] === 0xfd;
+    const zstd =
+      res.headers.get("content-encoding") === "zstd" &&
+      bytes[0] === 0x28 &&
+      bytes[1] === 0xb5 &&
+      bytes[2] === 0x2f &&
+      bytes[3] === 0xfd;
     const text = utf8.decode(zstd ? await zstdDecompress(bytes) : bytes);
     this.stats.bytes += text.length;
-    if (!res.ok) throw new RpcError(calls[0]!.method, res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
+    if (!res.ok)
+      throw new RpcError(calls[0]!.method, res.status, `HTTP ${res.status}: ${text.slice(0, 200)}`);
     const parsed = JSON.parse(text) as Response | Response[];
     const responses = Array.isArray(parsed) ? parsed : [parsed];
     const byId = new Map(responses.map((r) => [r.id, r]));
     return calls.map((c, i) => {
       const r = byId.get(first + i);
       if (r === undefined) return new RpcError(c.method, -32603, "missing response in batch");
-      if (r.error !== undefined) return new RpcError(c.method, r.error.code, r.error.message, r.error.data);
+      if (r.error !== undefined)
+        return new RpcError(c.method, r.error.code, r.error.message, r.error.data);
       return r.result;
     });
   }
 
   async #acquire(): Promise<void> {
-    while (this.#active >= this.#maxConcurrency) await new Promise<void>((r) => this.#waiting.push(r));
+    while (this.#active >= this.#maxConcurrency)
+      await new Promise<void>((r) => this.#waiting.push(r));
     this.#active++;
   }
 

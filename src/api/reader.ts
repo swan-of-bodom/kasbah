@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import pg from "pg";
 import { quote, type TableInfo } from "../db/table.ts";
-import { DrizzleQueryError } from "drizzle-orm/errors";
 
 export type ReaderOptions = {
   /** Connection the indexer writes with; used once to set up the reader role. */
@@ -39,7 +39,8 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
     const inner = asQueryError(e.cause, timeoutMs);
     return inner instanceof QueryError ? inner : e;
   }
-  if ((e as { code?: string }).code === "57014") return new QueryError(`query cancelled after ${timeoutMs} ms`);
+  if ((e as { code?: string }).code === "57014")
+    return new QueryError(`query cancelled after ${timeoutMs} ms`);
   if (clientError(e)) return new QueryError((e as Error).message);
   return e;
 }
@@ -71,8 +72,12 @@ export class Reader {
       if (url === undefined) {
         role = `${o.schema}_reader`;
         const password = randomBytes(24).toString("hex");
-        await owner.query(`DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN CREATE ROLE ${quote(role)} LOGIN; END IF; END $$`);
-        await owner.query(`ALTER ROLE ${quote(role)} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password}'`);
+        await owner.query(
+          `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN CREATE ROLE ${quote(role)} LOGIN; END IF; END $$`,
+        );
+        await owner.query(
+          `ALTER ROLE ${quote(role)} WITH LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE PASSWORD '${password}'`,
+        );
         const u = new URL(o.database);
         u.username = role;
         u.password = password;
@@ -81,7 +86,8 @@ export class Reader {
         role = decodeURIComponent(new URL(url).username);
       }
       await owner.query(`GRANT USAGE ON SCHEMA ${quote(o.schema)} TO ${quote(role)}`);
-      for (const t of o.tables) await owner.query(`GRANT SELECT ON ${quote(o.schema)}.${quote(t.name)} TO ${quote(role)}`);
+      for (const t of o.tables)
+        await owner.query(`GRANT SELECT ON ${quote(o.schema)}.${quote(t.name)} TO ${quote(role)}`);
       await owner.query(`GRANT SELECT ON ${quote(o.schema)}._kasbah_meta TO ${quote(role)}`);
     } finally {
       await owner.end();
@@ -94,7 +100,9 @@ export class Reader {
     const client = await this.#pool.connect();
     let broken: Error | undefined;
     try {
-      await client.query(`BEGIN READ ONLY; SET LOCAL statement_timeout = ${this.timeoutMs}; SET LOCAL search_path TO ${quote(this.#schema)}`);
+      await client.query(
+        `BEGIN READ ONLY; SET LOCAL statement_timeout = ${this.timeoutMs}; SET LOCAL search_path TO ${quote(this.#schema)}`,
+      );
       try {
         return await body(client);
       } catch (e) {
@@ -112,20 +120,31 @@ export class Reader {
    * One read query, at most `maxRows` rows. Wrapped as a subquery (so only SELECT, VALUES and WITH parse) and sent
    * with the extended protocol (so it is exactly one statement). `$1`… in `text` are `params`.
    */
-  async sql(text: string, params: unknown[] = []): Promise<{ columns: string[]; rows: unknown[][] }> {
+  async sql(
+    text: string,
+    params: unknown[] = [],
+  ): Promise<{ columns: string[]; rows: unknown[][] }> {
     const body = text.trim().replace(/;\s*$/, "");
     if (body === "") throw new QueryError("empty query");
     // The limit as the last parameter: values are never empty, so pg always uses the extended protocol.
     const values = [...params, this.maxRows + 1];
     const result = await this.transaction((c) =>
-      c.query({ text: `SELECT * FROM (\n${body}\n) AS _q LIMIT $${values.length}`, values, rowMode: "array" }),
+      c.query({
+        text: `SELECT * FROM (\n${body}\n) AS _q LIMIT $${values.length}`,
+        values,
+        rowMode: "array",
+      }),
     );
-    if (result.rows.length > this.maxRows) throw new QueryError(`more than ${this.maxRows} rows: add a LIMIT`);
+    if (result.rows.length > this.maxRows)
+      throw new QueryError(`more than ${this.maxRows} rows: add a LIMIT`);
     return { columns: result.fields.map((f) => f.name), rows: result.rows as unknown[][] };
   }
 
   /** `LISTEN`s on `channel` on its own connection, reconnecting after errors. Returns a function that stops it. */
-  async listen(channel: string, onPayload: (payload: string) => void): Promise<() => Promise<void>> {
+  async listen(
+    channel: string,
+    onPayload: (payload: string) => void,
+  ): Promise<() => Promise<void>> {
     let client: pg.Client | undefined;
     let stopped = false;
     const connect = async (): Promise<void> => {

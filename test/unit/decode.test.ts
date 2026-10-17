@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { CairoCustomEnum, CairoOption, CallData, events, hash } from "starknet";
 import { describe, expect, test } from "vitest";
-import { type Abi, abiEvents, createDecoder, DecodeError, selector } from "../../src/index.ts";
 import { rawSelector } from "../../src/abi/selector.ts";
+import { type Abi, abiEvents, createDecoder, DecodeError, selector } from "../../src/index.ts";
 import { felt, unpadded } from "../../src/types/felt.ts";
 
 type EmittedEvent = { keys: string[]; data: string[]; from_address: string };
@@ -34,19 +34,25 @@ function normalize(v: unknown): unknown {
   if (v instanceof CairoOption) return v.isSome() ? normalize(v.unwrap()) : null;
   if (v instanceof CairoCustomEnum) {
     const value = v.unwrap();
-    const empty = value === undefined || (typeof value === "object" && value !== null && Object.keys(value).length === 0);
+    const empty =
+      value === undefined ||
+      (typeof value === "object" && value !== null && Object.keys(value).length === 0);
     return empty ? v.activeVariant() : { variant: v.activeVariant(), value: normalize(value) };
   }
   const o = v as Record<string, unknown>;
   const keys = Object.keys(o);
-  if (keys.length === 2 && "low" in o && "high" in o) return BigInt(o.low as bigint) + (BigInt(o.high as bigint) << 128n);
+  if (keys.length === 2 && "low" in o && "high" in o)
+    return BigInt(o.low as bigint) + (BigInt(o.high as bigint) << 128n);
   return Object.fromEntries(keys.map((k) => [k, normalize(o[k])]));
 }
 
 describe("selector", () => {
-  test.each(["Transfer", "Swapped", "OwnedEvent", "ERC20Event", "a", ""])("sn_keccak(%j) matches starknet.js", (name) => {
-    expect(BigInt(selector(name))).toBe(BigInt(hash.getSelectorFromName(name)));
-  });
+  test.each(["Transfer", "Swapped", "OwnedEvent", "ERC20Event", "a", ""])(
+    "sn_keccak(%j) matches starknet.js",
+    (name) => {
+      expect(BigInt(selector(name))).toBe(BigInt(hash.getSelectorFromName(name)));
+    },
+  );
 });
 
 describe.each(Object.entries(FIXTURES))("%s", (name, expectedCounts) => {
@@ -76,7 +82,16 @@ describe.each(Object.entries(FIXTURES))("%s", (name, expectedCounts) => {
     for (const [i, e] of emitted.entries()) {
       const ours = decode(e.keys, e.data)!;
       const theirs = parsed[i] as Record<string, unknown>;
-      const key = Object.keys(theirs).find((k) => !["block_hash", "block_number", "transaction_hash", "transaction_index", "event_index"].includes(k))!;
+      const key = Object.keys(theirs).find(
+        (k) =>
+          ![
+            "block_hash",
+            "block_number",
+            "transaction_hash",
+            "transaction_index",
+            "event_index",
+          ].includes(k),
+      )!;
       expect(normalize(ours.args), `event ${i} (${ours.name})`).toEqual(normalize(theirs[key]));
     }
   });
@@ -98,7 +113,10 @@ test("Ekubo: flat variants add no selector, nested ones do", () => {
   const defs = abiEvents(fixture<Abi>("ekubo-core.abi.json"));
   const by = Object.fromEntries(defs.map((d) => [d.name, d.selectors]));
   expect(by.ClassHashReplaced).toEqual([rawSelector("ClassHashReplaced")]);
-  expect(by["OwnedEvent.OwnershipTransferred"]).toEqual([rawSelector("OwnedEvent"), rawSelector("OwnershipTransferred")]);
+  expect(by["OwnedEvent.OwnershipTransferred"]).toEqual([
+    rawSelector("OwnedEvent"),
+    rawSelector("OwnershipTransferred"),
+  ]);
   expect(by.Swapped).toEqual([rawSelector("Swapped")]);
 });
 
@@ -126,7 +144,11 @@ describe("codec", () => {
         { name: "neg128", type: "core::integer::i128", kind: "data" },
         { name: "some", type: "core::option::Option::<core::integer::u8>", kind: "data" },
         { name: "none", type: "core::option::Option::<core::integer::u8>", kind: "data" },
-        { name: "err", type: "core::result::Result::<core::array::Array::<core::felt252>, core::felt252>", kind: "data" },
+        {
+          name: "err",
+          type: "core::result::Result::<core::array::Array::<core::felt252>, core::felt252>",
+          kind: "data",
+        },
         { name: "pair", type: "(core::bool, core::integer::u64)", kind: "data" },
         { name: "eth", type: "core::starknet::eth_address::EthAddress", kind: "data" },
         { name: "big", type: "core::integer::u512", kind: "data" },
@@ -134,8 +156,22 @@ describe("codec", () => {
         { name: "shape", type: "t::Shape", kind: "data" },
       ],
     },
-    { type: "enum", name: "t::Color", variants: [{ name: "Red", type: "()" }, { name: "Blue", type: "()" }] },
-    { type: "enum", name: "t::Shape", variants: [{ name: "Dot", type: "()" }, { name: "Circle", type: "core::integer::u32" }] },
+    {
+      type: "enum",
+      name: "t::Color",
+      variants: [
+        { name: "Red", type: "()" },
+        { name: "Blue", type: "()" },
+      ],
+    },
+    {
+      type: "enum",
+      name: "t::Shape",
+      variants: [
+        { name: "Dot", type: "()" },
+        { name: "Circle", type: "core::integer::u32" },
+      ],
+    },
   ] as const;
   const P = 2n ** 251n + 17n * 2n ** 192n + 1n;
   const felt = (v: bigint) => `0x${v.toString(16)}`;
@@ -146,17 +182,27 @@ describe("codec", () => {
 
   test("ByteArray, signed ints, Option, Result, tuples, EthAddress, u512, enums", () => {
     const data = [
-      "0x1", word(words[0]!), word(words[1]!), felt(BigInt(words[1]!.length)),
+      "0x1",
+      word(words[0]!),
+      word(words[1]!),
+      felt(BigInt(words[1]!.length)),
       felt(P - 5n),
       felt(P - 2n ** 100n),
-      "0x0", "0x7",
+      "0x0",
+      "0x7",
       "0x1",
-      "0x1", "0x2a",
-      "0x1", "0x10",
+      "0x1",
+      "0x2a",
+      "0x1",
+      "0x10",
       "0xabc",
-      "0x1", "0x0", "0x0", "0x2",
       "0x1",
-      "0x1", "0x9",
+      "0x0",
+      "0x0",
+      "0x2",
+      "0x1",
+      "0x1",
+      "0x9",
     ];
     const decoded = createDecoder(abi)([selector("Values")], data);
     expect(decoded).toEqual({
@@ -190,21 +236,57 @@ describe("codec", () => {
           { name: "amount", type: "Uint256" },
         ],
       },
-      { type: "struct", name: "Uint256", size: 2, members: [{ name: "low", offset: 0, type: "felt" }, { name: "high", offset: 1, type: "felt" }] },
+      {
+        type: "struct",
+        name: "Uint256",
+        size: 2,
+        members: [
+          { name: "low", offset: 0, type: "felt" },
+          { name: "high", offset: 1, type: "felt" },
+        ],
+      },
     ] as const;
-    const decoded = createDecoder(cairo0)([selector("Batch")], ["0x2", "0x5", "0x6", "0x1", "0x2", "0x3", "0x1"]);
-    expect(decoded).toEqual({ name: "Batch", args: { ids: [5n, 6n], point: { x: 1n, y: 2n }, amount: 3n + (1n << 128n) } });
+    const decoded = createDecoder(cairo0)(
+      [selector("Batch")],
+      ["0x2", "0x5", "0x6", "0x1", "0x2", "0x3", "0x1"],
+    );
+    expect(decoded).toEqual({
+      name: "Batch",
+      args: { ids: [5n, 6n], point: { x: 1n, y: 2n }, amount: 3n + (1n << 128n) },
+    });
   });
 });
 
 test("an event declared twice with the same layout is accepted, with another layout refused", () => {
   const twice = [
-    { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }, { name: "value", type: "Uint256" }] },
-    { type: "event", name: "Transfer", keys: [], data: [{ name: "from_address", type: "felt" }, { name: "amount", type: "Uint256" }] },
+    {
+      type: "event",
+      name: "Transfer",
+      keys: [],
+      data: [
+        { name: "from_", type: "felt" },
+        { name: "value", type: "Uint256" },
+      ],
+    },
+    {
+      type: "event",
+      name: "Transfer",
+      keys: [],
+      data: [
+        { name: "from_address", type: "felt" },
+        { name: "amount", type: "Uint256" },
+      ],
+    },
   ] as const;
   const decode = createDecoder(twice);
-  expect(decode([selector("Transfer")], ["0x1", "0x2", "0x0"])).toEqual({ name: "Transfer", args: { from_: 1n, value: 2n } });
-  const clash = [twice[0], { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }] }] as const;
+  expect(decode([selector("Transfer")], ["0x1", "0x2", "0x0"])).toEqual({
+    name: "Transfer",
+    args: { from_: 1n, value: 2n },
+  });
+  const clash = [
+    twice[0],
+    { type: "event", name: "Transfer", keys: [], data: [{ name: "from_", type: "felt" }] },
+  ] as const;
   expect(() => createDecoder(clash)).toThrow("same selectors");
 });
 

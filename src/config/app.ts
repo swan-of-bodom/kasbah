@@ -1,18 +1,18 @@
-import type { Block } from "../types/block.ts";
 import type { Relations } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
+import pg from "pg";
 import type { Abi } from "../abi/abi.ts";
+import type { EventArgs, EventName } from "../abi/types.ts";
 import type { Route, RouteHandler } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
-import type { EventArgs, EventName } from "../abi/types.ts";
-import type { Client } from "../indexer/client.ts";
 import type { Db } from "../db/store.ts";
-import type { Receipt, Transaction } from "../types/transaction.ts";
+import { quote } from "../db/table.ts";
+import type { Client } from "../indexer/client.ts";
 import { apiUrl, DEFAULT_SCHEMA, run } from "../indexer/run.ts";
 import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
-import pg from "pg";
-import { quote } from "../db/table.ts";
+import type { Block } from "../types/block.ts";
+import type { Receipt, Transaction } from "../types/transaction.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -68,19 +68,29 @@ export type Config = {
 export const createConfig = <const C extends Config>(config: C): C => config;
 
 type Contracts<C extends Config> = C["contracts"];
-type Blocks<C extends Config> = C["blocks"] extends Record<string, BlockConfig> ? C["blocks"] : Record<never, never>;
+type Blocks<C extends Config> =
+  C["blocks"] extends Record<string, BlockConfig> ? C["blocks"] : Record<never, never>;
 
 type EventHandlerName<C extends Config> = {
   [K in keyof Contracts<C> & string]: `${K}:${EventName<Contracts<C>[K]["abi"]>}`;
 }[keyof Contracts<C> & string];
 
-export type HandlerName<C extends Config> = EventHandlerName<C> | `${keyof Blocks<C> & string}:block`;
+export type HandlerName<C extends Config> =
+  | EventHandlerName<C>
+  | `${keyof Blocks<C> & string}:block`;
 
 export type IndexedBlock<K extends string = string> = { source: K; block: Block };
 
-type IncludeOf<C extends Config, K extends keyof Contracts<C>> = Contracts<C>[K] extends { include: infer I } ? I : {};
+type IncludeOf<C extends Config, K extends keyof Contracts<C>> = Contracts<C>[K] extends {
+  include: infer I;
+}
+  ? I
+  : {};
 
-export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends `${infer K}:${infer E}`
+export type IndexedEvent<
+  C extends Config,
+  N extends HandlerName<C>,
+> = N extends `${infer K}:${infer E}`
   ? K extends keyof Contracts<C> & string
     ? E extends EventName<Contracts<C>[K]["abi"]>
       ? {
@@ -89,9 +99,15 @@ export type IndexedEvent<C extends Config, N extends HandlerName<C>> = N extends
           args: EventArgs<Contracts<C>[K]["abi"], E>;
           address: `0x${string}`;
           /** With `include.block`, the whole header (timestamp, gas prices, …); without, the number and hash the event carries. */
-          block: IncludeOf<C, K> extends { block: true } ? Block : { number: number; hash: string | undefined };
+          block: IncludeOf<C, K> extends { block: true }
+            ? Block
+            : { number: number; hash: string | undefined };
           /** With `include.transaction`, the whole `Transaction` (narrow it by `type` and `version`). */
-          transaction: { hash: string; index: number } & (IncludeOf<C, K> extends { transaction: true } ? Transaction : {});
+          transaction: { hash: string; index: number } & (IncludeOf<C, K> extends {
+            transaction: true;
+          }
+            ? Transaction
+            : {});
           /** The event as emitted, before decoding: `keys[0]` is the selector of its name. */
           log: { keys: `0x${string}`[]; data: `0x${string}`[] };
           /** Position of the event in its transaction. */
@@ -132,7 +148,11 @@ export type RunOptions = {
 };
 
 /** `upgradeEvents` are events of each contract's ABI. */
-type Checked<C extends Config> = { contracts: { [K in keyof Contracts<C>]: { upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[] } } };
+type Checked<C extends Config> = {
+  contracts: {
+    [K in keyof Contracts<C>]: { upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[] };
+  };
+};
 
 export function kasbah<const C extends Config>(config: C & Checked<C>) {
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
@@ -146,14 +166,21 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
 
   /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs `api` in the config. */
   const route = (method: Route["method"]) => (path: string, handler: RouteHandler<C["tables"]>) => {
-    if (config.api === undefined) throw new Error(`${method} ${path}: routes need \`api\` in the config`);
+    if (config.api === undefined)
+      throw new Error(`${method} ${path}: routes need \`api\` in the config`);
     routes.push({ method, path, handler: handler as never });
   };
 
   /** The API alone (`api` in the config), over what an indexer of this app stores: another process, or an earlier run. */
   const serve = async (): Promise<{ url: string; close: () => Promise<void> }> => {
     if (config.api === undefined) throw new Error("serve needs `api` in the config");
-    const api = await Api.start({ ...config.api, database: config.database, schema: config.schema ?? DEFAULT_SCHEMA, tables: config.tables, routes });
+    const api = await Api.start({
+      ...config.api,
+      database: config.database,
+      schema: config.schema ?? DEFAULT_SCHEMA,
+      tables: config.tables,
+      routes,
+    });
     return { url: apiUrl(config.api, api.port), close: () => api.close() };
   };
 
@@ -169,5 +196,12 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     return schema;
   };
 
-  return { on, get: route("GET"), post: route("POST"), run: (options: RunOptions = {}) => run(config, handlers, options, routes), serve, drop };
+  return {
+    on,
+    get: route("GET"),
+    post: route("POST"),
+    run: (options: RunOptions = {}) => run(config, handlers, options, routes),
+    serve,
+    drop,
+  };
 }

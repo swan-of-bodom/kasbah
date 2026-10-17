@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 import { classHistory, createHistoricalDecoder } from "../../src/abi/history.ts";
 import { type Abi, selector } from "../../src/index.ts";
-import { RpcError, type RpcClient } from "../../src/rpc/client.ts";
+import { type RpcClient, RpcError } from "../../src/rpc/client.ts";
 
 function fakeContract(deployedAt: number, changes: [number, string][]) {
   const rpc = {
@@ -15,14 +15,30 @@ function fakeContract(deployedAt: number, changes: [number, string][]) {
 }
 
 test("finds the deployment and every class change", async () => {
-  const changes: [number, string][] = [[1_234, "0xa"], [1_235, "0xb"], [500_000, "0xc"], [2_999_999, "0xd"]];
+  const changes: [number, string][] = [
+    [1_234, "0xa"],
+    [1_235, "0xb"],
+    [500_000, "0xc"],
+    [2_999_999, "0xd"],
+  ];
   const spans = await classHistory(fakeContract(1_234, changes), "0x1", 0, 3_000_000);
   expect(spans).toEqual(changes.map(([from, classHash]) => ({ from, classHash })));
 });
 
 test("a contract deployed before the range starts at the range start", async () => {
-  const spans = await classHistory(fakeContract(0, [[0, "0xa"], [700, "0xb"]]), "0x1", 100, 1_000);
-  expect(spans).toEqual([{ from: 100, classHash: "0xa" }, { from: 700, classHash: "0xb" }]);
+  const spans = await classHistory(
+    fakeContract(0, [
+      [0, "0xa"],
+      [700, "0xb"],
+    ]),
+    "0x1",
+    100,
+    1_000,
+  );
+  expect(spans).toEqual([
+    { from: 100, classHash: "0xa" },
+    { from: 700, classHash: "0xb" },
+  ]);
 });
 
 test("each block decodes with the ABI active then", () => {

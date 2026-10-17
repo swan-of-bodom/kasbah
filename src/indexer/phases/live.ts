@@ -12,14 +12,23 @@ export async function live(run: Run): Promise<void> {
   if (!run.plan.live) return;
   const { config, rpc, endpoint, sources, status, store, signal, closers, position } = run;
   const last = position.next - 1;
-  const head = { number: last, hash: position.known.get(last) ?? (await getHeaders(rpc, [last], 1))[0]!.block_hash };
+  const head = {
+    number: last,
+    hash: position.known.get(last) ?? (await getHeaders(rpc, [last], 1))[0]!.block_hash,
+  };
   await position.commit({ kind: "follow", head });
   store.journal = true;
   status.enter("live");
   status.live.block = last;
   status.note({ kind: "following", block: last });
   const pollMs = config.pollMs ?? 2_000;
-  const heads = config.ws === undefined ? undefined : new HeadSubscription(config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws, (n) => status.note(n));
+  const heads =
+    config.ws === undefined
+      ? undefined
+      : new HeadSubscription(
+          config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws,
+          (n) => status.note(n),
+        );
   if (heads !== undefined) {
     closers.push(() => heads.close());
     status.head = () => heads.last;
@@ -27,9 +36,19 @@ export async function live(run: Run): Promise<void> {
   /** Children created in the blocks of the current tick, by block: committed with their block. */
   let children = new Map<number, Watched[]>();
   await follow({
-    rpc, address: sources.addresses, keys: sources.keys, chunkSize: endpoint.maxChunk, head, known: position.known, signal, pollMs,
+    rpc,
+    address: sources.addresses,
+    keys: sources.keys,
+    chunkSize: endpoint.maxChunk,
+    head,
+    known: position.known,
+    signal,
+    pollMs,
     // With a socket up, a missed head costs at most 15 s; without, poll as usual.
-    wait: heads === undefined ? undefined : (s) => heads.wait(heads.healthy ? Math.max(pollMs, 15_000) : pollMs, s),
+    wait:
+      heads === undefined
+        ? undefined
+        : (s) => heads.wait(heads.healthy ? Math.max(pollMs, 15_000) : pollMs, s),
     prepare: async (from, to) => {
       children = await discover(run, from, to);
       await sources.checkClasses(from, to);
@@ -49,7 +68,11 @@ export async function resume(run: Run, children: Child[]): Promise<void> {
     if (ancestor.number < c) await reorg(run, ancestor, { number: c, hash }, true);
   }
   // Children found by earlier runs, minus those whose creation that reorg undid.
-  await Promise.all(children.filter((ch) => ch.block <= position.watermark).map((ch) => sources.add(ch.contract, ch.address, ch.block, plan.classTo, true)));
+  await Promise.all(
+    children
+      .filter((ch) => ch.block <= position.watermark)
+      .map((ch) => sources.add(ch.contract, ch.address, ch.block, plan.classTo, true)),
+  );
 }
 
 async function onBlock(run: Run, block: LiveBlock, children: Watched[]): Promise<void> {
@@ -58,13 +81,27 @@ async function onBlock(run: Run, block: LiveBlock, children: Watched[]): Promise
   const x = await extras(run, block.events);
   const headers = new Map([[block.number, block.header]]);
   for (const e of block.events) await handle(run, e, x, headers);
-  for (const b of run.blockSources) if (firesAt(b, block.number)) await fire(run, b.name, block.header);
+  for (const b of run.blockSources)
+    if (firesAt(b, block.number)) await fire(run, b.name, block.header);
   await run.position.commit({ kind: "block", block, children });
 }
 
-async function reorg(run: Run, ancestor: BlockRef, replaced: BlockRef, stopped: boolean): Promise<void> {
+async function reorg(
+  run: Run,
+  ancestor: BlockRef,
+  replaced: BlockRef,
+  stopped: boolean,
+): Promise<void> {
   const { undone, forgotten } = await run.position.commit({ kind: "revert", to: ancestor });
-  run.status.note({ kind: "reorg", block: replaced.number, hash: felt(replaced.hash), ancestor: ancestor.number, rows: undone, children: forgotten, stopped });
+  run.status.note({
+    kind: "reorg",
+    block: replaced.number,
+    hash: felt(replaced.hash),
+    ancestor: ancestor.number,
+    rows: undone,
+    children: forgotten,
+    stopped,
+  });
 }
 
 /**
@@ -86,4 +123,7 @@ async function discover(run: Run, from: number, to: number): Promise<Map<number,
   return byBlock;
 }
 
-const firesAt = (b: BlockSource, n: number) => n >= b.startBlock && (b.endBlock === undefined || n <= b.endBlock) && (n - b.startBlock) % b.interval === 0;
+const firesAt = (b: BlockSource, n: number) =>
+  n >= b.startBlock &&
+  (b.endBlock === undefined || n <= b.endBlock) &&
+  (n - b.startBlock) % b.interval === 0;
