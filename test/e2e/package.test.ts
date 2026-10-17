@@ -71,7 +71,10 @@ test("the packed package installs and works outside the repo: library, types and
   expect(existsSync(join(dir, "node_modules/kasbah/dist/indexer", map.sources[0]!))).toBe(true);
   expect(readdirSync(join(dir, "node_modules/kasbah/dist"))).toContain("index.d.ts.map");
   expect(
-    execFileSync(join(dir, "node_modules/.bin/kasbah"), ["--help"], { cwd: dir, encoding: "utf8" }),
+    execFileSync(join(dir, "node_modules/.bin/kasbah"), ["--help"], {
+      cwd: dir,
+      encoding: "utf8",
+    }),
   ).toContain("kasbah start [app.ts]");
 }, 120_000);
 

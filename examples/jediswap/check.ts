@@ -16,7 +16,9 @@ const rows = (
     `SELECT address, token0, token1, reserve0::text, reserve1::text, swaps FROM jediswap.pairs`,
   )
 ).rows;
-const client = new CallClient(new RpcClient(process.env.KASBAH_RPC_URL!), { isFinal: () => false });
+const client = new CallClient(new RpcClient(process.env.KASBAH_RPC_URL!), {
+  isFinal: () => false,
+});
 const n = (h: string) => BigInt(h);
 
 let mismatched = 0;

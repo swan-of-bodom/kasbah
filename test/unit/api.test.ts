@@ -350,7 +350,9 @@ test.skipIf(url === undefined)("live GraphQL, and a bad live query is a plain 40
 test.skipIf(url === undefined)("a reader can't notify live clients itself", async () => {
   // The spoofed notification would arrive before the real one.
   const events = await live("", 1, async () => {
-    await post("/sql", { sql: `select pg_notify('kasbah_${schema}', '{"checkpoint": 999}')` });
+    await post("/sql", {
+      sql: `select pg_notify('kasbah_${schema}', '{"checkpoint": 999}')`,
+    });
     await commit(`SELECT 1`, 46);
   });
   expect(events).toEqual([{ event: "checkpoint", data: { checkpoint: 46 } }]);
