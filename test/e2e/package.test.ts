@@ -50,7 +50,7 @@ test("the packed package installs and works outside the repo: library, types and
     }),
   );
   // The repo's store: pnpm keeps one per filesystem, and the temp dir may be on another (tmpfs).
-  pnpm(["install", "--offline", "--store-dir", pnpm(["store", "path"], root).trim()], dir);
+  pnpm(["install", "--prefer-offline", "--store-dir", pnpm(["store", "path"], root).trim()], dir);
 
   // Plain JavaScript inside node_modules: no type stripping needed.
   const imported = execFileSync(
@@ -96,7 +96,10 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
       pnpm: { overrides: { kasbah: `file:../${tarball}` } },
     }),
   );
-  pnpm(["install", "--offline", "--store-dir", pnpm(["store", "path"], root).trim()], create);
+  pnpm(
+    ["install", "--prefer-offline", "--store-dir", pnpm(["store", "path"], root).trim()],
+    create,
+  );
   // Async: the fake node answering it runs in this process.
   const { stdout: out } = await promisify(execFile)(
     join(create, "node_modules/.bin/create-kasbah"),
@@ -200,7 +203,7 @@ test.skipIf(url === undefined)(
       });
     pnpm([
       "install",
-      "--offline",
+      "--prefer-offline",
       "--store-dir",
       execFileSync("pnpm", ["store", "path"], { cwd: root, encoding: "utf8" }).trim(),
     ]);
