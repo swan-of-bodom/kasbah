@@ -36,7 +36,7 @@ Juno / Madara source (HEAD), provider docs, and live probes. Appendix A has the 
 - Postgres only. Tables declared with Drizzle (like Ponder's `onchainTable`).
 - Read API: SQL over HTTP (read-only, like `@ponder/client`) and GraphQL generated from the schema.
 - First test target: Ekubo pools on mainnet (Core contract; Ekubo events carry everything in `data`, a single
-  selector key, see `research/abis/`).
+  selector key, see `test/fixtures/`).
 
 **Later, opt-in:** pre-confirmed overlay (§6.3), class-hash factories (§5.3), call/trace handlers
 (`traceBlockTransactions`), WebSocket live mode (§6.2), storage-diff handlers (`getStateUpdate`).
@@ -304,7 +304,7 @@ handlers `event.transaction` with the transaction's RPC fields and `event.receip
 starknet.js (10.8.0) is used for what it is good at: hashing (`sn_keccak`, Pedersen/Poseidon via
 `@scure/starknet`), and as the RPC types reference. Not for decoding on the hot path, and not for ABI types.
 
-### 8.1 What real ABIs look like (checked on mainnet, files in `research/abis/`)
+### 8.1 What real ABIs look like (checked on mainnet, files in `test/fixtures/`)
 
 **Cairo 0** (`getClassAt` returns `{abi, program, entry_points_by_type}`):
 - Event: `{"type":"event","name":"Upgraded","keys":[],"data":[{"name":"implementation","type":"felt"}]}`.
@@ -469,7 +469,7 @@ Target size: under 10k lines for v1.
 
 ## 11. Build order
 
-0. **ABI model + decoder + types**, tested on the real ABIs and events in `research/abis/` (Cairo 0 and Ekubo).
+0. **ABI model + decoder + types**, tested on the real ABIs and events in `test/fixtures/` (Cairo 0 and Ekubo).
    Small, independent, and everything else depends on it.
 1. **Spike: fetcher benchmark.** Endpoint probe + backfill fetcher only, printing events/s. Run on a real
    Ekubo history against Alchemy, Cartridge (Pathfinder) and PublicNode (Juno), and compare with the Ponder fork.

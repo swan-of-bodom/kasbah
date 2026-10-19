@@ -35,13 +35,15 @@ export async function load(file: string): Promise<App> {
 
 export const IGNORED = /(^|\/)(node_modules|\.git)(\/|$)/;
 export const CODE = /\.(ts|mts|js|mjs|cjs|json)$/;
+/** Not code: reinstalling a dependency rewrites it, and that alone mustn't re-index. */
+const NOT_HASHED = /(^|\/)package\.json$/;
 
 /** A hash of the code files under the app's directory: part of the build id, like Ponder's. */
 export function sourceHash(file: string): string {
   const root = dirname(resolve(file));
   const h = createHash("sha256");
   const files = (readdirSync(root, { recursive: true }) as string[])
-    .filter((f) => !IGNORED.test(f) && CODE.test(f))
+    .filter((f) => !IGNORED.test(f) && CODE.test(f) && !NOT_HASHED.test(f))
     .sort();
   for (const f of files)
     h.update(relative(root, join(root, f)))
