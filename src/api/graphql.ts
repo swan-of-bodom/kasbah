@@ -40,6 +40,8 @@ export type GraphqlContext = {
 
 /** SQL statements one GraphQL request may run (nested relations run one per level, or per parent for lists). */
 const MAX_STATEMENTS = 500;
+/** Keys one batched relation statement looks up at most. */
+const KEYS_PER_STATEMENT = 1_000;
 
 type Row = Record<string, unknown>;
 
@@ -75,7 +77,7 @@ function createLoader(
     try {
       const keys = [...batch.values()].map((b) => b.key);
       const found = new Map<string, unknown>();
-      for (const part of chunks(keys, 1_000))
+      for (const part of chunks(keys, KEYS_PER_STATEMENT))
         for (const [k, v] of await fetch(part)) found.set(k, v);
       for (const [k, b] of batch)
         for (const r of b.resolve) r(found.has(k) ? found.get(k) : missing());
@@ -239,6 +241,7 @@ const PageInfo = new GraphQLObjectType({
   },
 });
 
+/** Rows one list field returns at most (`limit`). */
 const MAX_LIMIT = 1_000;
 
 type Filter = Record<string, unknown> & { AND?: Filter[]; OR?: Filter[] };

@@ -21,6 +21,11 @@ export type EventStreamOptions = {
   gauges?: (read: () => FetchGauges) => void;
 };
 
+/** Smallest range, in blocks, worth splitting off a window for an idle worker. */
+const MIN_SPLIT = 64;
+/** The memory budget's floor, for small `concurrency` or sparse windows. */
+const MIN_BUFFERED = 10_000;
+
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
   buffered: number;
@@ -71,9 +76,9 @@ export function eventStream(
   o: EventStreamOptions,
   stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 },
 ): AsyncGenerator<Batch> {
-  const minSplit = o.minSplit ?? 64;
+  const minSplit = o.minSplit ?? MIN_SPLIT;
   const windowEvents = o.windowEvents ?? 2 * o.chunkSize;
-  const maxBuffered = o.maxBuffered ?? Math.max(10_000, 4 * o.concurrency * windowEvents);
+  const maxBuffered = o.maxBuffered ?? Math.max(MIN_BUFFERED, 4 * o.concurrency * windowEvents);
   const windows: Window[] = [
     {
       from: o.from,

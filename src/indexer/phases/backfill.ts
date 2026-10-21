@@ -6,8 +6,10 @@ import type { BlockSource, Run } from "../open.ts";
 
 /** Events (and block handlers) handled between two backfill commits. */
 const FLUSH_EVENTS = 100_000;
+/** Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded. */
+const FLUSH_BYTES = 64 << 20;
 
-/** Final blocks from the checkpoint to the backfill's end: a commit every FLUSH_EVENTS events or 64 MB of extras. */
+/** Final blocks from the checkpoint to the backfill's end: a commit every `FLUSH_EVENTS` events or `FLUSH_BYTES` of extras. */
 export async function backfill(run: Run): Promise<void> {
   const { status, sources, cache, signal, position } = run;
   const first = position.next;
@@ -32,7 +34,7 @@ export async function backfill(run: Run): Promise<void> {
     through = batch.through;
     status.range.through = through;
     if (signal.aborted) break;
-    if (since >= FLUSH_EVENTS || through === to || (cache?.pendingBytes ?? 0) > 64 << 20) {
+    if (since >= FLUSH_EVENTS || through === to || (cache?.pendingBytes ?? 0) > FLUSH_BYTES) {
       await position.commit({ kind: "batch", through });
       since = 0;
     }

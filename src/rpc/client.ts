@@ -44,7 +44,22 @@ export type RpcClientOptions = {
   maxAttempts?: number;
 };
 
+/** A request with no answer by then is a timeout, retried like a transport failure. */
+const TIMEOUT_MS = 30_000;
+/** Requests in flight at most, unless the caller sets `maxConcurrency`. */
+const MAX_CONCURRENCY = 64;
+/** Calls per second at the start: the limit doubles from here until the endpoint first throttles. */
+const INITIAL_RATE = 100;
+/** The limit never climbs above this, however fast the endpoint answers. */
+const MAX_RATE = 10_000;
+/** The limit never falls below this, however often the endpoint throttles. */
 const MIN_RATE = 5;
+/** Tries per call for failures that aren't throttling (throttled tries don't count). */
+const MAX_ATTEMPTS = 8;
+/** First retry backoff; it doubles per attempt up to `MAX_BACKOFF_MS`, then gets ±50% jitter. */
+const BACKOFF_MS = 200;
+const MAX_BACKOFF_MS = 10_000;
+/** Pause of all requests after a throttle, growing 1.5× per throttle in a row up to `MAX_PAUSE_MS`. */
 const INITIAL_PAUSE_MS = 100;
 const MAX_PAUSE_MS = 5_000;
 
@@ -101,12 +116,12 @@ export class RpcClient {
 
   constructor(url: string, options: RpcClientOptions = {}) {
     this.#url = url;
-    this.#timeoutMs = options.timeoutMs ?? 30_000;
-    this.#maxConcurrency = options.maxConcurrency ?? 64;
-    this.#rate = options.initialRate ?? 100;
+    this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+    this.#maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
+    this.#rate = options.initialRate ?? INITIAL_RATE;
     this.#tokens = this.#rate;
-    this.#maxRate = options.maxRate ?? 10_000;
-    this.#maxAttempts = options.maxAttempts ?? 8;
+    this.#maxRate = options.maxRate ?? MAX_RATE;
+    this.#maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
   }
 
   /** The current limit, in calls per second. */
@@ -174,7 +189,10 @@ export class RpcClient {
       // A throttle waits out the pause and never uses up attempts; other failures back off and do.
       if (throttled) attempt--;
       else if (attempt >= this.#maxAttempts) throw failure;
-      else await sleep(Math.min(10_000, 200 * 2 ** (attempt - 1)) * (0.5 + Math.random()));
+      else
+        await sleep(
+          Math.min(MAX_BACKOFF_MS, BACKOFF_MS * 2 ** (attempt - 1)) * (0.5 + Math.random()),
+        );
     }
   }
 

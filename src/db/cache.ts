@@ -46,6 +46,9 @@ export function unpackHex(h: string): string[] {
   return out;
 }
 
+/** Transactions per INSERT: one statement's array parameters are built as one string. */
+const ROWS_PER_INSERT = 1_000;
+
 const SCHEMA_SQL = (s: string) => [
   `CREATE SCHEMA IF NOT EXISTS ${s}`,
   `CREATE TABLE IF NOT EXISTS ${s}.events (block integer NOT NULL, tx integer NOT NULL, idx integer NOT NULL, address bytea NOT NULL,
@@ -358,8 +361,7 @@ export class EventCache {
     const all = this.#transactions;
     this.#transactions = [];
     this.#pendingBytes = 0;
-    // In chunks: one statement's array parameters are built as one string.
-    for (const t of chunks(all, 1_000)) {
+    for (const t of chunks(all, ROWS_PER_INSERT)) {
       await tx.query(
         `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
          ON CONFLICT (hash) DO UPDATE SET transaction = coalesce(EXCLUDED.transaction, transactions.transaction), receipt = coalesce(EXCLUDED.receipt, transactions.receipt)`,

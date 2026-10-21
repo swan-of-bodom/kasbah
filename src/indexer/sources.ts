@@ -64,6 +64,8 @@ export function upgradeEventsOf(
 
 /** Above this many addresses, live class checks read each block's state diff instead of asking per address. */
 const PER_ADDRESS_CHECKS = 100;
+/** `getStateUpdate` calls per batch request: diffs are large, so batches stay small. */
+const STATE_UPDATES_PER_BATCH = 100;
 
 type StateUpdate = {
   state_diff: { replaced_classes: { contract_address: string; class_hash: string }[] };
@@ -340,7 +342,7 @@ export class Sources {
     }
     const start = Math.min(...due.map((w) => w.checked + 1), from);
     const blocks = Array.from({ length: to - start + 1 }, (_, i) => start + i);
-    for (const part of chunks(blocks, 100)) {
+    for (const part of chunks(blocks, STATE_UPDATES_PER_BATCH)) {
       const updates = await this.#rpc.batch<StateUpdate[]>(
         part.map((n) => ({
           method: "starknet_getStateUpdate",

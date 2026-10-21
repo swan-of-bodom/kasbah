@@ -5,9 +5,10 @@ import { secondsSince } from "../utils/time.ts";
 
 export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done" | "failed";
 
-/** Seconds per point of the events/s history, and points kept (2 minutes). */
-const BUCKET_MS = 2000;
+/** Milliseconds per point of the events/s history, and points kept (2 minutes). */
+const BUCKET_MS = 2_000;
 const BUCKETS = 60;
+/** Event-loop delay sampling; its own interval is subtracted from what it measures. */
 const LAG_RESOLUTION_MS = 10;
 
 /** The last minute of RPC and fetcher activity, from one sample per second. */

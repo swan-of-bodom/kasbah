@@ -8,6 +8,9 @@ import { errorCode } from "../utils/errors.ts";
 import { copyRows } from "./copy.ts";
 import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
+/** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
+const ROWS_PER_DELETE = 1_000;
+
 /** How a buffered row reaches the database at flush. */
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
@@ -382,7 +385,7 @@ export class Store {
 
   async #delete(client: PoolClient, info: TableInfo, rows: Row[]) {
     const cols = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
-    for (const part of chunks(rows, 1000)) {
+    for (const part of chunks(rows, ROWS_PER_DELETE)) {
       const params: unknown[] = [];
       const tuples = part.map((row) => {
         const placeholders = info.primaryKey.map((c) => {

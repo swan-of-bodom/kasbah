@@ -34,6 +34,7 @@ export const liveChannel = (schema: string) => `kasbah_${schema}`;
 const stringify = (v: unknown) =>
   JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
 
+/** Request bodies over this are refused (413): a query is text, never this large. */
 const MAX_BODY = 1 << 20;
 
 function readBody(req: IncomingMessage): Promise<string> {

@@ -42,6 +42,9 @@ export type CallClientOptions = {
   maxEntries?: number;
 };
 
+/** Call results kept in memory, oldest dropped first (the cache, when on, keeps more in Postgres). */
+const MAX_ENTRIES = 100_000;
+
 export class CallClient implements Client {
   /** The block being indexed: the default for reads, and the hash pins non-final reads. */
   current: { number: number; hash: string | undefined } = { number: 0, hash: undefined };
@@ -54,7 +57,7 @@ export class CallClient implements Client {
   constructor(rpc: RpcClient, options: CallClientOptions) {
     this.#rpc = rpc;
     this.#options = options;
-    this.#max = options.maxEntries ?? 100_000;
+    this.#max = options.maxEntries ?? MAX_ENTRIES;
   }
 
   read = async <const TAbi extends Abi, const N extends FunctionName<TAbi>>(

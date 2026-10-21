@@ -2,6 +2,9 @@ import { type Batch, eventStream, type FetchGauges } from "../sync/fetch.ts";
 import { canonical } from "../types/felt.ts";
 import type { Run } from "./open.ts";
 
+/** With nothing to fetch, blocks still pass in steps of this many, so block handlers and progress keep moving. */
+const EMPTY_STEP = 100_000;
+
 /** A child as its factory's creation event says: `address` (canonical), created by `contract`'s factory in `block`. */
 export type Child = { address: string; contract: string; block: number };
 
@@ -20,8 +23,8 @@ export async function* events(
   const { rpc, endpoint, config, status } = run;
   const cache = final ? run.cache : undefined;
   if (addresses.length === 0 || keys[0]!.length === 0) {
-    for (let lo = from; lo <= to; lo += 100_000)
-      yield { events: [], through: Math.min(to, lo + 99_999) };
+    for (let lo = from; lo <= to; lo += EMPTY_STEP)
+      yield { events: [], through: Math.min(to, lo + EMPTY_STEP - 1) };
     return;
   }
   let start = from;

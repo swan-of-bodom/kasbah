@@ -7,6 +7,9 @@ import { extras, fire, handle } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
 import type { Watched } from "../sources.ts";
 
+/** Poll interval while the socket delivers heads: polling then only catches a head the socket missed. */
+const SOCKET_POLL_MS = 15_000;
+
 /**
  * Follows the head: a commit per block, with its undo journal, until the signal aborts. A run with an end (`to`)
  * instead marks itself done, once indexed through it.
@@ -50,7 +53,7 @@ export async function live(run: Run): Promise<void> {
     wait:
       heads === undefined
         ? undefined
-        : (s) => heads.wait(heads.healthy ? Math.max(pollMs, 15_000) : pollMs, s),
+        : (s) => heads.wait(heads.healthy ? Math.max(pollMs, SOCKET_POLL_MS) : pollMs, s),
     prepare: async (from, to) => {
       children = await discover(run, from, to);
       await sources.checkClasses(from, to);
