@@ -4,7 +4,7 @@ import { rawSelector } from "../abi/selector.ts";
 import type { FunctionArgs, FunctionName, FunctionResult } from "../abi/types.ts";
 import type { EventCache } from "../db/cache.ts";
 import { type RpcClient, RpcError } from "../rpc/client.ts";
-import { type Felt, felt, unpadded } from "../types/felt.ts";
+import { canonical, type Felt, felt, unpadded } from "../types/felt.ts";
 
 export type ReadParameters<TAbi extends Abi, N extends FunctionName<TAbi>> = {
   abi: TAbi;
@@ -41,8 +41,6 @@ export type CallClientOptions = {
   /** In-memory results kept. Default 100k. */
   maxEntries?: number;
 };
-
-const canonical = (felt: string) => `0x${BigInt(felt).toString(16)}`;
 
 export class CallClient implements Client {
   /** The block being indexed: the default for reads, and the hash pins non-final reads. */

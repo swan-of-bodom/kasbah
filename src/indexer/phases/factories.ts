@@ -1,3 +1,4 @@
+import { secondsSince } from "../../utils/time.ts";
 import { type Child, children } from "../events.ts";
 import type { Run } from "../open.ts";
 
@@ -30,6 +31,6 @@ export async function factories(run: Run): Promise<void> {
     kind: "factories",
     children: watched.length,
     through,
-    seconds: (performance.now() - started) / 1000,
+    seconds: secondsSince(started),
   });
 }

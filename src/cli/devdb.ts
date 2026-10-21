@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import pg from "pg";
 import { ConfigError } from "../config/errors.ts";
+import { sleep } from "../utils/sleep.ts";
 
 export const IMAGE = "postgres:17";
 
@@ -98,7 +99,7 @@ export async function devDatabase(
         throw new Error(
           `${container} not accepting connections after 60 s: ${(e as Error).message}`,
         );
-      await new Promise((r) => setTimeout(r, 250));
+      await sleep(250);
     } finally {
       await c.end().catch(() => {});
     }

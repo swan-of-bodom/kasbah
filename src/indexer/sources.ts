@@ -8,12 +8,12 @@ import {
 } from "../abi/history.ts";
 import { ConfigError } from "../config/errors.ts";
 import type { RpcClient } from "../rpc/client.ts";
+import { canonical } from "../types/felt.ts";
+import { chunks } from "../utils/chunks.ts";
 import type { Note } from "./status.ts";
 
 /** What `Sources` reports: class replacements and skipped ABI events. */
 export type SourceNote = Extract<Note, { kind: "class" | "skipped" }>;
-
-export const canonical = (address: string) => `0x${BigInt(address).toString(16)}`;
 
 /** One address being indexed: a configured contract, or a child its factory created. */
 export type Watched = {
@@ -340,15 +340,15 @@ export class Sources {
     }
     const start = Math.min(...due.map((w) => w.checked + 1), from);
     const blocks = Array.from({ length: to - start + 1 }, (_, i) => start + i);
-    for (let i = 0; i < blocks.length; i += 100) {
+    for (const part of chunks(blocks, 100)) {
       const updates = await this.#rpc.batch<StateUpdate[]>(
-        blocks.slice(i, i + 100).map((n) => ({
+        part.map((n) => ({
           method: "starknet_getStateUpdate",
           params: { block_id: { block_number: n } },
         })),
       );
       for (const [j, u] of updates.entries()) {
-        const n = blocks[i + j]!;
+        const n = part[j]!;
         for (const r of u.state_diff.replaced_classes) {
           const w = this.byAddress.get(canonical(r.contract_address));
           if (w === undefined || n <= w.checked) continue;

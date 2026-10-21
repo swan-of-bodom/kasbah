@@ -2,6 +2,7 @@ import { randomBytes } from "node:crypto";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import pg from "pg";
 import { quote, type TableInfo } from "../db/table.ts";
+import { errorCode } from "../utils/errors.ts";
 
 export type ReaderOptions = {
   /** Connection the indexer writes with; used once to set up the reader role. */
@@ -27,7 +28,7 @@ export class QueryError extends Error {
 /** Names Postgres gives errors a reader can cause; everything else is ours (500). */
 const CLIENT_ERRORS = new Set(["42", "22", "0A", "21", "25", "54", "57014"]);
 const clientError = (e: unknown) => {
-  const code = (e as { code?: string }).code;
+  const code = errorCode(e);
   return code !== undefined && (CLIENT_ERRORS.has(code) || CLIENT_ERRORS.has(code.slice(0, 2)));
 };
 
@@ -39,8 +40,7 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
     const inner = asQueryError(e.cause, timeoutMs);
     return inner instanceof QueryError ? inner : e;
   }
-  if ((e as { code?: string }).code === "57014")
-    return new QueryError(`query cancelled after ${timeoutMs} ms`);
+  if (errorCode(e) === "57014") return new QueryError(`query cancelled after ${timeoutMs} ms`);
   if (clientError(e)) return new QueryError((e as Error).message);
   return e;
 }

@@ -2,9 +2,8 @@ import type { IndexedBlock } from "../config/app.ts";
 import { type EmittedEvent, getHeaders } from "../rpc/methods.ts";
 import { type Extras, fetchExtras } from "../sync/extras.ts";
 import { type Block, blockOf } from "../types/block.ts";
-import { felt } from "../types/felt.ts";
+import { canonical, felt } from "../types/felt.ts";
 import type { Run } from "./open.ts";
-import { canonical } from "./sources.ts";
 
 /** What a batch's handlers need besides its events. */
 export type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Block> };

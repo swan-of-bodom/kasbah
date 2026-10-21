@@ -1,4 +1,5 @@
 import type { Batch } from "../../sync/fetch.ts";
+import { secondsSince } from "../../utils/time.ts";
 import { events } from "../events.ts";
 import { blockHeaders, fire, handle, type Prefetched, prefetch } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
@@ -47,7 +48,7 @@ export async function backfill(run: Run): Promise<void> {
   status.note({
     kind: "backfill",
     handled: status.handled - handledBefore,
-    seconds: (performance.now() - started) / 1000,
+    seconds: secondsSince(started),
     cache: c && { ...c },
     reads: calls.calls,
     cachedReads: calls.cached,

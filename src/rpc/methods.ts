@@ -1,3 +1,4 @@
+import { chunks } from "../utils/chunks.ts";
 import type { RpcClient } from "./client.ts";
 
 export type BlockId =
@@ -70,14 +71,14 @@ export async function getHeaders(
   numbers: number[],
   batchSize: number,
 ): Promise<BlockHeader[]> {
-  const requests: Promise<(BlockHeader & { transactions?: unknown; status?: string })[]>[] = [];
-  for (let i = 0; i < numbers.length; i += batchSize) {
-    const calls = numbers.slice(i, i + batchSize).map((n) => ({
-      method: "starknet_getBlockWithTxHashes",
-      params: { block_id: { block_number: n } },
-    }));
-    requests.push(rpc.batch(calls));
-  }
+  const requests = [...chunks(numbers, batchSize)].map((part) =>
+    rpc.batch<(BlockHeader & { transactions?: unknown; status?: string })[]>(
+      part.map((n) => ({
+        method: "starknet_getBlockWithTxHashes",
+        params: { block_id: { block_number: n } },
+      })),
+    ),
+  );
   return (await Promise.all(requests))
     .flat()
     .map(({ transactions: _, status: __, ...header }) => header);

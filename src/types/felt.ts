@@ -11,3 +11,6 @@ export function felt(hex: string): Felt {
 
 /** The node's form of a felt: no leading zeros, as the spec's `FELT` pattern requires in requests. */
 export const unpadded = (hex: string): Felt => `0x${hex.slice(2).replace(/^0+(?=.)/, "")}` as Felt;
+
+/** An address or felt as a key: lowercase, no leading zeros, whatever form it came in (config, node, ABI). */
+export const canonical = (hex: string): string => `0x${BigInt(hex).toString(16)}`;

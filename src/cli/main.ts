@@ -3,6 +3,7 @@
 // The app module's default export is the value `kasbah(config)` returned. Without an app file, the project's
 // kasbah.config.ts, then its src/index.ts (handlers) and src/api/index.ts (routes), which import it.
 import { inspect, parseArgs } from "node:util";
+import { errorCode } from "../utils/errors.ts";
 import { cache } from "./commands/cache.ts";
 import { clean } from "./commands/clean.ts";
 import { dev } from "./commands/dev.ts";
@@ -43,7 +44,7 @@ process.on("warning", (w) => {
 try {
   process.loadEnvFile(".env");
 } catch (e) {
-  if ((e as { code?: string }).code !== "ENOENT") throw e;
+  if (errorCode(e) !== "ENOENT") throw e;
 }
 
 const { positionals, values } = parseArgs({

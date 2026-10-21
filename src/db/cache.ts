@@ -7,6 +7,7 @@ import type { RawExtras } from "../sync/extras.ts";
 import type { Batch } from "../sync/fetch.ts";
 import { type Block, blockOf } from "../types/block.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
+import { chunks } from "../utils/chunks.ts";
 import { quote } from "./table.ts";
 
 const hexBytes = (felt: string): Buffer => {
@@ -357,8 +358,7 @@ export class EventCache {
     this.#transactions = [];
     this.#pendingBytes = 0;
     // In chunks: one statement's array parameters are built as one string.
-    for (let i = 0; i < all.length; i += 1_000) {
-      const t = all.slice(i, i + 1_000);
+    for (const t of chunks(all, 1_000)) {
       await tx.query(
         `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
          ON CONFLICT (hash) DO UPDATE SET transaction = coalesce(EXCLUDED.transaction, transactions.transaction), receipt = coalesce(EXCLUDED.receipt, transactions.receipt)`,

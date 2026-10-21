@@ -3,6 +3,8 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
 import { ConfigError } from "../config/errors.ts";
+import { chunks } from "../utils/chunks.ts";
+import { errorCode } from "../utils/errors.ts";
 import { copyRows } from "./copy.ts";
 import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
@@ -234,7 +236,7 @@ export class Store {
         try {
           await copyRows(client, s.info, table, inserts);
         } catch (e) {
-          if ((e as { code?: string }).code === "23505")
+          if (errorCode(e) === "23505")
             throw new ConfigError(
               `${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`,
               { cause: e },
@@ -287,7 +289,7 @@ export class Store {
     try {
       for (const statement of primaryKeySql(s.info)) await query(statement);
     } catch (e) {
-      if ((e as { code?: string }).code === "23505") {
+      if (errorCode(e) === "23505") {
         const detail = (e as { detail?: string }).detail ?? "duplicate key";
         throw new ConfigError(
           `${s.info.name}: a handler inserted a key twice (${detail}); fix the handler and run with reset`,
@@ -380,9 +382,9 @@ export class Store {
 
   async #delete(client: PoolClient, info: TableInfo, rows: Row[]) {
     const cols = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
-    for (let i = 0; i < rows.length; i += 1000) {
+    for (const part of chunks(rows, 1000)) {
       const params: unknown[] = [];
-      const tuples = rows.slice(i, i + 1000).map((row) => {
+      const tuples = part.map((row) => {
         const placeholders = info.primaryKey.map((c) => {
           params.push(c.column.mapToDriverValue(row[c.key]));
           return `$${params.length}`;

@@ -1,4 +1,5 @@
 import { emitKeypressEvents } from "node:readline";
+import { errorCode } from "../../utils/errors.ts";
 import { fit } from "./dashboard.ts";
 
 type Key = { name?: string; ctrl?: boolean };
@@ -217,7 +218,7 @@ export class Prompt {
       );
       return v;
     } catch (e) {
-      const message = (e as Error).message || ((e as { code?: string }).code ?? String(e));
+      const message = (e as Error).message || (errorCode(e) ?? String(e));
       this.#out.write(`${tty ? "\r\x1b[K" : ""}${this.red("✗")} ${label}  ${this.red(message)}\n`);
       throw e;
     } finally {

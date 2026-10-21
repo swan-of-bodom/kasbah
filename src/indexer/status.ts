@@ -1,6 +1,7 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { RpcStats } from "../rpc/client.ts";
 import type { FetchGauges } from "../sync/fetch.ts";
+import { secondsSince } from "../utils/time.ts";
 
 export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done" | "failed";
 
@@ -268,7 +269,7 @@ export class Status {
       this.lastCommit = { ms: r.ms, tables: r.tables, cache: r.cache };
       const { first, to } = this.range;
       const handled = this.handled - this.#handledAtPhase;
-      const seconds = (performance.now() - this.phaseStarted) / 1000;
+      const seconds = secondsSince(this.phaseStarted);
       this.note({
         kind: "progress",
         phase: "backfill",

@@ -1,5 +1,7 @@
 import { promisify } from "node:util";
 import { zstdDecompress as zstdCallback } from "node:zlib";
+import { chunks } from "../utils/chunks.ts";
+import { sleep } from "../utils/sleep.ts";
 
 const zstdDecompress = promisify(zstdCallback);
 const utf8 = new TextDecoder();
@@ -52,8 +54,6 @@ type Response = {
   result?: unknown;
   error?: { code: number; message: string; data?: unknown };
 };
-
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 /** Errors worth retrying: transport failures, timeouts, throttling, node-side internal errors. */
 function retryable(status: number | undefined, code?: number): boolean {
@@ -127,9 +127,8 @@ export class RpcClient {
   async batch<T extends unknown[]>(calls: Call[]): Promise<T> {
     const size = Math.max(1, Math.floor(this.#rate));
     if (calls.length <= size) return this.#batch(calls) as Promise<T>;
-    const parts: Promise<unknown[]>[] = [];
-    for (let i = 0; i < calls.length; i += size) parts.push(this.#batch(calls.slice(i, i + size)));
-    return (await Promise.all(parts)).flat() as T;
+    const parts = await Promise.all([...chunks(calls, size)].map((c) => this.#batch(c)));
+    return parts.flat() as T;
   }
 
   async #batch(calls: Call[]): Promise<unknown[]> {

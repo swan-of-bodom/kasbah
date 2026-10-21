@@ -6,10 +6,10 @@ import type { Abi, AbiMember } from "../../abi/abi.ts";
 import { abiEvents } from "../../abi/events.ts";
 import { classHistory } from "../../abi/history.ts";
 import { ConfigError } from "../../config/errors.ts";
-import { canonical } from "../../indexer/sources.ts";
 import { RpcClient } from "../../rpc/client.ts";
 import { blockNumber } from "../../rpc/methods.ts";
 import { probe } from "../../rpc/probe.ts";
+import { canonical } from "../../types/felt.ts";
 import { Prompt } from "../ui/prompt.ts";
 
 /** What `kasbah init` asks for; every one can also be given as a flag. */

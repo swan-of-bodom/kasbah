@@ -1,6 +1,7 @@
 import { type RpcClient, RpcError } from "../rpc/client.ts";
 import { type BlockHeader, type EmittedEvent, getEvents, getHeaders } from "../rpc/methods.ts";
 import { type Block, blockOf } from "../types/block.ts";
+import { sleep } from "../utils/sleep.ts";
 
 export type BlockRef = { number: number; hash: string };
 
@@ -36,18 +37,6 @@ export type FollowOptions = {
 };
 
 const BLOCK_NOT_FOUND = 24;
-
-const sleep = (ms: number, signal: AbortSignal) =>
-  new Promise<void>((resolve) => {
-    if (signal.aborted) return resolve();
-    const t = setTimeout(done, ms);
-    function done() {
-      clearTimeout(t);
-      signal.removeEventListener("abort", done);
-      resolve();
-    }
-    signal.addEventListener("abort", done);
-  });
 
 /** A node behind a load balancer that hasn't seen a block yet: try again next tick. */
 const lagging = (e: unknown) => e instanceof RpcError && e.code === BLOCK_NOT_FOUND;

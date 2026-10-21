@@ -1,4 +1,5 @@
 import { transaction } from "../../db/transaction.ts";
+import { secondsSince } from "../../utils/time.ts";
 import type { Run } from "../open.ts";
 
 /** Primary keys and indexes, a transaction per table in parallel: each table is locked only while its own are built. */
@@ -17,7 +18,7 @@ export async function keys(run: Run): Promise<void> {
       }),
     ),
   );
-  const seconds = (performance.now() - started) / 1000;
+  const seconds = secondsSince(started);
   const keys = built.filter(Boolean).length;
   if (keys > 0 || seconds >= 1) status.note({ kind: "keys", keys, indexes: count, seconds });
 }

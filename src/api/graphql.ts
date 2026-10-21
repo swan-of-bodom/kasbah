@@ -28,6 +28,7 @@ import {
 import type pg from "pg";
 import { ConfigError } from "../config/errors.ts";
 import { quote, type TableInfo } from "../db/table.ts";
+import { chunks } from "../utils/chunks.ts";
 import { asQueryError, QueryError } from "./reader.ts";
 
 export type GraphqlContext = {
@@ -74,8 +75,8 @@ function createLoader(
     try {
       const keys = [...batch.values()].map((b) => b.key);
       const found = new Map<string, unknown>();
-      for (let i = 0; i < keys.length; i += 1_000)
-        for (const [k, v] of await fetch(keys.slice(i, i + 1_000))) found.set(k, v);
+      for (const part of chunks(keys, 1_000))
+        for (const [k, v] of await fetch(part)) found.set(k, v);
       for (const [k, b] of batch)
         for (const r of b.resolve) r(found.has(k) ? found.get(k) : missing());
     } catch (e) {

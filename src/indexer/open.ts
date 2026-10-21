@@ -16,19 +16,14 @@ import { RpcClient } from "../rpc/client.ts";
 import { blockNumber } from "../rpc/methods.ts";
 import { type Endpoint, probe } from "../rpc/probe.ts";
 import type { BlockRef } from "../sync/live.ts";
+import { canonical } from "../types/felt.ts";
 import { CallClient, type Client } from "./client.ts";
 import { Position } from "./commit.ts";
 import type { Child } from "./events.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
-import {
-  canonical,
-  type FactorySource,
-  factoryReader,
-  Sources,
-  upgradeEventsOf,
-} from "./sources.ts";
+import { type FactorySource, factoryReader, Sources, upgradeEventsOf } from "./sources.ts";
 import type { Status } from "./status.ts";
 
 export const DEFAULT_SCHEMA = "kasbah";

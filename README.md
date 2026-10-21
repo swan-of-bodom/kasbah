@@ -19,6 +19,7 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
   live), the one way it writes (`commit.ts`), fetching events and factory children (`events.ts`), running handlers
   (`handle.ts`); watched addresses, their classes and decoders (`sources.ts`); `context.client`, reads pinned to the block being indexed (`client.ts`); what a
   run reports (`status.ts`: state to read, notices to subscribe to).
+- `src/utils/`: small helpers used across the folders (`sleep`, `chunks`, `errorCode`, `secondsSince`).
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window, and the
   raw-event, header, transaction and call cache (`cache.ts`).
 - `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).

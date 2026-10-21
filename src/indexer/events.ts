@@ -1,6 +1,6 @@
 import { type Batch, eventStream, type FetchGauges } from "../sync/fetch.ts";
+import { canonical } from "../types/felt.ts";
 import type { Run } from "./open.ts";
-import { canonical } from "./sources.ts";
 
 /** A child as its factory's creation event says: `address` (canonical), created by `contract`'s factory in `block`. */
 export type Child = { address: string; contract: string; block: number };
