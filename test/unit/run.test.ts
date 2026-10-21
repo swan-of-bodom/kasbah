@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { Config } from "../../src/config/app.ts";
+import { resolveConfig } from "../../src/config/resolve.ts";
 import { moves } from "../../src/indexer/commit.ts";
 import { planOf } from "../../src/indexer/plan.ts";
 import { upgradeEventsOf } from "../../src/indexer/sources.ts";
@@ -20,7 +21,7 @@ const config = (reorgWindow?: number): Config => ({
 });
 
 test("planOf: live backfills to the reorg window and reads classes to the tip; a `to` inside the window stops at its edge", () => {
-  expect(planOf(config(4), undefined, 39)).toEqual({
+  expect(planOf(resolveConfig(config(4)), undefined, 39)).toEqual({
     live: true,
     window: 4,
     backfillTo: 35,
@@ -28,7 +29,7 @@ test("planOf: live backfills to the reorg window and reads classes to the tip; a
     start: 7,
     clamped: false,
   });
-  expect(planOf(config(4), 39, 39)).toEqual({
+  expect(planOf(resolveConfig(config(4)), 39, 39)).toEqual({
     live: false,
     window: 4,
     backfillTo: 35,
@@ -36,8 +37,15 @@ test("planOf: live backfills to the reorg window and reads classes to the tip; a
     start: 7,
     clamped: true,
   });
-  expect(planOf(config(4), 20, 39)).toMatchObject({ backfillTo: 20, classTo: 20, clamped: false });
-  expect(planOf(config(), undefined, 1000)).toMatchObject({ window: 64, backfillTo: 936 });
+  expect(planOf(resolveConfig(config(4)), 20, 39)).toMatchObject({
+    backfillTo: 20,
+    classTo: 20,
+    clamped: false,
+  });
+  expect(planOf(resolveConfig(config()), undefined, 1000)).toMatchObject({
+    window: 64,
+    backfillTo: 936,
+  });
 });
 
 test("moves: what each commit writes to the meta table and then to memory", () => {

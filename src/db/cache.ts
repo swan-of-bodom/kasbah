@@ -2,6 +2,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type pg from "pg";
 import { from as copyFrom } from "pg-copy-streams";
+import { DEFAULTS } from "../config/resolve.ts";
 import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
 import type { Batch } from "../sync/fetch.ts";
@@ -108,7 +109,7 @@ export class EventCache {
   ): Promise<EventCache> {
     const schema = quote(`kasbah_cache_${chainId.toLowerCase()}`);
     for (const sql of SCHEMA_SQL(schema)) await pool.query(sql);
-    const cache = new EventCache(pool, schema, o.maxCalls ?? 1_000_000);
+    const cache = new EventCache(pool, schema, o.maxCalls ?? DEFAULTS.maxCalls);
     cache.#callRows = Number(
       (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${schema}.calls`)).rows[0]!.n,
     );

@@ -42,7 +42,7 @@ export async function* events(
     from: start,
     to,
     chunkSize: endpoint.maxChunk,
-    concurrency: config.concurrency ?? 32,
+    concurrency: config.concurrency,
     gauges,
   })) {
     cache?.add(batch.events);

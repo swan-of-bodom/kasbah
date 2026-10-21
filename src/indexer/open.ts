@@ -6,8 +6,9 @@ import pg from "pg";
 import { classHistory } from "../abi/history.ts";
 import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
-import type { BlockConfig, Config, RunOptions } from "../config/app.ts";
+import type { BlockConfig, RunOptions } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
+import type { Resolved } from "../config/resolve.ts";
 import { EventCache } from "../db/cache.ts";
 import { type Db, Store } from "../db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "../db/table.ts";
@@ -26,8 +27,6 @@ import type { AnyHandler } from "./run.ts";
 import { type FactorySource, factoryReader, Sources, upgradeEventsOf } from "./sources.ts";
 import type { Status } from "./status.ts";
 
-export const DEFAULT_SCHEMA = "kasbah";
-
 /** How the API is shown: listening on 127.0.0.1 unless told otherwise, shown as localhost, the same address. */
 export const apiUrl = (api: { host?: string }, port: number) =>
   `http://${api.host === undefined || api.host === "127.0.0.1" ? "localhost" : api.host}:${port}`;
@@ -37,7 +36,7 @@ export type BlockSource = BlockConfig & { name: string };
 
 /** What `open` builds and every phase reads. Only `position` (through its commit) and `final` ever change. */
 export type Run = {
-  config: Config;
+  config: Resolved;
   handlers: ReadonlyMap<string, AnyHandler>;
   status: Status;
   signal: AbortSignal;
@@ -80,7 +79,7 @@ type Stored = {
  * cache, reads every class, then undoes a reorg that happened while stopped and watches the stored children.
  */
 export async function open(
-  config: Config,
+  config: Resolved,
   handlers: ReadonlyMap<string, AnyHandler>,
   routes: readonly Route[],
   options: RunOptions,
@@ -88,7 +87,7 @@ export async function open(
   signal: AbortSignal,
   closers: (() => unknown)[],
 ): Promise<Run> {
-  const schema = config.schema ?? DEFAULT_SCHEMA;
+  const { schema } = config;
   status.schema = schema;
   const blockSources = validate(config, handlers);
   const handledOf = (name: string) =>
@@ -148,7 +147,7 @@ export async function open(
     complete: stored.checkpoint === undefined,
     unkeyed: stored.unkeyed,
   });
-  const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency ?? 32 });
+  const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency });
   const endpoint = await probe(rpc);
   const tip = await blockNumber(rpc);
   const plan = planOf(config, options.to, tip);
@@ -161,11 +160,7 @@ export async function open(
       window: plan.window,
     });
   const cache = config.cache
-    ? await EventCache.open(
-        pool,
-        await rpc.request<string>("starknet_chainId", []),
-        config.cache === true ? {} : config.cache,
-      )
+    ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", []), config.cache)
     : undefined;
   const sources = new Sources(rpc, contracts, (n) => status.note(n));
   const factories = await factoriesOf(config, rpc, sources, plan.classTo);
@@ -257,8 +252,8 @@ const META_SQL = [
 ];
 
 /** The block sources, after checking every source and handler name. */
-function validate(config: Config, handlers: ReadonlyMap<string, AnyHandler>): BlockSource[] {
-  const blockSources = Object.entries(config.blocks ?? {}).map(([name, b]) => ({ name, ...b }));
+function validate(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>): BlockSource[] {
+  const blockSources = Object.entries(config.blocks).map(([name, b]) => ({ name, ...b }));
   for (const b of blockSources) {
     if (config.contracts[b.name] !== undefined)
       throw new ConfigError(`${b.name} is both a contract and a block source`);
@@ -266,14 +261,14 @@ function validate(config: Config, handlers: ReadonlyMap<string, AnyHandler>): Bl
   }
   for (const h of handlers.keys()) {
     const [source] = h.split(":");
-    if (config.contracts[source!] === undefined && config.blocks?.[source!] === undefined)
+    if (config.contracts[source!] === undefined && config.blocks[source!] === undefined)
       throw new ConfigError(`handler ${h}: no contract or block source ${source}`);
   }
   return blockSources;
 }
 
 function buildIdOf(
-  config: Config,
+  config: Resolved,
   handlers: ReadonlyMap<string, AnyHandler>,
   blockSources: BlockSource[],
   tables: PgTable[],
@@ -355,7 +350,7 @@ function startup(
 }
 
 function factoriesOf(
-  config: Config,
+  config: Resolved,
   rpc: RpcClient,
   sources: Sources,
   classTo: number,

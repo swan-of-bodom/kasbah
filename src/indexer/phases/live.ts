@@ -28,14 +28,9 @@ export async function live(run: Run): Promise<void> {
   status.enter("live");
   status.live.block = last;
   status.note({ kind: "following", block: last });
-  const pollMs = config.pollMs ?? 2_000;
+  const { pollMs } = config;
   const heads =
-    config.ws === undefined
-      ? undefined
-      : new HeadSubscription(
-          config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws,
-          (n) => status.note(n),
-        );
+    config.ws === undefined ? undefined : new HeadSubscription(config.ws, (n) => status.note(n));
   if (heads !== undefined) {
     closers.push(() => heads.close());
     status.head = () => heads.last;

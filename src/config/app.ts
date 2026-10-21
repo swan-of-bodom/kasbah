@@ -8,12 +8,13 @@ import { Api } from "../api/server.ts";
 import type { Db } from "../db/store.ts";
 import { quote } from "../db/table.ts";
 import type { Client } from "../indexer/client.ts";
-import { apiUrl, DEFAULT_SCHEMA, run } from "../indexer/run.ts";
+import { apiUrl, run } from "../indexer/run.ts";
 import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
 import type { Block } from "../types/block.ts";
 import type { Receipt, Transaction } from "../types/transaction.ts";
 import { ConfigError } from "./errors.ts";
+import { resolveConfig } from "./resolve.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -156,6 +157,7 @@ type Checked<C extends Config> = {
 };
 
 export function kasbah<const C extends Config>(config: C & Checked<C>) {
+  const resolved = resolveConfig(config);
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
 
   const routes: Route[] = [];
@@ -178,7 +180,7 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     const api = await Api.start({
       ...config.api,
       database: config.database,
-      schema: config.schema ?? DEFAULT_SCHEMA,
+      schema: resolved.schema,
       tables: config.tables,
       routes,
     });
@@ -187,7 +189,7 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
 
   /** Drops the app's schema (its tables and progress), nothing else in the database. Returns the schema. */
   const drop = async (): Promise<string> => {
-    const schema = config.schema ?? DEFAULT_SCHEMA;
+    const { schema } = resolved;
     const pool = new pg.Pool({ connectionString: config.database, max: 1 });
     try {
       await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
@@ -201,7 +203,7 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     on,
     get: route("GET"),
     post: route("POST"),
-    run: (options: RunOptions = {}) => run(config, handlers, options, routes),
+    run: (options: RunOptions = {}) => run(resolved, handlers, options, routes),
     serve,
     drop,
   };

@@ -1,5 +1,6 @@
 import type { Route } from "../api/routes.ts";
-import type { Config, RunOptions } from "../config/app.ts";
+import type { RunOptions } from "../config/app.ts";
+import type { Resolved } from "../config/resolve.ts";
 import type { Db } from "../db/store.ts";
 import type { Client } from "./client.ts";
 import { open, type Run } from "./open.ts";
@@ -9,7 +10,7 @@ import { keys } from "./phases/keys.ts";
 import { live } from "./phases/live.ts";
 import { Status } from "./status.ts";
 
-export { apiUrl, DEFAULT_SCHEMA } from "./open.ts";
+export { apiUrl } from "./open.ts";
 
 export type AnyHandler = (arg: {
   event: never;
@@ -21,7 +22,7 @@ const PHASES: ((run: Run) => Promise<void>)[] = [factories, backfill, keys, live
 
 /** Runs the app: setup, then each phase. Reports only through `status`. */
 export async function run(
-  config: Config,
+  config: Resolved,
   handlers: ReadonlyMap<string, AnyHandler>,
   options: RunOptions = {},
   routes: readonly Route[] = [],

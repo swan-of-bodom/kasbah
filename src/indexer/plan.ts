@@ -1,4 +1,4 @@
-import type { Config } from "../config/app.ts";
+import type { Resolved } from "../config/resolve.ts";
 
 /** Where the run goes, fixed at startup from the config, `to` and the tip. */
 export type Plan = {
@@ -14,10 +14,10 @@ export type Plan = {
   clamped: boolean;
 };
 
-export function planOf(config: Config, to: number | undefined, tip: number): Plan {
-  const window = config.reorgWindow ?? 64;
+export function planOf(config: Resolved, to: number | undefined, tip: number): Plan {
+  const window = config.reorgWindow;
   const backfillTo = to === undefined ? tip - window : Math.min(to, tip - window);
-  const starts = [...Object.values(config.contracts), ...Object.values(config.blocks ?? {})].map(
+  const starts = [...Object.values(config.contracts), ...Object.values(config.blocks)].map(
     (c) => c.startBlock,
   );
   return {
