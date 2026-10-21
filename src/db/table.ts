@@ -1,5 +1,6 @@
 import { getTableColumns } from "drizzle-orm";
 import { getTableConfig, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
+import { ConfigError } from "../config/errors.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -28,7 +29,7 @@ export function tableInfo(table: PgTable): TableInfo {
   if (primaryKey.length === 0 && config.primaryKeys[0] !== undefined) {
     primaryKey = config.primaryKeys[0].columns.map((col) => byName.get(col.name)!);
   }
-  if (primaryKey.length === 0) throw new Error(`table ${config.name} needs a primary key`);
+  if (primaryKey.length === 0) throw new ConfigError(`table ${config.name} needs a primary key`);
   const keys = primaryKey.map((c) => c.key);
   const keyOf =
     keys.length === 1
@@ -97,7 +98,7 @@ export function primaryKeySql(info: TableInfo): string[] {
 export function indexSql(info: TableInfo): string[] {
   const config = getTableConfig(info.table);
   const refuse = (what: string) => {
-    throw new Error(`${info.name}: ${what} are not supported`);
+    throw new ConfigError(`${info.name}: ${what} are not supported`);
   };
   if (config.foreignKeys.length > 0) refuse("foreign keys");
   if (config.checks.length > 0) refuse("check constraints");

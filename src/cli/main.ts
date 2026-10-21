@@ -2,7 +2,7 @@
 // kasbah init [dir] | start [app] | dev [app] | clean [app] | serve [app] | cache info | cache clear [--events] [--calls] [--chain <id>]
 // The app module's default export is the value `kasbah(config)` returned. Without an app file, the project's
 // kasbah.config.ts, then its src/index.ts (handlers) and src/api/index.ts (routes), which import it.
-import { parseArgs } from "node:util";
+import { inspect, parseArgs } from "node:util";
 import { cache } from "./commands/cache.ts";
 import { clean } from "./commands/clean.ts";
 import { dev } from "./commands/dev.ts";
@@ -97,6 +97,9 @@ try {
     process.exitCode = 2;
   }
 } catch (e) {
-  console.error(`[kasbah] ${(e as Error).stack ?? e}`);
+  // A mistake to fix: its message says what. Anything else in full, causes included (a handler's own stack).
+  console.error(
+    `[kasbah] ${(e as Error)?.name === "ConfigError" ? (e as Error).message : inspect(e)}`,
+  );
   process.exitCode = 1;
 }

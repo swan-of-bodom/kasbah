@@ -116,7 +116,7 @@ export type Notice = Note & { at: number; text: string };
 
 /** One commit, as `run` reports it. */
 export type CommitReport = {
-  kind: "children" | "batch" | "follow" | "block" | "revert";
+  kind: "children" | "batch" | "follow" | "block" | "revert" | "done";
   ms: number;
   /** Of `ms`: the app's tables, and the cache. */
   tables: number;

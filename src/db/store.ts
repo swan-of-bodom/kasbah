@@ -2,6 +2,7 @@ import { and, eq, type InferInsertModel, type InferSelectModel, sql } from "driz
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
 import type { PoolClient } from "pg";
+import { ConfigError } from "../config/errors.ts";
 import { copyRows } from "./copy.ts";
 import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
@@ -234,7 +235,7 @@ export class Store {
           await copyRows(client, s.info, table, inserts);
         } catch (e) {
           if ((e as { code?: string }).code === "23505")
-            throw new Error(
+            throw new ConfigError(
               `${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`,
               { cause: e },
             );
@@ -288,7 +289,7 @@ export class Store {
     } catch (e) {
       if ((e as { code?: string }).code === "23505") {
         const detail = (e as { detail?: string }).detail ?? "duplicate key";
-        throw new Error(
+        throw new ConfigError(
           `${s.info.name}: a handler inserted a key twice (${detail}); fix the handler and run with reset`,
           { cause: e },
         );

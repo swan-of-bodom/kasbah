@@ -10,6 +10,7 @@ import {
   specifiedRules,
   validate,
 } from "graphql";
+import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
 import { createGraphqlSchema, relationsOf } from "./graphql.ts";
 import { parseLimited } from "./limits.ts";
@@ -132,7 +133,7 @@ export class Api {
     const seen = new Set<string>();
     for (const r of o.routes ?? []) {
       if (seen.has(`${r.method} ${r.path}`))
-        throw new Error(`route ${r.method} ${r.path} defined twice`);
+        throw new ConfigError(`route ${r.method} ${r.path} defined twice`);
       seen.add(`${r.method} ${r.path}`);
       matcher(r.path);
     }

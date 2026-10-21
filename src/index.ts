@@ -27,6 +27,7 @@ export {
   kasbah,
   type RunOptions,
 } from "./config/app.ts";
+export { ConfigError } from "./config/errors.ts";
 export { bignum, hex } from "./config/schema.ts";
 export type { Db } from "./db/store.ts";
 export type { CallParameters, Client, ReadParameters } from "./indexer/client.ts";

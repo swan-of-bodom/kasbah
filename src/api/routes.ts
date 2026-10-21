@@ -2,6 +2,7 @@ import type { IncomingMessage } from "node:http";
 import type { Relations } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
+import { ConfigError } from "../config/errors.ts";
 import { QueryError } from "./reader.ts";
 
 export type Tables = Record<string, PgTable | Relations>;
@@ -33,8 +34,8 @@ export const BUILT_IN = ["/", "/sql", "/graphql", "/live", "/status", "/health",
 
 /** Compiles `path` (`/pools/:key`) into a matcher returning its params, or `undefined` when it doesn't match. */
 export function matcher(path: string): (pathname: string) => Record<string, string> | undefined {
-  if (!path.startsWith("/")) throw new Error(`route ${path}: a path starts with /`);
-  if (BUILT_IN.includes(path)) throw new Error(`route ${path}: kasbah serves it`);
+  if (!path.startsWith("/")) throw new ConfigError(`route ${path}: a path starts with /`);
+  if (BUILT_IN.includes(path)) throw new ConfigError(`route ${path}: kasbah serves it`);
   const parts = path.split("/").slice(1);
   return (pathname) => {
     const got = pathname.split("/").slice(1);

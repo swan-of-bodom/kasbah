@@ -6,6 +6,7 @@ import {
   createHistoricalDecoder,
   type Decode,
 } from "../abi/history.ts";
+import { ConfigError } from "../config/errors.ts";
 import type { RpcClient } from "../rpc/client.ts";
 import type { Note } from "./status.ts";
 
@@ -54,7 +55,7 @@ export function upgradeEventsOf(
   if (configured !== undefined) {
     for (const n of configured)
       if (!names.includes(n))
-        throw new Error(`${contract}: upgradeEvents: the ABI has no event ${n}`);
+        throw new ConfigError(`${contract}: upgradeEvents: the ABI has no event ${n}`);
     return new Set(configured);
   }
   const found = names.filter((n) => UPGRADE_EVENTS.some((u) => n === u || n.endsWith(`.${u}`)));
@@ -212,7 +213,8 @@ export class Sources {
       Math.max(from, to),
       child ? Number.MAX_SAFE_INTEGER : undefined,
     );
-    if (spans.length === 0) throw new Error(`${contract}: nothing deployed at ${a} by block ${to}`);
+    if (spans.length === 0)
+      throw new ConfigError(`${contract}: nothing deployed at ${a} by block ${to}`);
     const w: Watched = {
       contract,
       address: a,
@@ -385,7 +387,7 @@ export function factoryReader(f: FactorySource, spans: (ClassSpan & { abi: Abi }
   for (const abi of [...spans.map((s) => s.abi), f.abi])
     for (const e of abiEvents(abi)) if (e.name === f.event) selectors.add(e.selectors[0]!);
   if (selectors.size === 0)
-    throw new Error(`${f.contract}: the factory ABI has no event ${f.event}`);
+    throw new ConfigError(`${f.contract}: the factory ABI has no event ${f.event}`);
   return {
     selectors: [...selectors],
     child(e: { block_number?: number; keys: string[]; data: string[] }): string | undefined {
@@ -395,7 +397,7 @@ export function factoryReader(f: FactorySource, spans: (ClassSpan & { abi: Abi }
       // A ContractAddress decodes to hex, a Cairo 0 `felt` to a bigint.
       if (typeof value === "bigint") return `0x${value.toString(16)}`;
       if (typeof value !== "string")
-        throw new Error(`${f.contract}: ${f.event}.${f.parameter} is not an address`);
+        throw new ConfigError(`${f.contract}: ${f.event}.${f.parameter} is not an address`);
       return canonical(value);
     },
   };

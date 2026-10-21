@@ -363,6 +363,9 @@ test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", 
     expect(progress).toHaveLength(1);
     expect(progress[0]).toMatch(/^block 150\/150 \(100\.0%\)/);
     expect([status.phase, status.checkpoint]).toEqual(["done", 150]);
+    // Stored too: `serve` over the finished run answers /ready.
+    const meta = await listener.query(`SELECT value FROM ${s}._kasbah_meta WHERE key = 'phase'`);
+    expect(meta.rows[0].value).toBe("done");
   } finally {
     await listener.end();
     const p = new pg.Pool({ connectionString: url, max: 1 });

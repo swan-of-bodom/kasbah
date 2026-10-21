@@ -7,6 +7,7 @@ import { classHistory } from "../abi/history.ts";
 import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
 import type { BlockConfig, Config, RunOptions } from "../config/app.ts";
+import { ConfigError } from "../config/errors.ts";
 import { EventCache } from "../db/cache.ts";
 import { type Db, Store } from "../db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "../db/table.ts";
@@ -265,13 +266,13 @@ function validate(config: Config, handlers: ReadonlyMap<string, AnyHandler>): Bl
   const blockSources = Object.entries(config.blocks ?? {}).map(([name, b]) => ({ name, ...b }));
   for (const b of blockSources) {
     if (config.contracts[b.name] !== undefined)
-      throw new Error(`${b.name} is both a contract and a block source`);
-    if (!(b.interval >= 1)) throw new Error(`${b.name}: interval must be at least 1`);
+      throw new ConfigError(`${b.name} is both a contract and a block source`);
+    if (!(b.interval >= 1)) throw new ConfigError(`${b.name}: interval must be at least 1`);
   }
   for (const h of handlers.keys()) {
     const [source] = h.split(":");
     if (config.contracts[source!] === undefined && config.blocks?.[source!] === undefined)
-      throw new Error(`handler ${h}: no contract or block source ${source}`);
+      throw new ConfigError(`handler ${h}: no contract or block source ${source}`);
   }
   return blockSources;
 }
@@ -322,7 +323,7 @@ function startup(
     );
     const build = meta.get("build");
     if (build !== undefined && build !== buildId)
-      throw new Error(
+      throw new ConfigError(
         `schema "${schema}" holds another build of this app (config, tables or handlers changed); run with reset`,
       );
     // Keys and indexes come once the backfill is done, or when the store first needs a key.
@@ -379,7 +380,9 @@ function factoriesOf(
           };
           const spans = await classHistory(rpc, f.address, f.startBlock, classTo);
           if (spans.length === 0)
-            throw new Error(`${name}: factory ${f.address} is not deployed by block ${classTo}`);
+            throw new ConfigError(
+              `${name}: factory ${f.address} is not deployed by block ${classTo}`,
+            );
           return {
             ...f,
             reader: factoryReader(

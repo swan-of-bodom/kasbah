@@ -271,8 +271,8 @@ is always rolled back before the next confirmed block. To decide when we get the
 - One run (`src/indexer/run.ts`): setup (`open.ts`), then the phases factories → backfill → keys → live
   (`phases/`), each starting from the committed position (checkpoint, factory watermark, the window's hashes) and a
   no-op when it has nothing left, so a restart resumes through the same code. The position is a `Position`
-  (`commit.ts`) whose fields only its own `commit` sets. Every write after startup is one of five commits (pre-pass
-  children, backfill batch, entering live, live block, revert), all through that method: `moves()` says what each moves in
+  (`commit.ts`) whose fields only its own `commit` sets. Every write after startup is one of six commits (pre-pass
+  children, backfill batch, entering live, live block, revert, done: a run with `to` indexed through it), all through that method: `moves()` says what each moves in
   `_kasbah_meta` (checkpoint and `pg_notify`, `discovered:*`, `phase`), and memory takes the same values only
   after COMMIT. Pre-pass children are resolved (classes read) before their transaction and watched after it.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
@@ -516,7 +516,7 @@ Target size: under 10k lines for v1.
      `query`, `body` and the request; what it returns is sent as JSON, a `Response` as is, an `HttpError` as its
      status. Ponder's equivalent is a user Hono app; this keeps the API dependency-free.
    - `GET /health`: 200 while the process and its database answer. `GET /ready`: 200 once the phase is live (or
-     done), else 503 with the phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
+     done: a run with `to` that indexed through it, keys built), else 503 with the phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 

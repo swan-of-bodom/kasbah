@@ -1,4 +1,5 @@
 import pg from "pg";
+import { ConfigError } from "../../config/errors.ts";
 import { EventCache } from "../../db/cache.ts";
 
 export async function cache(
@@ -6,11 +7,11 @@ export async function cache(
   o: { database?: string; events?: boolean; calls?: boolean; chain?: string },
 ) {
   if (command !== "info" && command !== "clear")
-    throw new Error(
+    throw new ConfigError(
       "usage: kasbah cache info [--chain <id>] | cache clear [--events] [--calls] [--chain <id>]",
     );
   const database = o.database ?? process.env.DATABASE_URL;
-  if (database === undefined) throw new Error("set DATABASE_URL or pass --database");
+  if (database === undefined) throw new ConfigError("set DATABASE_URL or pass --database");
   const pool = new pg.Pool({ connectionString: database, max: 1 });
   try {
     if (command === "info") {

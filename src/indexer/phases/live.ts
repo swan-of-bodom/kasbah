@@ -7,9 +7,16 @@ import { extras, fire, handle } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
 import type { Watched } from "../sources.ts";
 
-/** Follows the head: a commit per block, with its undo journal, until the signal aborts. */
+/**
+ * Follows the head: a commit per block, with its undo journal, until the signal aborts. A run with an end (`to`)
+ * instead marks itself done, once indexed through it.
+ */
 export async function live(run: Run): Promise<void> {
-  if (!run.plan.live) return;
+  if (!run.plan.live) {
+    if (run.position.checkpoint === run.plan.backfillTo)
+      await run.position.commit({ kind: "done" });
+    return;
+  }
   const { config, rpc, endpoint, sources, status, store, signal, closers, position } = run;
   const last = position.next - 1;
   const head = {

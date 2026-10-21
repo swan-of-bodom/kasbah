@@ -26,6 +26,7 @@ import {
   type ValueNode,
 } from "graphql";
 import type pg from "pg";
+import { ConfigError } from "../config/errors.ts";
 import { quote, type TableInfo } from "../db/table.ts";
 import { asQueryError, QueryError } from "./reader.ts";
 
@@ -122,7 +123,7 @@ export function relationsOf(
   const keyOfTable = new Map(Object.entries(tables).map(([k, t]) => [t.table, k]));
   const columnKey = (key: string, column: unknown) => {
     const c = tables[key]!.columns.find((x) => x.column === column);
-    if (c === undefined) throw new Error(`relation on ${key}: column not in the table`);
+    if (c === undefined) throw new ConfigError(`relation on ${key}: column not in the table`);
     return c.key;
   };
   const out: RelationInfo[] = [];
@@ -131,7 +132,7 @@ export function relationsOf(
       const from = keyOfTable.get(relation.sourceTable as never);
       const to = keyOfTable.get(relation.referencedTable as never);
       if (from === undefined || to === undefined)
-        throw new Error(`relation ${name}: both tables must be in the schema`);
+        throw new ConfigError(`relation ${name}: both tables must be in the schema`);
       const n = normalizeRelation(config, tableNamesMap, relation);
       if (!(relation instanceof One) && !(relation instanceof Many)) continue;
       out.push({
@@ -327,7 +328,7 @@ export function createGraphqlSchema(
   for (const [key, info] of Object.entries(tables)) {
     const { one, many } = fieldNames(key);
     if (query[one] !== undefined || query[many] !== undefined)
-      throw new Error(`GraphQL field names for table ${key} collide`);
+      throw new ConfigError(`GraphQL field names for table ${key} collide`);
     const typeName = pascal(one);
     const scalars = new Map(info.columns.map((c) => [c.key, scalarOf(c.column.getSQLType())]));
     const notNull = (c: TableInfo["columns"][number]) =>
@@ -519,7 +520,7 @@ export function createGraphqlSchema(
     const from = built.get(r.from)!;
     const to = built.get(r.to)!;
     if (from.fields[r.name] !== undefined)
-      throw new Error(
+      throw new ConfigError(
         `relation ${r.from}.${r.name} has the name of a column: rename one (e.g. column ${r.name}Id)`,
       );
     if (r.kind === "one") {

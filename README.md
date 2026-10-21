@@ -105,7 +105,8 @@ app.get("/pools/:key", async ({ db, params, query }) => {
 ```
 
 The API limits GraphQL queries to 1,000 tokens, depth 20 and 30 aliases; `GET /health` answers while it and its
-database are up, `GET /ready` once it follows the head.
+database are up, `GET /ready` once it follows the head (or, with
+`--to`, once it's done).
 
 The build id covers config, tables, handler code and a hash of the code files in the app's directory (not
 `package.json`: reinstalling a dependency doesn't re-index).

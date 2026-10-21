@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { RunOptions } from "../config/app.ts";
+import { ConfigError } from "../config/errors.ts";
 
 export type App = {
   run: (o?: RunOptions) => Promise<void>;
@@ -18,7 +19,7 @@ export const PROJECT_FILES = ["src/index.ts", "src/api/index.ts"];
 export function target(arg: string | undefined): string {
   if (arg !== undefined) return arg;
   if (!existsSync(CONFIG))
-    throw new Error(`no ${CONFIG} here: run it in a project, or pass the app file`);
+    throw new ConfigError(`no ${CONFIG} here: run it in a project, or pass the app file`);
   return CONFIG;
 }
 
@@ -26,7 +27,9 @@ export async function load(file: string): Promise<App> {
   const mod = (await import(pathToFileURL(resolve(file)).href)) as { default?: unknown };
   const app = mod.default as App | undefined;
   if (typeof app?.run !== "function")
-    throw new Error(`${file}: the default export must be the app (export default kasbah(config))`);
+    throw new ConfigError(
+      `${file}: the default export must be the app (export default kasbah(config))`,
+    );
   if (file.endsWith(CONFIG))
     for (const f of PROJECT_FILES.map((f) => join(dirname(resolve(file)), f)))
       if (existsSync(f)) await import(pathToFileURL(f).href);

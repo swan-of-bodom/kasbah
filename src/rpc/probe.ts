@@ -1,3 +1,4 @@
+import { ConfigError } from "../config/errors.ts";
 import { type RpcClient, RpcError } from "./client.ts";
 import { getEvents, specVersion } from "./methods.ts";
 
@@ -30,7 +31,7 @@ async function tryRequest<T>(
 export async function probe(rpc: RpcClient): Promise<Endpoint> {
   const spec = await specVersion(rpc);
   if (!spec.startsWith("0.10."))
-    throw new Error(`endpoint serves spec ${spec}, kasbah needs 0.10.x`);
+    throw new ConfigError(`endpoint serves spec ${spec}, kasbah needs 0.10.x`);
 
   const pathfinder = await tryRequest<string>(rpc, "pathfinder_version", []);
   const juno =
@@ -56,7 +57,7 @@ export async function probe(rpc: RpcClient): Promise<Endpoint> {
       if (!(e instanceof RpcError) || e.code !== PAGE_SIZE_TOO_BIG) throw e;
     }
   }
-  if (maxChunk === 0) throw new Error("endpoint rejects every chunk_size tried");
+  if (maxChunk === 0) throw new ConfigError("endpoint rejects every chunk_size tried");
 
   // Hosted Pathfinder (Alchemy, Cartridge) hides pathfinder_version; its defaults give it away.
   const inferred =

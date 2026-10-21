@@ -1,4 +1,5 @@
 import { dirname, resolve } from "node:path";
+import { ConfigError } from "../../config/errors.ts";
 import { removeDevDatabase } from "../devdb.ts";
 import { load } from "../project.ts";
 import { Prompt } from "../ui/prompt.ts";
@@ -17,7 +18,7 @@ export async function clean(file: string, yes: boolean | undefined) {
   const app = await load(file);
   if (!yes) {
     if (!process.stdin.isTTY)
-      throw new Error("clean drops the app's schema in DATABASE_URL: pass --yes to confirm");
+      throw new ConfigError("clean drops the app's schema in DATABASE_URL: pass --yes to confirm");
     const ok = await new Prompt().confirm(
       "Drop this app's schema in DATABASE_URL (its tables and progress)?",
       false,

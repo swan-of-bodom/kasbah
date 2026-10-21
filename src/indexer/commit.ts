@@ -18,13 +18,19 @@ export type Commit =
   /** Live: one block, with its undo journal, its hash, and the children created in it (already watched). */
   | { kind: "block"; block: LiveBlock; children: Watched[] }
   /** Undoes every block after `to`. */
-  | { kind: "revert"; to: BlockRef };
+  | { kind: "revert"; to: BlockRef }
+  /** A run with an end (`to`): indexed through it, keys and indexes built. */
+  | { kind: "done" };
 
 /**
  * What a commit moves: the transaction writes these to `_kasbah_meta` (a moved checkpoint also notifies the API),
  * and after COMMIT memory takes the same values. `watermark`: factory children are known through this block.
  */
-export type Moves = { checkpoint?: number; watermark?: number; phase?: "backfill" | "live" };
+export type Moves = {
+  checkpoint?: number;
+  watermark?: number;
+  phase?: "backfill" | "live" | "done";
+};
 
 export function moves(c: Commit, watermark: number): Moves {
   switch (c.kind) {
@@ -40,6 +46,8 @@ export function moves(c: Commit, watermark: number): Moves {
       return c.to.number < watermark
         ? { checkpoint: c.to.number, watermark: c.to.number }
         : { checkpoint: c.to.number };
+    case "done":
+      return { phase: "done" };
   }
 }
 

@@ -5,6 +5,7 @@ import pg from "pg";
 import type { Abi, AbiMember } from "../../abi/abi.ts";
 import { abiEvents } from "../../abi/events.ts";
 import { classHistory } from "../../abi/history.ts";
+import { ConfigError } from "../../config/errors.ts";
 import { canonical } from "../../indexer/sources.ts";
 import { RpcClient } from "../../rpc/client.ts";
 import { blockNumber } from "../../rpc/methods.ts";
@@ -310,7 +311,7 @@ export async function init(o: InitOptions): Promise<void> {
   const ui = new Prompt();
   const ask = process.stdin.isTTY === true && o.yes !== true;
   const need = (flag: string) => {
-    throw new Error(`--${flag} is required without a terminal (or with --yes)`);
+    throw new ConfigError(`--${flag} is required without a terminal (or with --yes)`);
   };
   ui.line(`${ui.bold("kasbah init")}  ${ui.dim("a new indexer for one Starknet contract")}`);
   ui.line();
@@ -318,7 +319,7 @@ export async function init(o: InitOptions): Promise<void> {
   const dir = o.dir ?? (ask ? await ui.text("Directory", { initial: "my-indexer" }) : "my-indexer");
   const target = resolve(dir);
   if (existsSync(target) && readdirSync(target).length > 0)
-    throw new Error(`${target} is not empty`);
+    throw new ConfigError(`${target} is not empty`);
 
   let rpc = o.rpc ?? (ask ? undefined : (process.env.KASBAH_RPC_URL ?? need("rpc")));
   let client: RpcClient;
@@ -368,7 +369,7 @@ export async function init(o: InitOptions): Promise<void> {
         (x) => `${abiEvents(x).length} events in its ABI`,
       );
       if (abiEvents(abi).length === 0)
-        throw new Error(
+        throw new ConfigError(
           "its class declares no events (a Cairo 0 proxy? give the implementation's address)",
         );
       break;
@@ -392,7 +393,8 @@ export async function init(o: InitOptions): Promise<void> {
   if (o.events !== undefined) {
     events = o.events.split(",").map((e) => e.trim());
     for (const e of events)
-      if (!all.includes(e)) throw new Error(`the ABI has no event ${e} (it has ${all.join(", ")})`);
+      if (!all.includes(e))
+        throw new ConfigError(`the ABI has no event ${e} (it has ${all.join(", ")})`);
   } else
     events = ask
       ? await ui.multi(

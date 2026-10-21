@@ -13,6 +13,7 @@ import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
 import type { Block } from "../types/block.ts";
 import type { Receipt, Transaction } from "../types/transaction.ts";
+import { ConfigError } from "./errors.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -160,20 +161,20 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
   const routes: Route[] = [];
 
   const on = <N extends HandlerName<C>>(name: N, handler: Handler<C, N>) => {
-    if (handlers.has(name)) throw new Error(`${name} already has a handler`);
+    if (handlers.has(name)) throw new ConfigError(`${name} already has a handler`);
     handlers.set(name, handler as never);
   };
 
   /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs `api` in the config. */
   const route = (method: Route["method"]) => (path: string, handler: RouteHandler<C["tables"]>) => {
     if (config.api === undefined)
-      throw new Error(`${method} ${path}: routes need \`api\` in the config`);
+      throw new ConfigError(`${method} ${path}: routes need \`api\` in the config`);
     routes.push({ method, path, handler: handler as never });
   };
 
   /** The API alone (`api` in the config), over what an indexer of this app stores: another process, or an earlier run. */
   const serve = async (): Promise<{ url: string; close: () => Promise<void> }> => {
-    if (config.api === undefined) throw new Error("serve needs `api` in the config");
+    if (config.api === undefined) throw new ConfigError("serve needs `api` in the config");
     const api = await Api.start({
       ...config.api,
       database: config.database,

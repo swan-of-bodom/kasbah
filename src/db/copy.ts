@@ -3,6 +3,7 @@ import { pipeline } from "node:stream/promises";
 import { is, SQL } from "drizzle-orm";
 import type { PoolClient } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
+import { ConfigError } from "../config/errors.ts";
 import { quote, type Row, type TableInfo } from "./table.ts";
 
 const escapeText = (s: string) =>
@@ -37,7 +38,7 @@ export function copyLine(info: TableInfo, row: Row): string {
       if (column.defaultFn !== undefined) v = column.defaultFn();
       else if (column.default !== undefined) {
         if (is(column.default, SQL))
-          throw new Error(`${info.name}.${key}: SQL defaults need a value from the handler`);
+          throw new ConfigError(`${info.name}.${key}: SQL defaults need a value from the handler`);
         v = column.default;
       }
     }

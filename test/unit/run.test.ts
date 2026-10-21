@@ -70,6 +70,7 @@ test("moves: what each commit writes to the meta table and then to memory", () =
   expect(moves({ kind: "revert", to: { number: 100, hash: "0x1" } }, 90)).toEqual({
     checkpoint: 100,
   });
+  expect(moves({ kind: "done" }, 90)).toEqual({ phase: "done" });
 });
 
 test("Status: commits move the gauges and note progress when due; a throwing listener doesn't stop the others", () => {

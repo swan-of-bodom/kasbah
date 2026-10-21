@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { basename, resolve } from "node:path";
 import pg from "pg";
+import { ConfigError } from "../config/errors.ts";
 
 export const IMAGE = "postgres:17";
 
@@ -42,7 +43,7 @@ export async function devDatabase(
 ): Promise<DevDatabase> {
   const runtime = findRuntime();
   if (runtime === undefined)
-    throw new Error(
+    throw new ConfigError(
       "no DATABASE_URL: set it in .env, or install Docker or Podman for a dev database",
     );
   const container = containerName(appDir);
@@ -113,7 +114,7 @@ export function removeDevDatabase(appDir: string): {
 } {
   const runtime = findRuntime();
   if (runtime === undefined)
-    throw new Error("no DATABASE_URL and no Docker or Podman: nothing to delete");
+    throw new ConfigError("no DATABASE_URL and no Docker or Podman: nothing to delete");
   const container = containerName(appDir);
   const had = run(runtime, ["inspect", container]).status === 0;
   const volume = run(runtime, ["volume", "inspect", container]).status === 0;
