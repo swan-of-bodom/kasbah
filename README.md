@@ -151,4 +151,5 @@ Cairo 0 contracts (a pair and an ERC20).
 ## License and versions
 
 Apache-2.0 (`LICENSE`). Versions follow semver; while at 0.x, a minor version (0.1 → 0.2) may break the config,
-the tables it keeps or the API, and a patch never does. The package stays `private` until the repo is public.
+the tables it keeps or the API, and a patch never does; `CHANGELOG.md` lists what changed. The package stays `private` until the repo is public.
+Contributors and agents: see `AGENTS.md`.
