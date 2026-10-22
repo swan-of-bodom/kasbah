@@ -9,6 +9,7 @@ import {
 import {
   GraphQLBoolean,
   GraphQLEnumType,
+  type GraphQLFieldConfig,
   type GraphQLFieldConfigMap,
   GraphQLFloat,
   type GraphQLInputFieldConfigMap,
@@ -45,8 +46,11 @@ const KEYS_PER_STATEMENT = 1_000;
 
 type Row = Record<string, unknown>;
 
+const budgetOf = (ctx: GraphqlContext) =>
+  (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
+
 async function rows(ctx: GraphqlContext, text: string, params: unknown[]): Promise<Row[]> {
-  const b = (ctx.budget ??= { statements: 0, started: performance.now(), loaders: new Map() });
+  const b = budgetOf(ctx);
   if (++b.statements > MAX_STATEMENTS)
     throw new QueryError(
       `query needs more than ${MAX_STATEMENTS} SQL statements: nest less or page smaller`,
@@ -241,8 +245,9 @@ const PageInfo = new GraphQLObjectType({
   },
 });
 
-/** Rows one list field returns at most (`limit`). */
+/** Rows one list field returns at most (`limit`), and when `limit` is left out. */
 const MAX_LIMIT = 1_000;
+const DEFAULT_LIMIT = 100;
 
 type Filter = Record<string, unknown> & { AND?: Filter[]; OR?: Filter[] };
 const OPERATORS: Record<string, string> = {
@@ -299,6 +304,11 @@ type ListArgs = {
   after?: string | null;
 };
 
+type ListArgDefs = Record<string, { type: GraphQLInputType; defaultValue?: unknown }>;
+
+/** One table's types and reads: what relations on other tables point at. */
+type Built = ReturnType<typeof tableType> & { reader: ReturnType<typeof tableReader> };
+
 /**
  * A read-only GraphQL schema over the app's tables. Per table: `pool(id: ...)` by primary key, and
  * `pools(where, orderBy, orderDirection, limit, after)` with keyset paging. Numbers past 32 bits are `BigInt`
@@ -310,153 +320,177 @@ export function createGraphqlSchema(
   relations: RelationInfo[] = [],
 ): GraphQLSchema {
   const query: GraphQLFieldConfigMap<unknown, GraphqlContext> = {};
-  const built = new Map<
-    string,
-    {
-      type: GraphQLObjectType;
-      page: GraphQLObjectType;
-      listArgs: Record<string, { type: GraphQLInputType; defaultValue?: unknown }>;
-      list: (ctx: GraphqlContext, args: ListArgs) => Promise<unknown>;
-      pagesFor: (
-        ctx: GraphqlContext,
-        args: ListArgs,
-        match: string[],
-        parents: unknown[][],
-      ) => Promise<Map<string, unknown>>;
-      emptyPage: () => unknown;
-      byColumns: (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => Promise<Row[]>;
-      fields: GraphQLFieldConfigMap<unknown, GraphqlContext>;
-    }
-  >();
-
+  const built = new Map<string, Built>();
   for (const [key, info] of Object.entries(tables)) {
     const { one, many } = fieldNames(key);
     if (query[one] !== undefined || query[many] !== undefined)
       throw new ConfigError(`GraphQL field names for table ${key} collide`);
-    const typeName = pascal(one);
-    const scalars = new Map(info.columns.map((c) => [c.key, scalarOf(c.column.getSQLType())]));
-    const notNull = (c: TableInfo["columns"][number]) =>
-      c.column.notNull || info.primaryKey.includes(c);
-
-    const fields: GraphQLFieldConfigMap<unknown, GraphqlContext> = {};
-    for (const c of info.columns) {
-      const s = scalars.get(c.key)!;
-      fields[c.key] = { type: (notNull(c) ? new GraphQLNonNull(s) : s) as GraphQLOutputType };
-    }
-    // Relation fields are added below, once every table's type exists.
-    const type = new GraphQLObjectType({ name: typeName, fields: () => fields });
-
-    const filterFields: GraphQLInputFieldConfigMap = {};
-    const filter: GraphQLInputObjectType = new GraphQLInputObjectType({
-      name: `${typeName}Filter`,
-      fields: () => {
-        filterFields.AND = { type: new GraphQLList(new GraphQLNonNull(filter)) };
-        filterFields.OR = { type: new GraphQLList(new GraphQLNonNull(filter)) };
-        for (const c of info.columns) {
-          const s = scalars.get(c.key)!;
-          if (s === GraphQLJSON) continue;
-          filterFields[c.key] = { type: s };
-          filterFields[`${c.key}_not`] = { type: s };
-          filterFields[`${c.key}_in`] = { type: new GraphQLList(new GraphQLNonNull(s)) };
-          filterFields[`${c.key}_not_in`] = { type: new GraphQLList(new GraphQLNonNull(s)) };
-          if (ordered(s) && s !== GraphQLString) {
-            for (const op of ["_gt", "_gte", "_lt", "_lte"])
-              filterFields[`${c.key}${op}`] = { type: s };
-          }
-        }
-        return filterFields;
-      },
-    });
-
-    // Keyset paging needs a total order without NULLs: only non-null columns, primary key as tiebreak.
-    const sortable = info.columns.filter((c) => notNull(c) && ordered(scalars.get(c.key)!));
-    const orderBy = new GraphQLEnumType({
-      name: `${typeName}OrderBy`,
-      values: Object.fromEntries(sortable.map((c) => [c.key, { value: c.key }])),
-    });
-    const page = new GraphQLObjectType({
-      name: `${typeName}Page`,
-      fields: {
-        items: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(type))) },
-        pageInfo: { type: new GraphQLNonNull(PageInfo) },
-      },
-    });
-
-    const select = info.columns.map((c) => `${quote(c.column.name)} AS ${quote(c.key)}`).join(", ");
-    const table = quote(info.name);
-    const pkArgs: Record<string, { type: GraphQLInputType }> = {};
-    for (const c of info.primaryKey)
-      pkArgs[c.key] = { type: new GraphQLNonNull(scalars.get(c.key)!) };
-
+    const types = tableType(pascal(one), info);
+    const reader = tableReader(info);
     query[one] = {
-      type,
-      args: pkArgs,
-      resolve: async (_, args: Record<string, unknown>, ctx) => {
-        const params: unknown[] = [];
-        const where = info.primaryKey.map((c) => {
-          params.push(args[c.key]);
-          return `${quote(c.column.name)} = $${params.length}`;
-        });
-        return (
-          (
-            await rows(ctx, `SELECT ${select} FROM ${table} WHERE ${where.join(" AND ")}`, params)
-          )[0] ?? null
-        );
-      },
+      type: types.type,
+      args: types.pkArgs,
+      resolve: (_, args: Record<string, unknown>, ctx) => reader.one(ctx, args),
     };
+    query[many] = {
+      type: new GraphQLNonNull(types.page),
+      args: types.listArgs,
+      resolve: (_, args: ListArgs, ctx) => reader.list(ctx, args),
+    };
+    built.set(key, { ...types, reader });
+  }
+  // Relation fields go in last, once every table's type exists.
+  for (const r of relations) {
+    const from = built.get(r.from)!;
+    if (from.fields[r.name] !== undefined)
+      throw new ConfigError(
+        `relation ${r.from}.${r.name} has the name of a column: rename one (e.g. column ${r.name}Id)`,
+      );
+    from.fields[r.name] = relationField(r, tables[r.from]!, built.get(r.to)!);
+  }
+  query._meta = metaField();
+  return new GraphQLSchema({ query: new GraphQLObjectType({ name: "Query", fields: query }) });
+}
 
-    const columnName = (k: string) => quote(info.columns.find((c) => c.key === k)!.column.name);
-    const listArgs = {
-      where: { type: filter },
-      orderBy: { type: orderBy },
-      orderDirection: { type: OrderDirection, defaultValue: "asc" },
-      limit: { type: GraphQLInt, defaultValue: 100 },
-      after: { type: GraphQLString },
-    };
-    /** The page query's parts: `extra` adds conditions (a relation's match) before the cursor. */
-    const pageParts = (args: ListArgs, params: unknown[], extra?: string) => {
-      if (args.limit < 1 || args.limit > MAX_LIMIT)
-        throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
-      const keys = [
-        ...new Set([
-          ...(args.orderBy == null ? [] : [args.orderBy]),
-          ...info.primaryKey.map((c) => c.key),
-        ]),
-      ];
-      const columns = keys.map(columnName);
-      const dir = args.orderDirection === "desc" ? "DESC" : "ASC";
-      let where = whereSql(info, args.where ?? undefined, params);
-      if (extra !== undefined) where = `(${where}) AND ${extra}`;
-      if (args.after != null) {
-        const placeholders = decodeCursor(args.after, keys.length).map((v) => {
-          params.push(v);
-          return `$${params.length}`;
-        });
-        where = `(${where}) AND (${columns.join(", ")}) ${dir === "ASC" ? ">" : "<"} (${placeholders.join(", ")})`;
+/** A table's object type (its `fields` filled in later with relations), filter, order and page types. */
+function tableType(typeName: string, info: TableInfo) {
+  const scalars = new Map(info.columns.map((c) => [c.key, scalarOf(c.column.getSQLType())]));
+  const notNull = (c: TableInfo["columns"][number]) =>
+    c.column.notNull || info.primaryKey.includes(c);
+  const fields: GraphQLFieldConfigMap<unknown, GraphqlContext> = {};
+  for (const c of info.columns) {
+    const s = scalars.get(c.key)!;
+    fields[c.key] = { type: (notNull(c) ? new GraphQLNonNull(s) : s) as GraphQLOutputType };
+  }
+  const type = new GraphQLObjectType({ name: typeName, fields: () => fields });
+  // Keyset paging needs a total order without NULLs: only non-null columns, primary key as tiebreak.
+  const sortable = info.columns.filter((c) => notNull(c) && ordered(scalars.get(c.key)!));
+  const orderBy = new GraphQLEnumType({
+    name: `${typeName}OrderBy`,
+    values: Object.fromEntries(sortable.map((c) => [c.key, { value: c.key }])),
+  });
+  const page = new GraphQLObjectType({
+    name: `${typeName}Page`,
+    fields: {
+      items: { type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(type))) },
+      pageInfo: { type: new GraphQLNonNull(PageInfo) },
+    },
+  });
+  const pkArgs: Record<string, { type: GraphQLInputType }> = {};
+  for (const c of info.primaryKey)
+    pkArgs[c.key] = { type: new GraphQLNonNull(scalars.get(c.key)!) };
+  const listArgs: ListArgDefs = {
+    where: { type: filterType(typeName, info, scalars) },
+    orderBy: { type: orderBy },
+    orderDirection: { type: OrderDirection, defaultValue: "asc" },
+    limit: { type: GraphQLInt, defaultValue: DEFAULT_LIMIT },
+    after: { type: GraphQLString },
+  };
+  return { type, page, fields, pkArgs, listArgs };
+}
+
+function filterType(
+  typeName: string,
+  info: TableInfo,
+  scalars: Map<string, ReturnType<typeof scalarOf>>,
+): GraphQLInputObjectType {
+  const fields: GraphQLInputFieldConfigMap = {};
+  const filter: GraphQLInputObjectType = new GraphQLInputObjectType({
+    name: `${typeName}Filter`,
+    fields: () => {
+      fields.AND = { type: new GraphQLList(new GraphQLNonNull(filter)) };
+      fields.OR = { type: new GraphQLList(new GraphQLNonNull(filter)) };
+      for (const c of info.columns) {
+        const s = scalars.get(c.key)!;
+        if (s === GraphQLJSON) continue;
+        fields[c.key] = { type: s };
+        fields[`${c.key}_not`] = { type: s };
+        fields[`${c.key}_in`] = { type: new GraphQLList(new GraphQLNonNull(s)) };
+        fields[`${c.key}_not_in`] = { type: new GraphQLList(new GraphQLNonNull(s)) };
+        if (ordered(s) && s !== GraphQLString) {
+          for (const op of ["_gt", "_gte", "_lt", "_lte"]) fields[`${c.key}${op}`] = { type: s };
+        }
       }
-      return {
-        keys,
-        sql: `SELECT ${select} FROM ${table} WHERE ${where} ORDER BY ${columns.map((c) => `${c} ${dir}`).join(", ")} LIMIT ${args.limit + 1}`,
-      };
+      return fields;
+    },
+  });
+  return filter;
+}
+
+const emptyPage = () => ({ items: [], pageInfo: { hasNextPage: false, endCursor: null } });
+
+function toPage(found: Row[], args: ListArgs, keys: string[]) {
+  const items = found.slice(0, args.limit);
+  const last = items.at(-1);
+  return {
+    items,
+    pageInfo: {
+      hasNextPage: found.length > args.limit,
+      endCursor: last === undefined ? null : encodeCursor(keys.map((k) => last[k])),
+    },
+  };
+}
+
+/** A table's reads: one row by primary key, a page, a page per parent key, and rows by column values. */
+function tableReader(info: TableInfo) {
+  const select = info.columns.map((c) => `${quote(c.column.name)} AS ${quote(c.key)}`).join(", ");
+  const table = quote(info.name);
+  const columnName = (k: string) => quote(info.columns.find((c) => c.key === k)!.column.name);
+  /** The page query's parts: `extra` adds conditions (a relation's match) before the cursor. */
+  const pageParts = (args: ListArgs, params: unknown[], extra?: string) => {
+    if (args.limit < 1 || args.limit > MAX_LIMIT)
+      throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
+    const keys = [
+      ...new Set([
+        ...(args.orderBy == null ? [] : [args.orderBy]),
+        ...info.primaryKey.map((c) => c.key),
+      ]),
+    ];
+    const columns = keys.map(columnName);
+    const dir = args.orderDirection === "desc" ? "DESC" : "ASC";
+    let where = whereSql(info, args.where ?? undefined, params);
+    if (extra !== undefined) where = `(${where}) AND ${extra}`;
+    if (args.after != null) {
+      const placeholders = decodeCursor(args.after, keys.length).map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      });
+      where = `(${where}) AND (${columns.join(", ")}) ${dir === "ASC" ? ">" : "<"} (${placeholders.join(", ")})`;
+    }
+    return {
+      keys,
+      sql: `SELECT ${select} FROM ${table} WHERE ${where} ORDER BY ${columns.map((c) => `${c} ${dir}`).join(", ")} LIMIT ${args.limit + 1}`,
     };
-    const toPage = (found: Row[], args: ListArgs, keys: string[]) => {
-      const items = found.slice(0, args.limit);
-      const last = items.at(-1);
-      return {
-        items,
-        pageInfo: {
-          hasNextPage: found.length > args.limit,
-          endCursor: last === undefined ? null : encodeCursor(keys.map((k) => last[k])),
-        },
-      };
-    };
-    const list = async (ctx: GraphqlContext, args: ListArgs) => {
+  };
+  const placeholders = (values: unknown[], params: unknown[], types?: string[]) =>
+    values
+      .map((v, j) => {
+        params.push(v);
+        return types === undefined ? `$${params.length}` : `$${params.length}::${types[j]}`;
+      })
+      .join(", ");
+
+  return {
+    one: async (ctx: GraphqlContext, args: Record<string, unknown>) => {
+      const params: unknown[] = [];
+      const where = info.primaryKey.map((c) => {
+        params.push(args[c.key]);
+        return `${quote(c.column.name)} = $${params.length}`;
+      });
+      const found = await rows(
+        ctx,
+        `SELECT ${select} FROM ${table} WHERE ${where.join(" AND ")}`,
+        params,
+      );
+      return found[0] ?? null;
+    },
+    list: async (ctx: GraphqlContext, args: ListArgs) => {
       const params: unknown[] = [];
       const { keys, sql } = pageParts(args, params);
       return toPage(await rows(ctx, sql, params), args, keys);
-    };
+    },
     /** One page per parent key, in one statement: the page query runs per key in a LATERAL subquery. */
-    const pagesFor = async (
+    pagesFor: async (
       ctx: GraphqlContext,
       args: ListArgs,
       match: string[],
@@ -464,15 +498,7 @@ export function createGraphqlSchema(
     ) => {
       const params: unknown[] = [];
       const types = match.map((k) => info.columns.find((c) => c.key === k)!.column.getSQLType());
-      const tuples = parents.map(
-        (p, i) =>
-          `(${p
-            .map((v, j) => {
-              params.push(v);
-              return `$${params.length}::${types[j]}`;
-            })
-            .join(", ")}, ${i})`,
-      );
+      const tuples = parents.map((p, i) => `(${placeholders(p, params, types)}, ${i})`);
       const { keys, sql } = pageParts(
         args,
         params,
@@ -493,115 +519,93 @@ export function createGraphqlSchema(
       return new Map(
         parents.map((p, i) => [JSON.stringify(p), toPage(byParent.get(i) ?? [], args, keys)]),
       );
-    };
-    const emptyPage = () => ({ items: [], pageInfo: { hasNextPage: false, endCursor: null } });
-    const byColumns = (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => {
+    },
+    byColumns: (ctx: GraphqlContext, columns: string[], keys: unknown[][]) => {
       const params: unknown[] = [];
-      const tuples = keys.map(
-        (k) =>
-          `(${k
-            .map((v) => {
-              params.push(v);
-              return `$${params.length}`;
-            })
-            .join(", ")})`,
-      );
+      const tuples = keys.map((k) => `(${placeholders(k, params)})`);
       return rows(
         ctx,
         `SELECT ${select} FROM ${table} WHERE (${columns.map(columnName).join(", ")}) IN (${tuples.join(", ")})`,
         params,
       );
-    };
-    query[many] = {
-      type: new GraphQLNonNull(page),
-      args: listArgs,
-      resolve: (_, args: ListArgs, ctx) => list(ctx, args),
-    };
-    built.set(key, { type, page, listArgs, list, pagesFor, emptyPage, byColumns, fields });
-  }
+    },
+  };
+}
 
-  for (const r of relations) {
-    const from = built.get(r.from)!;
-    const to = built.get(r.to)!;
-    if (from.fields[r.name] !== undefined)
-      throw new ConfigError(
-        `relation ${r.from}.${r.name} has the name of a column: rename one (e.g. column ${r.name}Id)`,
-      );
-    if (r.kind === "one") {
-      const id = `${r.from}.${r.name}`;
-      const notNull = r.fields.every(
-        (k) => tables[r.from]!.columns.find((c) => c.key === k)!.column.notNull,
-      );
-      from.fields[r.name] = {
-        type: notNull ? new GraphQLNonNull(to.type) : to.type,
-        resolve: (parent, _, ctx) => {
-          const values = r.fields.map((k) => (parent as Row)[k]);
-          if (values.some((v) => v === null || v === undefined)) return null;
-          const b = (ctx.budget ??= {
-            statements: 0,
-            started: performance.now(),
-            loaders: new Map(),
-          });
-          let load = b.loaders.get(id);
-          if (load === undefined) {
-            load = createLoader(
-              async (keys) =>
-                new Map(
-                  (await to.byColumns(ctx, r.references, keys)).map((row) => [
-                    JSON.stringify(r.references.map((k) => row[k])),
-                    row,
-                  ]),
-                ),
-              () => null,
-            );
-            b.loaders.set(id, load);
-          }
-          return load(values);
-        },
-      };
-    } else {
-      from.fields[r.name] = {
-        type: new GraphQLNonNull(to.page),
-        args: to.listArgs,
-        resolve: (parent, args: ListArgs, ctx) => {
-          const values = r.fields.map((k) => (parent as Row)[k]);
-          if (values.some((v) => v === null || v === undefined)) return to.emptyPage();
-          // Parents asking with the same arguments share one statement.
-          const id = `${r.from}.${r.name}:${JSON.stringify(args)}`;
-          const b = (ctx.budget ??= {
-            statements: 0,
-            started: performance.now(),
-            loaders: new Map(),
-          });
-          let load = b.loaders.get(id);
-          if (load === undefined) {
-            load = createLoader((keys) => to.pagesFor(ctx, args, r.references, keys), to.emptyPage);
-            b.loaders.set(id, load);
-          }
-          return load(values);
-        },
-      };
-    }
+/** The request's loader under `id`, made on first use. */
+function loaderFor(ctx: GraphqlContext, id: string, make: () => Loader): Loader {
+  const { loaders } = budgetOf(ctx);
+  let load = loaders.get(id);
+  if (load === undefined) {
+    load = make();
+    loaders.set(id, load);
   }
+  return load;
+}
 
-  query._meta = {
+/** A to-one relation is the related row (null when a key column is), a to-many a page of rows. */
+function relationField(
+  r: RelationInfo,
+  from: TableInfo,
+  to: Built,
+): GraphQLFieldConfig<unknown, GraphqlContext> {
+  const keyOf = (parent: unknown) => {
+    const values = r.fields.map((k) => (parent as Row)[k]);
+    return values.some((v) => v === null || v === undefined) ? undefined : values;
+  };
+  if (r.kind === "one") {
+    const id = `${r.from}.${r.name}`;
+    const notNull = r.fields.every((k) => from.columns.find((c) => c.key === k)!.column.notNull);
+    return {
+      type: notNull ? new GraphQLNonNull(to.type) : to.type,
+      resolve: (parent, _, ctx) => {
+        const values = keyOf(parent);
+        if (values === undefined) return null;
+        const load = loaderFor(ctx, id, () =>
+          createLoader(
+            async (keys) =>
+              new Map(
+                (await to.reader.byColumns(ctx, r.references, keys)).map((row) => [
+                  JSON.stringify(r.references.map((k) => row[k])),
+                  row,
+                ]),
+              ),
+            () => null,
+          ),
+        );
+        return load(values);
+      },
+    };
+  }
+  return {
+    type: new GraphQLNonNull(to.page),
+    args: to.listArgs,
+    resolve: (parent, args: ListArgs, ctx) => {
+      const values = keyOf(parent);
+      if (values === undefined) return emptyPage();
+      // Parents asking with the same arguments share one statement.
+      const load = loaderFor(ctx, `${r.from}.${r.name}:${JSON.stringify(args)}`, () =>
+        createLoader((keys) => to.reader.pagesFor(ctx, args, r.references, keys), emptyPage),
+      );
+      return load(values);
+    },
+  };
+}
+
+function metaField(): GraphQLFieldConfig<unknown, GraphqlContext> {
+  return {
     type: new GraphQLObjectType({
       name: "Meta",
       fields: { checkpoint: { type: GraphQLInt }, phase: { type: GraphQLString } },
     }),
     resolve: async (_, __, ctx) => {
-      const meta = Object.fromEntries(
-        (
-          await rows(
-            ctx,
-            `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`,
-            [],
-          )
-        ).map((r) => [r.key, r.value]),
+      const found = await rows(
+        ctx,
+        `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`,
+        [],
       );
+      const meta = Object.fromEntries(found.map((r) => [r.key, r.value]));
       return { checkpoint: meta.checkpoint ?? null, phase: meta.phase ?? null };
     },
   };
-
-  return new GraphQLSchema({ query: new GraphQLObjectType({ name: "Query", fields: query }) });
 }

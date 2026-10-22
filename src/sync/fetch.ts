@@ -76,187 +76,62 @@ export function eventStream(
   o: EventStreamOptions,
   stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 },
 ): AsyncGenerator<Batch> {
-  const minSplit = o.minSplit ?? MIN_SPLIT;
-  const windowEvents = o.windowEvents ?? 2 * o.chunkSize;
-  const maxBuffered = o.maxBuffered ?? Math.max(MIN_BUFFERED, 4 * o.concurrency * windowEvents);
-  const windows: Window[] = [
-    {
-      from: o.from,
-      to: o.to,
-      stop: o.to + 1,
-      at: o.from,
-      token: undefined,
-      events: [],
-      state: "idle",
-    },
-  ];
-  stats.windows = 1;
-  let buffered = 0;
-  let waiting = 0;
-  // Recent events and blocks fetched, decayed per page: the density that places cuts.
-  let recentEvents = 0;
-  let recentBlocks = 0;
-  let failure: { error: unknown } | undefined;
-  let stopped = false;
-  let wakers: (() => void)[] = [];
+  return new EventFetcher(o, stats).stream();
+}
 
-  const notify = () => {
-    const w = wakers;
-    wakers = [];
-    for (const r of w) r();
-  };
-  const wait = () => new Promise<void>((r) => wakers.push(r));
-
-  /**
-   * A window other than the front pauses at `perWindow` events. Under `maxBuffered` events held, any window may
-   * fetch; under twice that, only windows that hold fewer together with the windows before them, so the front never
-   * waits for the back. Past that, only the front, which the consumer drains. Memory stays under three times the
-   * budget.
-   */
-  const mayFetch = (w: Window) => {
-    if (w !== windows[0] && w.events.length >= perWindow) return false;
-    if (buffered < maxBuffered) return true;
-    if (buffered >= 2 * maxBuffered && w !== windows[0]) return false;
-    let n = 0;
-    for (const x of windows) {
-      n += x.events.length;
-      if (x === w) return n < maxBuffered;
-    }
-    return false;
-  };
-
-  const pick = (): Window | undefined => {
-    for (const w of windows) {
-      if (w.state === "idle" && mayFetch(w)) {
-        w.state = "running";
-        return w;
-      }
-    }
-    return undefined;
-  };
-
-  /** Blocks that hold about `windowEvents` at the density seen lately. */
-  const span = () =>
-    recentBlocks === 0
-      ? Number.POSITIVE_INFINITY
-      : windowEvents / (Math.max(recentEvents, 0.5) / recentBlocks);
+/** One `eventStream`: its windows, the workers paginating them, and the memory they hold. Workers start at once. */
+class EventFetcher {
+  readonly #o: EventStreamOptions;
+  readonly #stats: FetchStats;
+  readonly #minSplit: number;
+  readonly #windowEvents: number;
+  readonly #maxBuffered: number;
   /** What a window other than the front may hold before it pauses, so one dense window can't take the budget. */
-  const perWindow = Math.max(4 * windowEvents, Math.floor(maxBuffered / o.concurrency));
+  readonly #perWindow: number;
+  readonly #windows: Window[];
+  readonly #workers: Promise<void>[];
+  #buffered = 0;
+  #waiting = 0;
+  // Recent events and blocks fetched, decayed per page: the density that places cuts.
+  #recentEvents = 0;
+  #recentBlocks = 0;
+  #failure: { error: unknown } | undefined;
+  #stopped = false;
+  #wakers: (() => void)[] = [];
 
-  /** Cuts `w` about `windowEvents` past where it is, and hands the rest of its range to a new idle window. */
-  const split = (w: Window): Window | undefined => {
-    const left = w.stop - w.at;
-    if (left < 2 * minSplit) return undefined;
-    const cut = w.at + Math.round(Math.max(minSplit, Math.min(left / 2, span())));
-    const rest: Window = {
-      from: cut,
-      to: w.stop - 1,
-      stop: w.stop,
-      at: cut,
-      token: undefined,
-      events: [],
-      state: "idle",
-    };
-    windows.splice(windows.indexOf(w) + 1, 0, rest);
-    w.stop = cut;
-    stats.windows++;
-    stats.splits++;
-    return rest;
-  };
+  constructor(o: EventStreamOptions, stats: FetchStats) {
+    this.#o = o;
+    this.#stats = stats;
+    this.#minSplit = o.minSplit ?? MIN_SPLIT;
+    this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
+    this.#maxBuffered =
+      o.maxBuffered ?? Math.max(MIN_BUFFERED, 4 * o.concurrency * this.#windowEvents);
+    this.#perWindow = Math.max(
+      4 * this.#windowEvents,
+      Math.floor(this.#maxBuffered / o.concurrency),
+    );
+    this.#windows = [
+      {
+        from: o.from,
+        to: o.to,
+        stop: o.to + 1,
+        at: o.from,
+        token: undefined,
+        events: [],
+        state: "idle",
+      },
+    ];
+    stats.windows = 1;
+    this.#workers = Array.from({ length: o.concurrency }, () => this.#worker());
+    o.gauges?.(() => this.#gauges());
+  }
 
-  /** For waiting workers: walks from the front, cutting every window much longer than `span()` into one that size. */
-  const feed = () => {
-    let idle = windows.filter((x) => x.state === "idle").length;
-    for (let i = 0; i < windows.length && idle < waiting; i++) {
-      const w = windows[i]!;
-      if (w.state !== "done" && w.stop - w.at > 2 * span() && split(w) !== undefined) idle++;
-    }
-  };
-
-  const run = async (w: Window) => {
-    const filter = {
-      from_block: { block_number: w.from },
-      to_block: { block_number: w.to },
-      address: o.address,
-      keys: o.keys,
-    };
-    for (;;) {
-      if (stopped) return;
-      if (!mayFetch(w)) {
-        w.state = "idle";
-        return;
-      }
-      const page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
-      stats.pages++;
-      let kept = 0;
-      for (const e of page.events) {
-        if (e.block_number! >= w.stop) break;
-        w.events.push(e);
-        kept++;
-      }
-      buffered += kept;
-      stats.events += kept;
-      if (buffered > stats.peakBuffered) stats.peakBuffered = buffered;
-      const token = page.continuation_token;
-      const at =
-        token === undefined
-          ? w.stop
-          : Math.min(w.stop, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.at);
-      recentEvents = recentEvents * 0.9 + kept;
-      recentBlocks = recentBlocks * 0.9 + Math.max(0, at - w.at);
-      if (at >= w.stop) {
-        w.at = w.stop;
-        w.state = "done";
-        notify();
-        return;
-      }
-      w.at = Math.max(w.at, at);
-      w.token = token;
-      if (waiting > 0) feed();
-      notify();
-    }
-  };
-
-  const finished = () => windows.every((w) => w.state === "done");
-
-  const worker = async () => {
-    while (!stopped && failure === undefined && !finished()) {
-      const w = pick();
-      if (w === undefined) {
-        waiting++;
-        await wait();
-        waiting--;
-        continue;
-      }
-      try {
-        await run(w);
-      } catch (error) {
-        failure = { error };
-        notify();
-        return;
-      }
-    }
-    notify();
-  };
-
-  const workers = Array.from({ length: o.concurrency }, worker);
-  o.gauges?.(() => {
-    const count = (state: Window["state"]) => windows.filter((w) => w.state === state).length;
-    return {
-      buffered,
-      maxBuffered,
-      windows: windows.length,
-      running: count("running"),
-      paused: count("idle"),
-      done: count("done"),
-      idleWorkers: waiting,
-    };
-  });
-
-  return (async function* () {
+  /** The batches, front window first. Ending it early (`return`, a throw) stops the workers. */
+  async *stream(): AsyncGenerator<Batch> {
+    const windows = this.#windows;
     try {
       while (windows.length > 0) {
-        if (failure !== undefined) throw failure.error;
+        if (this.#failure !== undefined) throw this.#failure.error;
         const w = windows[0]!;
         let events: EmittedEvent[];
         let through: number;
@@ -269,22 +144,184 @@ export function eventStream(
           let n = w.events.length;
           while (n > 0 && w.events[n - 1]!.block_number! >= w.at) n--;
           if (n === 0) {
-            await wait();
+            await this.#wait();
             continue;
           }
           events = w.events.splice(0, n);
           through = w.at - 1;
         }
-        buffered -= events.length;
-        notify();
+        this.#buffered -= events.length;
+        this.#notify();
         yield { events, through };
       }
-      await Promise.all(workers);
+      await Promise.all(this.#workers);
     } finally {
-      stopped = true;
-      notify();
+      this.#stopped = true;
+      this.#notify();
     }
-  })();
+  }
+
+  #notify() {
+    const w = this.#wakers;
+    this.#wakers = [];
+    for (const r of w) r();
+  }
+
+  #wait() {
+    return new Promise<void>((r) => this.#wakers.push(r));
+  }
+
+  /**
+   * A window other than the front pauses at `perWindow` events. Under `maxBuffered` events held, any window may
+   * fetch; under twice that, only windows that hold fewer together with the windows before them, so the front never
+   * waits for the back. Past that, only the front, which the consumer drains. Memory stays under three times the
+   * budget.
+   */
+  #mayFetch(w: Window): boolean {
+    const front = this.#windows[0];
+    if (w !== front && w.events.length >= this.#perWindow) return false;
+    if (this.#buffered < this.#maxBuffered) return true;
+    if (this.#buffered >= 2 * this.#maxBuffered && w !== front) return false;
+    let n = 0;
+    for (const x of this.#windows) {
+      n += x.events.length;
+      if (x === w) return n < this.#maxBuffered;
+    }
+    return false;
+  }
+
+  #pick(): Window | undefined {
+    for (const w of this.#windows) {
+      if (w.state === "idle" && this.#mayFetch(w)) {
+        w.state = "running";
+        return w;
+      }
+    }
+    return undefined;
+  }
+
+  /** Blocks that hold about `windowEvents` at the density seen lately. */
+  #span(): number {
+    return this.#recentBlocks === 0
+      ? Number.POSITIVE_INFINITY
+      : this.#windowEvents / (Math.max(this.#recentEvents, 0.5) / this.#recentBlocks);
+  }
+
+  /** Cuts `w` about `windowEvents` past where it is, and hands the rest of its range to a new idle window. */
+  #split(w: Window): Window | undefined {
+    const left = w.stop - w.at;
+    if (left < 2 * this.#minSplit) return undefined;
+    const cut = w.at + Math.round(Math.max(this.#minSplit, Math.min(left / 2, this.#span())));
+    const rest: Window = {
+      from: cut,
+      to: w.stop - 1,
+      stop: w.stop,
+      at: cut,
+      token: undefined,
+      events: [],
+      state: "idle",
+    };
+    this.#windows.splice(this.#windows.indexOf(w) + 1, 0, rest);
+    w.stop = cut;
+    this.#stats.windows++;
+    this.#stats.splits++;
+    return rest;
+  }
+
+  /** For waiting workers: walks from the front, cutting every window much longer than `span()` into one that size. */
+  #feed() {
+    const windows = this.#windows;
+    let idle = windows.filter((x) => x.state === "idle").length;
+    for (let i = 0; i < windows.length && idle < this.#waiting; i++) {
+      const w = windows[i]!;
+      if (w.state !== "done" && w.stop - w.at > 2 * this.#span() && this.#split(w) !== undefined)
+        idle++;
+    }
+  }
+
+  /** Paginates `w` until it's done, the stream stops, or the memory budget pauses it. */
+  async #paginate(w: Window) {
+    const o = this.#o;
+    const stats = this.#stats;
+    const filter = {
+      from_block: { block_number: w.from },
+      to_block: { block_number: w.to },
+      address: o.address,
+      keys: o.keys,
+    };
+    for (;;) {
+      if (this.#stopped) return;
+      if (!this.#mayFetch(w)) {
+        w.state = "idle";
+        return;
+      }
+      const page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
+      stats.pages++;
+      let kept = 0;
+      for (const e of page.events) {
+        if (e.block_number! >= w.stop) break;
+        w.events.push(e);
+        kept++;
+      }
+      this.#buffered += kept;
+      stats.events += kept;
+      if (this.#buffered > stats.peakBuffered) stats.peakBuffered = this.#buffered;
+      const token = page.continuation_token;
+      const at =
+        token === undefined
+          ? w.stop
+          : Math.min(w.stop, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.at);
+      this.#recentEvents = this.#recentEvents * 0.9 + kept;
+      this.#recentBlocks = this.#recentBlocks * 0.9 + Math.max(0, at - w.at);
+      if (at >= w.stop) {
+        w.at = w.stop;
+        w.state = "done";
+        this.#notify();
+        return;
+      }
+      w.at = Math.max(w.at, at);
+      w.token = token;
+      if (this.#waiting > 0) this.#feed();
+      this.#notify();
+    }
+  }
+
+  async #worker() {
+    while (
+      !this.#stopped &&
+      this.#failure === undefined &&
+      !this.#windows.every((w) => w.state === "done")
+    ) {
+      const w = this.#pick();
+      if (w === undefined) {
+        this.#waiting++;
+        await this.#wait();
+        this.#waiting--;
+        continue;
+      }
+      try {
+        await this.#paginate(w);
+      } catch (error) {
+        this.#failure = { error };
+        this.#notify();
+        return;
+      }
+    }
+    this.#notify();
+  }
+
+  #gauges(): FetchGauges {
+    const count = (state: Window["state"]) => this.#windows.filter((w) => w.state === state).length;
+    return {
+      buffered: this.#buffered,
+      maxBuffered: this.#maxBuffered,
+      windows: this.#windows.length,
+      running: count("running"),
+      paused: count("idle"),
+      done: count("done"),
+      idleWorkers: this.#waiting,
+    };
+  }
 }
 
 /** Fetches a whole range, handing each ordered batch to `onEvents`. */

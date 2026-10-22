@@ -96,6 +96,18 @@ function sparkline(values: readonly number[], width: number): string {
 
 export type RenderOptions = { width?: number; color?: boolean; now?: number };
 
+/** What each section writes through: lines inside the box, `inner` columns wide. */
+type Box = {
+  p: Paint;
+  inner: number;
+  line: (s?: string) => void;
+  /** `left` and `right` on one line, `right` flush right. */
+  split: (left: string, right: string) => void;
+  label: (name: string, text: string) => void;
+};
+
+type Recent = ReturnType<Status["recent"]>;
+
 /** The dev screen: a box of lines for `status`, `width` columns wide. */
 export function render(
   status: Status,
@@ -105,11 +117,33 @@ export function render(
   const inner = Math.max(40, width - 4);
   const body: string[] = [];
   const line = (s = "") => body.push(s);
-  /** `left` and `right` on one line, `right` flush right. */
-  const split = (left: string, right: string) =>
-    line(`${left}${" ".repeat(Math.max(1, inner - visible(left) - visible(right)))}${right}`);
-  const label = (name: string, text: string) => line(`${p.dim(name.padEnd(9))}${text}`);
+  const box: Box = {
+    p,
+    inner,
+    line,
+    split: (left, right) =>
+      line(`${left}${" ".repeat(Math.max(1, inner - visible(left) - visible(right)))}${right}`),
+    label: (name, text) => line(`${p.dim(name.padEnd(9))}${text}`),
+  };
+  header(box, status, now);
+  line();
+  phase(box, status, now);
+  const recent = status.recent(now);
+  timeShares(box, status);
+  handlerTable(box, status);
+  line();
+  rpc(box, status, recent);
+  reads(box, status);
+  if (status.debug) debug(box, status, recent);
+  if (status.api !== "")
+    box.label(
+      "api",
+      `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · POST /sql · GET /live /status")}`,
+    );
+  return frame(p, inner, status, body);
+}
 
+function header({ p, split }: Box, status: Status, now: number) {
   const where = [
     status.endpoint,
     status.tip > 0 ? `tip ${thousands(status.tip)}` : "",
@@ -123,16 +157,17 @@ export function render(
     p.dim(where.filter(Boolean).join(" · ")),
     p.dim(`up ${duration((now - status.started) / 1000)} · ${bytes(process.memoryUsage.rss())}`),
   );
-  line();
+}
 
-  const r = status.range;
+function phase(box: Box, status: Status, now: number) {
+  const { p, line, label } = box;
   const inPhase = (now - status.phaseStarted) / 1000;
   const pace = status.pace(now);
-  const rate = (label_: string) => {
+  const rate = () => {
     if (status.history.length < 2) return;
-    const spark = sparkline(status.history, Math.min(40, inner - 30));
+    const spark = sparkline(status.history, Math.min(40, box.inner - 30));
     label(
-      label_,
+      "events/s",
       `${p.bold(compact(pace.events).padStart(6))}  ${p.cyan(spark)}  ${p.dim("last 2 min")}`,
     );
   };
@@ -141,55 +176,21 @@ export function render(
       line(p.dim("reading classes and checking the chain…"));
       break;
     case "factories":
-    case "backfill": {
-      const fraction = (r.through - r.first + 1) / Math.max(1, r.to - r.first + 1);
-      const pct = `${(fraction * 100).toFixed(1)}%`.padStart(6);
-      line(`${bar(fraction, inner - 8, p)}  ${p.bold(pct)}`);
-      let left = p.dim("estimating…");
-      if (pace.range !== undefined && pace.range[1] > pace.range[0] * 1.5)
-        left = `${duration(pace.range[0])} – ${duration(pace.range[1])} left ${p.dim("(varies with event density)")}`;
-      else if (pace.left !== undefined) left = `~${duration(pace.left)} left`;
-      split(
-        `block ${p.bold(thousands(r.through))} / ${thousands(r.to)}${status.phase === "factories" ? p.dim("  finding factory children") : ""}`,
-        left,
-      );
+    case "backfill":
+      progress(box, status, pace);
       line();
-      rate("events/s");
+      rate();
       label("handled", `${p.bold(compact(status.handled))} in ${duration(inPhase)}`);
       break;
-    }
     case "keys":
       line(
         `building ${plural(status.keys.tables, "primary key")} and ${plural(status.keys.indexes, "index", "indexes")}… ${duration(inPhase)}`,
       );
       break;
-    case "live": {
-      const l = status.live;
-      const behind =
-        l.timestamp > 0
-          ? `${p.bold(`${(Date.now() / 1000 - l.timestamp).toFixed(1)}s`)} behind the chain`
-          : p.dim("waiting for a block");
-      split(
-        `block ${p.bold(thousands(l.block))} · ${behind}`,
-        l.at > 0
-          ? p.dim(
-              `last block ${duration((Date.now() - l.at) / 1000)} ago, ${plural(l.events, "event")}`,
-            )
-          : "",
-      );
-      // Where the delay comes from: the node announcing the head after its timestamp, then us handling it.
-      const head = status.head?.();
-      if (head !== undefined && head.number === l.block && l.at > 0) {
-        const node = head.at / 1000 - head.timestamp;
-        label(
-          "delay",
-          `${p.bold(`${node.toFixed(1)}s`)} block timestamp → node announced it ${p.dim("·")} ${p.bold(micros(Math.max(0, l.at - head.at)))} announced → committed`,
-        );
-      }
-      label("reorgs", l.reorgs === 0 ? p.dim("none") : p.yellow(thousands(l.reorgs)));
-      rate("events/s");
+    case "live":
+      live(box, status);
+      rate();
       break;
-    }
     case "done":
       line(
         `${p.green("✓")} through block ${p.bold(thousands(status.checkpoint))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`,
@@ -201,112 +202,162 @@ export function render(
       );
       break;
   }
+}
 
-  const recent = status.recent(now);
+function progress(
+  { p, inner, line, split }: Box,
+  status: Status,
+  pace: ReturnType<Status["pace"]>,
+) {
+  const r = status.range;
+  const fraction = (r.through - r.first + 1) / Math.max(1, r.to - r.first + 1);
+  const pct = `${(fraction * 100).toFixed(1)}%`.padStart(6);
+  line(`${bar(fraction, inner - 8, p)}  ${p.bold(pct)}`);
+  let left = p.dim("estimating…");
+  if (pace.range !== undefined && pace.range[1] > pace.range[0] * 1.5)
+    left = `${duration(pace.range[0])} – ${duration(pace.range[1])} left ${p.dim("(varies with event density)")}`;
+  else if (pace.left !== undefined) left = `~${duration(pace.left)} left`;
+  split(
+    `block ${p.bold(thousands(r.through))} / ${thousands(r.to)}${status.phase === "factories" ? p.dim("  finding factory children") : ""}`,
+    left,
+  );
+}
+
+function live({ p, split, label }: Box, status: Status) {
+  const l = status.live;
+  const behind =
+    l.timestamp > 0
+      ? `${p.bold(`${(Date.now() / 1000 - l.timestamp).toFixed(1)}s`)} behind the chain`
+      : p.dim("waiting for a block");
+  split(
+    `block ${p.bold(thousands(l.block))} · ${behind}`,
+    l.at > 0
+      ? p.dim(
+          `last block ${duration((Date.now() - l.at) / 1000)} ago, ${plural(l.events, "event")}`,
+        )
+      : "",
+  );
+  // Where the delay comes from: the node announcing the head after its timestamp, then us handling it.
+  const head = status.head?.();
+  if (head !== undefined && head.number === l.block && l.at > 0) {
+    const node = head.at / 1000 - head.timestamp;
+    label(
+      "delay",
+      `${p.bold(`${node.toFixed(1)}s`)} block timestamp → node announced it ${p.dim("·")} ${p.bold(micros(Math.max(0, l.at - head.at)))} announced → committed`,
+    );
+  }
+  label("reorgs", l.reorgs === 0 ? p.dim("none") : p.yellow(thousands(l.reorgs)));
+}
+
+/** During backfill, where the time went: fetching events, headers and transactions, handlers, commits. */
+function timeShares({ p, line, label }: Box, status: Status) {
   const t = status.time;
   const total = t.fetch + t.extras + t.handlers + t.commit;
   if (
-    total > 1000 &&
-    (status.phase === "factories" || status.phase === "backfill" || status.phase === "keys")
-  ) {
-    line();
-    const w = 30;
-    const seg = (x: number) => Math.round((x / total) * w);
-    const [f, x, h] = [seg(t.fetch), seg(t.extras), seg(t.handlers)];
-    const c = Math.max(0, w - f - x - h);
-    const share = (v: number) => `${Math.round((v / total) * 100)}%`;
-    const extras = t.extras > 0 ? `  ${p.cyan("■")} headers/txs ${share(t.extras)}` : "";
-    label(
-      "time",
-      `${p.blue("█".repeat(f))}${p.cyan("█".repeat(x))}${p.magenta("█".repeat(h))}${p.yellow("█".repeat(c))}  ${p.blue("■")} events ${share(t.fetch)}${extras}  ${p.magenta("■")} handlers ${share(t.handlers)}  ${p.yellow("■")} commits ${share(t.commit)}`,
-    );
-    const top = Math.max(t.fetch, t.extras, t.handlers, t.commit);
-    const bound =
-      top / total < 0.5
-        ? "no single bottleneck"
-        : top === t.fetch
-          ? "bound by fetching events (RPC or cache)"
-          : top === t.extras
-            ? "bound by fetching headers and transactions (include)"
-            : top === t.handlers
-              ? "bound by handlers"
-              : "bound by commits (database)";
-    const commit =
-      status.lastCommit.ms > 0
-        ? ` · last commit ${micros(status.lastCommit.ms)}${status.lastCommit.tables > 0 ? ` (tables ${micros(status.lastCommit.tables)})` : ""}`
-        : "";
-    label("", p.dim(`${bound}${commit}`));
-  }
-
-  const handlers = [...status.handlers].sort((a, b) => b[1].ms - a[1].ms);
-  if (handlers.length > 0) {
-    line();
-    const nameWidth = Math.min(32, Math.max(7, ...handlers.map(([n]) => n.length)));
-    const spent = handlers.reduce((s, [, h]) => s + h.ms, 0) || 1;
-    line(
-      p.dim(
-        `${"HANDLER".padEnd(nameWidth)}  ${"EVENTS".padStart(8)}  ${"AVG".padStart(8)}  ${"TIME".padStart(5)}`,
-      ),
-    );
-    for (const [name, h] of handlers.slice(0, 6)) {
-      const n =
-        name.length > nameWidth ? `${name.slice(0, nameWidth - 1)}…` : name.padEnd(nameWidth);
-      const share = h.ms / spent;
-      line(
-        `${n}  ${compact(h.count).padStart(8)}  ${micros(h.ms / h.count).padStart(8)}  ${`${Math.round(share * 100)}%`.padStart(5)}  ${p.magenta("▇".repeat(Math.round(share * 12)))}`,
-      );
-    }
-    if (handlers.length > 6) line(p.dim(`+${handlers.length - 6} more`));
-  }
-
+    total <= 1000 ||
+    !(status.phase === "factories" || status.phase === "backfill" || status.phase === "keys")
+  )
+    return;
   line();
-  if (status.rpc !== undefined) {
-    const s = status.rpc;
-    const trouble = [
-      s.retries > 0 ? p.yellow(`${thousands(s.retries)} retries`) : "",
-      s.throttled > 0 ? p.yellow(`${thousands(s.throttled)} throttled`) : "",
-      s.timeouts > 0 ? p.yellow(`${thousands(s.timeouts)} timeouts`) : "",
-      s.failed > 0 ? p.yellow(`${thousands(s.failed)} failed`) : "",
-    ].filter(Boolean);
-    label(
-      "rpc",
-      [
-        `${thousands(s.requests)} requests`,
-        `${thousands(s.calls)} calls`,
-        `${bytes(s.bytes)} in`,
-        ...trouble,
-      ].join(p.dim(" · ")),
+  const w = 30;
+  const seg = (x: number) => Math.round((x / total) * w);
+  const [f, x, h] = [seg(t.fetch), seg(t.extras), seg(t.handlers)];
+  const c = Math.max(0, w - f - x - h);
+  const share = (v: number) => `${Math.round((v / total) * 100)}%`;
+  const extras = t.extras > 0 ? `  ${p.cyan("■")} headers/txs ${share(t.extras)}` : "";
+  label(
+    "time",
+    `${p.blue("█".repeat(f))}${p.cyan("█".repeat(x))}${p.magenta("█".repeat(h))}${p.yellow("█".repeat(c))}  ${p.blue("■")} events ${share(t.fetch)}${extras}  ${p.magenta("■")} handlers ${share(t.handlers)}  ${p.yellow("■")} commits ${share(t.commit)}`,
+  );
+  const top = Math.max(t.fetch, t.extras, t.handlers, t.commit);
+  const bound =
+    top / total < 0.5
+      ? "no single bottleneck"
+      : top === t.fetch
+        ? "bound by fetching events (RPC or cache)"
+        : top === t.extras
+          ? "bound by fetching headers and transactions (include)"
+          : top === t.handlers
+            ? "bound by handlers"
+            : "bound by commits (database)";
+  const commit =
+    status.lastCommit.ms > 0
+      ? ` · last commit ${micros(status.lastCommit.ms)}${status.lastCommit.tables > 0 ? ` (tables ${micros(status.lastCommit.tables)})` : ""}`
+      : "";
+  label("", p.dim(`${bound}${commit}`));
+}
+
+/** The six handlers that took the most time. */
+function handlerTable({ p, line }: Box, status: Status) {
+  const handlers = [...status.handlers].sort((a, b) => b[1].ms - a[1].ms);
+  if (handlers.length === 0) return;
+  line();
+  const nameWidth = Math.min(32, Math.max(7, ...handlers.map(([n]) => n.length)));
+  const spent = handlers.reduce((s, [, h]) => s + h.ms, 0) || 1;
+  line(
+    p.dim(
+      `${"HANDLER".padEnd(nameWidth)}  ${"EVENTS".padStart(8)}  ${"AVG".padStart(8)}  ${"TIME".padStart(5)}`,
+    ),
+  );
+  for (const [name, h] of handlers.slice(0, 6)) {
+    const n = name.length > nameWidth ? `${name.slice(0, nameWidth - 1)}…` : name.padEnd(nameWidth);
+    const share = h.ms / spent;
+    line(
+      `${n}  ${compact(h.count).padStart(8)}  ${micros(h.ms / h.count).padStart(8)}  ${`${Math.round(share * 100)}%`.padStart(5)}  ${p.magenta("▇".repeat(Math.round(share * 12)))}`,
     );
-    const max = status.rate();
-    const atLimit = max > 0 && recent.callsPerSecond >= 0.9 * max;
-    label(
-      "",
-      `${thousands(recent.callsPerSecond)}/s now of ${thousands(max)} calls/s max${atLimit ? p.yellow(" · at the limit: more concurrency won't help") : ""}`,
-    );
-    const minute = [
-      ["throttled", recent.throttled],
-      ["timeouts", recent.timeouts],
-      ["failed", recent.failed],
-    ] as const;
-    label(
-      "",
-      minute.every(([, n]) => n === 0)
-        ? p.dim("last minute: no throttling, timeouts or failed requests")
-        : `last minute: ${minute.map(([k, n]) => (n > 0 ? p.yellow(`${thousands(n)} ${k}`) : p.dim(`0 ${k}`))).join(p.dim(" · "))}`,
-    );
-    const methods = Object.entries(s.methods).sort((a, b) => b[1] - a[1]);
-    if (methods.length > 0) {
-      const shown = methods
-        .slice(0, 3)
-        .map(([m, n]) => `${m.replace(/^starknet_/, "")} ${compact(n)}`);
-      label(
-        "",
-        p.dim(
-          [...shown, ...(methods.length > 3 ? [`+${methods.length - 3} more`] : [])].join(" · "),
-        ),
-      );
-    }
   }
+  if (handlers.length > 6) line(p.dim(`+${handlers.length - 6} more`));
+}
+
+function rpc({ p, label }: Box, status: Status, recent: Recent) {
+  const s = status.rpc;
+  if (s === undefined) return;
+  const trouble = [
+    s.retries > 0 ? p.yellow(`${thousands(s.retries)} retries`) : "",
+    s.throttled > 0 ? p.yellow(`${thousands(s.throttled)} throttled`) : "",
+    s.timeouts > 0 ? p.yellow(`${thousands(s.timeouts)} timeouts`) : "",
+    s.failed > 0 ? p.yellow(`${thousands(s.failed)} failed`) : "",
+  ].filter(Boolean);
+  label(
+    "rpc",
+    [
+      `${thousands(s.requests)} requests`,
+      `${thousands(s.calls)} calls`,
+      `${bytes(s.bytes)} in`,
+      ...trouble,
+    ].join(p.dim(" · ")),
+  );
+  const max = status.rate();
+  const atLimit = max > 0 && recent.callsPerSecond >= 0.9 * max;
+  label(
+    "",
+    `${thousands(recent.callsPerSecond)}/s now of ${thousands(max)} calls/s max${atLimit ? p.yellow(" · at the limit: more concurrency won't help") : ""}`,
+  );
+  const minute = [
+    ["throttled", recent.throttled],
+    ["timeouts", recent.timeouts],
+    ["failed", recent.failed],
+  ] as const;
+  label(
+    "",
+    minute.every(([, n]) => n === 0)
+      ? p.dim("last minute: no throttling, timeouts or failed requests")
+      : `last minute: ${minute.map(([k, n]) => (n > 0 ? p.yellow(`${thousands(n)} ${k}`) : p.dim(`0 ${k}`))).join(p.dim(" · "))}`,
+  );
+  const methods = Object.entries(s.methods).sort((a, b) => b[1] - a[1]);
+  if (methods.length > 0) {
+    const shown = methods
+      .slice(0, 3)
+      .map(([m, n]) => `${m.replace(/^starknet_/, "")} ${compact(n)}`);
+    label(
+      "",
+      p.dim([...shown, ...(methods.length > 3 ? [`+${methods.length - 3} more`] : [])].join(" · ")),
+    );
+  }
+}
+
+/** Events served from the cache, and contract reads. */
+function reads({ label }: Box, status: Status) {
   if (status.cache !== undefined && status.cache.cachedEvents + status.cache.fetchedEvents > 0) {
     label(
       "cache",
@@ -319,35 +370,35 @@ export function render(
       `${thousands(status.calls.calls + status.calls.cached)} contract reads · ${thousands(status.calls.cached)} cached`,
     );
   }
-  if (status.debug) {
-    line();
-    line(p.dim("DEBUG"));
-    const g = status.fetcher?.();
-    if (g !== undefined) {
-      label(
-        "buffer",
-        `${compact(g.buffered)} / ${compact(g.maxBuffered)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`,
-      );
-      label(
-        "windows",
-        `${g.running} running · ${g.paused} paused · ${g.done} done, not read · ${g.idleWorkers} idle workers ${p.dim(`of ${g.windows}`)}`,
-      );
-    }
-    label(
-      "waiting",
-      `last 5 s: ${Math.round(recent.waitingEvents * 100)}% for events · ${Math.round(recent.waitingExtras * 100)}% for headers/txs`,
-    );
-    if (recent.lag !== undefined) {
-      const lag = `event loop delay ${micros(recent.lag.p50)} median · ${micros(recent.lag.max)} max`;
-      label("loop", recent.lag.max > 100 ? p.yellow(`${lag} · the main thread is busy`) : lag);
-    }
-  }
-  if (status.api !== "")
-    label(
-      "api",
-      `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · POST /sql · GET /live /status")}`,
-    );
+}
 
+/** `--debug`: the fetcher's memory and windows, what the indexer waits on, and the event loop. */
+function debug({ p, line, label }: Box, status: Status, recent: Recent) {
+  line();
+  line(p.dim("DEBUG"));
+  const g = status.fetcher?.();
+  if (g !== undefined) {
+    label(
+      "buffer",
+      `${compact(g.buffered)} / ${compact(g.maxBuffered)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`,
+    );
+    label(
+      "windows",
+      `${g.running} running · ${g.paused} paused · ${g.done} done, not read · ${g.idleWorkers} idle workers ${p.dim(`of ${g.windows}`)}`,
+    );
+  }
+  label(
+    "waiting",
+    `last 5 s: ${Math.round(recent.waitingEvents * 100)}% for events · ${Math.round(recent.waitingExtras * 100)}% for headers/txs`,
+  );
+  if (recent.lag !== undefined) {
+    const lag = `event loop delay ${micros(recent.lag.p50)} median · ${micros(recent.lag.max)} max`;
+    label("loop", recent.lag.max > 100 ? p.yellow(`${lag} · the main thread is busy`) : lag);
+  }
+}
+
+/** The border around `body`, with the title and the phase's badge on top. */
+function frame(p: Paint, inner: number, status: Status, body: string[]): string[] {
   const title = ` ${p.bold("kasbah")}${status.schema === "" ? "" : ` ${p.dim("·")} ${status.schema}`} `;
   const badge = ` ${p.badge(status.phase)} `;
   const top = `${p.dim("╭─")}${title}${p.dim("─".repeat(Math.max(1, inner + 2 - 1 - visible(title) - visible(badge) - 1)))}${badge}${p.dim("─╮")}`;

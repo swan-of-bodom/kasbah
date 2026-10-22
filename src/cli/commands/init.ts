@@ -307,53 +307,113 @@ function nameOf(abi: Abi): string {
   return last !== undefined && /^[A-Za-z]\w*$/.test(last) ? last : "Contract";
 }
 
+/** How `init` gets an answer: asked in the terminal, or taken from a flag (an error when the flag is missing). */
+type Asking = { ui: Prompt; ask: boolean; need: (flag: string) => never };
+
 export async function init(o: InitOptions): Promise<void> {
   const ui = new Prompt();
-  const ask = process.stdin.isTTY === true && o.yes !== true;
-  const need = (flag: string) => {
-    throw new ConfigError(`--${flag} is required without a terminal (or with --yes)`);
+  const a: Asking = {
+    ui,
+    ask: process.stdin.isTTY === true && o.yes !== true,
+    need: (flag) => {
+      throw new ConfigError(`--${flag} is required without a terminal (or with --yes)`);
+    },
   };
   ui.line(`${ui.bold("kasbah init")}  ${ui.dim("a new indexer for one Starknet contract")}`);
   ui.line();
 
-  const dir = o.dir ?? (ask ? await ui.text("Directory", { initial: "my-indexer" }) : "my-indexer");
+  const dir =
+    o.dir ?? (a.ask ? await ui.text("Directory", { initial: "my-indexer" }) : "my-indexer");
   const target = resolve(dir);
   if (existsSync(target) && readdirSync(target).length > 0)
     throw new ConfigError(`${target} is not empty`);
+  const { rpc, client } = await askRpc(a, o);
+  const { address, abi } = await askContract(a, o, client);
+  const name =
+    o.name ??
+    (a.ask
+      ? await ui.text("Name in the app", {
+          initial: nameOf(abi),
+          hint: "handlers are <name>:<Event>",
+          check: (v) => (/^[A-Za-z]\w*$/.test(v) ? undefined : "letters, digits and _"),
+        })
+      : nameOf(abi));
+  const events = await askEvents(a, o, abi);
+  const startBlock = await askStart(a, o, client, address);
+  const timestamps =
+    o.timestamps ??
+    (a.ask
+      ? await ui.confirm("Store block timestamps? (one extra call per block with events)", false)
+      : false);
+  const ws =
+    o.ws ??
+    (a.ask
+      ? await ui.confirm("New blocks over a WebSocket? (about a second fresher than polling)", true)
+      : true);
+  const database = await askDatabase(a, o);
 
+  const files = generate({
+    dir: target,
+    rpc,
+    database,
+    name,
+    address,
+    abi,
+    startBlock,
+    events,
+    timestamps,
+    ws,
+    dependency: o.dependency ?? indexerSpec(),
+  });
+  for (const [path, content] of Object.entries(files)) {
+    mkdirSync(dirname(join(target, path)), { recursive: true });
+    writeFileSync(join(target, path), content);
+  }
+  ui.line();
+  ui.line(`${ui.green("✓")} ${ui.bold(target)}`);
+  for (const path of Object.keys(files))
+    ui.line(
+      `  ${path}${path === ".env" ? ui.dim("  (the RPC URL and database: kept out of git)") : ""}`,
+    );
+  ui.line();
+  await nextSteps(a, dir, target, startBlock);
+}
+
+/** The RPC URL, asked again until the endpoint answers. */
+async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
   let rpc = o.rpc ?? (ask ? undefined : (process.env.KASBAH_RPC_URL ?? need("rpc")));
-  let client: RpcClient;
   for (;;) {
     rpc ??= await ui.text("Starknet RPC URL", {
       initial: process.env.KASBAH_RPC_URL,
       hint: "spec 0.10 (pathfinder or juno), e.g. https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<key>",
       check: (v) => (/^https?:\/\//.test(v) ? undefined : "an http(s) URL"),
     });
-    client = new RpcClient(rpc, { maxAttempts: 2 });
+    const client = new RpcClient(rpc, { maxAttempts: 2 });
     try {
-      const c = client;
       await ui.step(
         "Connecting",
-        async () => ({ e: await probe(c), tip: await blockNumber(c) }),
+        async () => ({ e: await probe(client), tip: await blockNumber(client) }),
         ({ e, tip }) =>
           `${e.node}${e.nodeVersion === undefined ? "" : ` ${e.nodeVersion}`}, spec ${e.spec}, tip ${tip.toLocaleString("en")}`,
       );
-      break;
+      return { rpc, client };
     } catch (e) {
       if (!ask) throw e;
       rpc = undefined;
     }
   }
+}
 
+/** The contract's address (canonical) and ABI, asked again until its class declares events. */
+async function askContract({ ui, ask, need }: Asking, o: InitOptions, client: RpcClient) {
   let address = o.address ?? (ask ? undefined : need("address"));
-  let abi: Abi;
   for (;;) {
     address ??= await ui.text("Contract address", {
       check: (v) => (/^0x[0-9a-fA-F]{1,64}$/.test(v) ? undefined : "a 0x… felt"),
     });
     try {
       const a = canonical(address);
-      abi = await ui.step(
+      const abi = await ui.step(
         "Reading its class",
         async () => {
           const hash = await client.request<string>("starknet_getClassHashAt", {
@@ -372,48 +432,46 @@ export async function init(o: InitOptions): Promise<void> {
         throw new ConfigError(
           "its class declares no events (a Cairo 0 proxy? give the implementation's address)",
         );
-      break;
+      return { address: a, abi };
     } catch (e) {
       if (!ask) throw e;
       address = undefined;
     }
   }
+}
 
-  const name =
-    o.name ??
-    (ask
-      ? await ui.text("Name in the app", {
-          initial: nameOf(abi),
-          hint: "handlers are <name>:<Event>",
-          check: (v) => (/^[A-Za-z]\w*$/.test(v) ? undefined : "letters, digits and _"),
-        })
-      : nameOf(abi));
+async function askEvents({ ui, ask }: Asking, o: InitOptions, abi: Abi): Promise<string[]> {
   const all = abiEvents(abi).map((e) => e.name);
-  let events: string[];
-  if (o.events !== undefined) {
-    events = o.events.split(",").map((e) => e.trim());
-    for (const e of events)
-      if (!all.includes(e))
-        throw new ConfigError(`the ABI has no event ${e} (it has ${all.join(", ")})`);
-  } else
-    events = ask
+  if (o.events === undefined)
+    return ask
       ? await ui.multi(
           "Events to index",
           all.map((e) => ({ label: e, value: e })),
         )
       : all;
+  const events = o.events.split(",").map((e) => e.trim());
+  for (const e of events)
+    if (!all.includes(e))
+      throw new ConfigError(`the ABI has no event ${e} (it has ${all.join(", ")})`);
+  return events;
+}
 
+/** The start block: the contract's deployment block unless told otherwise. */
+async function askStart(
+  { ui, ask }: Asking,
+  o: InitOptions,
+  client: RpcClient,
+  address: string,
+): Promise<number> {
   const tip = await blockNumber(client);
   let deployed = 0;
-  if (o.start === undefined) {
-    const a = canonical(address);
+  if (o.start === undefined)
     deployed = await ui.step(
       "Finding its deployment block",
-      async () => (await classHistory(client, a, 0, tip))[0]?.from ?? 0,
+      async () => (await classHistory(client, address, 0, tip))[0]?.from ?? 0,
       (b) => `block ${b.toLocaleString("en")}`,
     );
-  }
-  const startBlock = Number(
+  return Number(
     o.start ??
       (ask
         ? await ui.text("Start block", {
@@ -424,17 +482,10 @@ export async function init(o: InitOptions): Promise<void> {
           })
         : deployed),
   );
-  const timestamps =
-    o.timestamps ??
-    (ask
-      ? await ui.confirm("Store block timestamps? (one extra call per block with events)", false)
-      : false);
-  const ws =
-    o.ws ??
-    (ask
-      ? await ui.confirm("New blocks over a WebSocket? (about a second fresher than polling)", true)
-      : true);
+}
 
+/** A Postgres URL, tried once; none means `dev` runs Postgres in a container. */
+async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string | undefined> {
   let database =
     o.database === "" ? undefined : (o.database ?? (ask ? undefined : process.env.DATABASE_URL));
   for (; ask || database !== undefined; ) {
@@ -470,32 +521,11 @@ export async function init(o: InitOptions): Promise<void> {
       await pool.end();
     }
   }
+  return database;
+}
 
-  const files = generate({
-    dir: target,
-    rpc,
-    database,
-    name,
-    address: canonical(address),
-    abi,
-    startBlock,
-    events,
-    timestamps,
-    ws,
-    dependency: o.dependency ?? indexerSpec(),
-  });
-  for (const [path, content] of Object.entries(files)) {
-    mkdirSync(dirname(join(target, path)), { recursive: true });
-    writeFileSync(join(target, path), content);
-  }
-  ui.line();
-  ui.line(`${ui.green("✓")} ${ui.bold(target)}`);
-  for (const path of Object.keys(files))
-    ui.line(
-      `  ${path}${path === ".env" ? ui.dim("  (the RPC URL and database: kept out of git)") : ""}`,
-    );
-  ui.line();
-
+/** Installs the dependencies if asked to, and says how to start. */
+async function nextSteps({ ui, ask }: Asking, dir: string, target: string, startBlock: number) {
   const pm = process.env.npm_config_user_agent?.startsWith("npm") ? "npm" : "pnpm";
   if (ask && (await ui.confirm(`Install the dependencies now (${pm} install)?`))) {
     const r = spawnSync(pm, ["install"], { cwd: target, stdio: "inherit" });

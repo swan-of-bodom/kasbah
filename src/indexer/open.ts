@@ -74,6 +74,9 @@ type Stored = {
   unkeyed: Set<string>;
 };
 
+/** Connections the indexer's pool opens: the store's writes, the cache's, and startup reads. */
+const POOL_SIZE = 8;
+
 /**
  * Validates the config, opens the database (refusing or dropping another build), the API, the RPC and the
  * cache, reads every class, then undoes a reorg that happened while stopped and watches the stored children.
@@ -90,59 +93,14 @@ export async function open(
   const { schema } = config;
   status.schema = schema;
   const blockSources = validate(config, handlers);
-  const handledOf = (name: string) =>
-    new Set(
-      [...handlers.keys()]
-        .filter((h) => h.startsWith(`${name}:`))
-        .map((h) => h.slice(name.length + 1)),
-    );
-  const contracts = Object.entries(config.contracts).map(([name, c]) => ({
-    name,
-    abi: c.abi,
-    startBlock: c.startBlock,
-    handled: handledOf(name),
-    upgrades: upgradeEventsOf(name, c.abi, c.upgradeEvents),
-  }));
   const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
   // Built now, so an index kasbah can't create is refused before the backfill, not after it.
   const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
-  const pool = new pg.Pool({
-    connectionString: config.database,
-    max: 8,
-    options: `-c search_path=${quote(schema)}`,
-  });
-  closers.push(() => pool.end());
   const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
-  let reset = options.reset === true;
-  if (!reset && options.onBuildChange === "reset") {
-    const exists =
-      (await pool.query(`SELECT to_regclass($1) AS r`, [`${quote(schema)}._kasbah_meta`])).rows[0]
-        .r !== null;
-    const build = exists
-      ? (await pool.query(`SELECT value FROM ${quote(schema)}._kasbah_meta WHERE key = 'build'`))
-          .rows[0]?.value
-      : undefined;
-    if (build !== undefined && build !== buildId) {
-      status.note({ kind: "rebuild" });
-      reset = true;
-    }
-  }
-  if (reset) await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${quote(schema)}`);
+  const pool = await openSchema(config, options, status, buildId, closers);
   const stored = await startup(pool, schema, tables, buildId);
+  if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
 
-  if (config.api !== undefined) {
-    const api = await Api.start({
-      ...config.api,
-      database: config.database,
-      schema,
-      tables: config.tables,
-      routes,
-    });
-    closers.push(() => api.close());
-    status.api = apiUrl(config.api, api.port);
-    status.note({ kind: "api", url: status.api });
-  }
   const store = new Store(drizzle(pool), tables, {
     complete: stored.checkpoint === undefined,
     unkeyed: stored.unkeyed,
@@ -162,7 +120,7 @@ export async function open(
   const cache = config.cache
     ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", []), config.cache)
     : undefined;
-  const sources = new Sources(rpc, contracts, (n) => status.note(n));
+  const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n));
   const factories = await factoriesOf(config, rpc, sources, plan.classTo);
   await Promise.all(
     Object.entries(config.contracts).flatMap(([name, c]) =>
@@ -171,23 +129,7 @@ export async function open(
         : [sources.add(name, c.address, c.startBlock, plan.classTo, false)],
     ),
   );
-  Object.assign(status, {
-    endpoint: `${endpoint.node} ${endpoint.spec}`,
-    tip,
-    factories: factories.length,
-    rpc: rpc.stats,
-    rate: () => rpc.rate,
-    cache: cache?.stats,
-  });
-  status.note({
-    kind: "endpoint",
-    node: endpoint.node,
-    spec: endpoint.spec,
-    tip,
-    contracts: sources.addresses.length + stored.children.length,
-    factories: factories.length,
-    blockSources: blockSources.length,
-  });
+  reportEndpoint(status, { endpoint, tip, rpc, cache, sources, factories, blockSources, stored });
 
   const watermark =
     factories.length === 0
@@ -207,10 +149,6 @@ export async function open(
     },
     { checkpoint: stored.checkpoint, watermark, known: stored.known },
   );
-  const anyInclude = Object.values(config.contracts).some(
-    (c) => c.include?.transaction || c.include?.receipt,
-  );
-  const anyBlock = Object.values(config.contracts).some((c) => c.include?.block);
   const partial = {
     config,
     handlers,
@@ -231,8 +169,10 @@ export async function open(
     plan,
     position,
     final: plan.backfillTo,
-    anyInclude,
-    anyBlock,
+    anyInclude: Object.values(config.contracts).some(
+      (c) => c.include?.transaction || c.include?.receipt,
+    ),
+    anyBlock: Object.values(config.contracts).some((c) => c.include?.block),
   };
   const client = new CallClient(rpc, { isFinal: (b) => b <= partial.final, cache });
   const run: Run = Object.assign(partial, { client, context: { db: store.db, client } });
@@ -241,6 +181,106 @@ export async function open(
   status.watched = () => ({ contracts: sources.addresses.length, children: sources.children });
   await resume(run, stored.children);
   return run;
+}
+
+/** The pool on the app's schema, after dropping it for `reset`, or for a changed build with `onBuildChange: "reset"`. */
+async function openSchema(
+  config: Resolved,
+  options: RunOptions,
+  status: Status,
+  buildId: string,
+  closers: (() => unknown)[],
+): Promise<pg.Pool> {
+  const schema = quote(config.schema);
+  const pool = new pg.Pool({
+    connectionString: config.database,
+    max: POOL_SIZE,
+    options: `-c search_path=${schema}`,
+  });
+  closers.push(() => pool.end());
+  let reset = options.reset === true;
+  if (!reset && options.onBuildChange === "reset") {
+    const exists =
+      (await pool.query(`SELECT to_regclass($1) AS r`, [`${schema}._kasbah_meta`])).rows[0].r !==
+      null;
+    const build = exists
+      ? (await pool.query(`SELECT value FROM ${schema}._kasbah_meta WHERE key = 'build'`)).rows[0]
+          ?.value
+      : undefined;
+    if (build !== undefined && build !== buildId) {
+      status.note({ kind: "rebuild" });
+      reset = true;
+    }
+  }
+  if (reset) await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
+  return pool;
+}
+
+async function startApi(
+  config: Resolved,
+  api: NonNullable<Resolved["api"]>,
+  routes: readonly Route[],
+  status: Status,
+  closers: (() => unknown)[],
+): Promise<void> {
+  const server = await Api.start({
+    ...api,
+    database: config.database,
+    schema: config.schema,
+    tables: config.tables,
+    routes,
+  });
+  closers.push(() => server.close());
+  status.api = apiUrl(api, server.port);
+  status.note({ kind: "api", url: status.api });
+}
+
+/** Each configured contract with the events it has handlers for and the events that upgrade it. */
+function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>) {
+  return Object.entries(config.contracts).map(([name, c]) => ({
+    name,
+    abi: c.abi,
+    startBlock: c.startBlock,
+    handled: new Set(
+      [...handlers.keys()]
+        .filter((h) => h.startsWith(`${name}:`))
+        .map((h) => h.slice(name.length + 1)),
+    ),
+    upgrades: upgradeEventsOf(name, c.abi, c.upgradeEvents),
+  }));
+}
+
+function reportEndpoint(
+  status: Status,
+  r: {
+    endpoint: Endpoint;
+    tip: number;
+    rpc: RpcClient;
+    cache: EventCache | undefined;
+    sources: Sources;
+    factories: Factory[];
+    blockSources: BlockSource[];
+    stored: Stored;
+  },
+): void {
+  Object.assign(status, {
+    endpoint: `${r.endpoint.node} ${r.endpoint.spec}`,
+    tip: r.tip,
+    factories: r.factories.length,
+    rpc: r.rpc.stats,
+    rate: () => r.rpc.rate,
+    cache: r.cache?.stats,
+  });
+  status.note({
+    kind: "endpoint",
+    node: r.endpoint.node,
+    spec: r.endpoint.spec,
+    tip: r.tip,
+    contracts: r.sources.addresses.length + r.stored.children.length,
+    factories: r.factories.length,
+    blockSources: r.blockSources.length,
+  });
 }
 
 const META_SQL = [
