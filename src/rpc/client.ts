@@ -42,6 +42,8 @@ export type RpcClientOptions = {
   initialRate?: number;
   maxRate?: number;
   maxAttempts?: number;
+  /** The transport, for tests: a fake node with no sockets, under fake timers. */
+  fetch?: typeof fetch;
 };
 
 /** A request with no answer by then is a timeout, retried like a transport failure. */
@@ -94,6 +96,7 @@ export class RpcClient {
     methods: {},
   };
   readonly #url: string;
+  readonly #fetch: typeof fetch;
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
   readonly #maxRate: number;
@@ -116,6 +119,7 @@ export class RpcClient {
 
   constructor(url: string, options: RpcClientOptions = {}) {
     this.#url = url;
+    this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.#maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
     this.#rate = options.initialRate ?? INITIAL_RATE;
@@ -244,7 +248,10 @@ export class RpcClient {
     this.#pausedUntil = now + this.#pauseMs;
     this.#tokens = 0;
     this.#refilled = this.#pausedUntil;
-    this.#pauseMs = timeout ? INITIAL_PAUSE_MS : Math.min(MAX_PAUSE_MS, this.#pauseMs * 1.5);
+    // Whole milliseconds: a pause ending mid-millisecond would wake on it again, since Date.now() can't pass it.
+    this.#pauseMs = timeout
+      ? INITIAL_PAUSE_MS
+      : Math.min(MAX_PAUSE_MS, Math.round(this.#pauseMs * 1.5));
   }
 
   /** One HTTP request: per call its result or its `RpcError`. Throws for transport and HTTP errors. */
@@ -260,7 +267,7 @@ export class RpcClient {
     this.stats.requests++;
     this.stats.calls += calls.length;
     for (const c of calls) this.stats.methods[c.method] = (this.stats.methods[c.method] ?? 0) + 1;
-    const res = await fetch(this.#url, {
+    const res = await this.#fetch(this.#url, {
       method: "POST",
       headers: { "content-type": "application/json", "accept-encoding": "zstd, br, gzip" },
       body: JSON.stringify(calls.length === 1 ? body[0] : body),

@@ -7,6 +7,7 @@ import { liveChannel } from "../../src/api/server.ts";
 import { bignum, kasbah, Status } from "../../src/index.ts";
 import type { EmittedEvent } from "../../src/rpc/methods.ts";
 import { header } from "../fixtures/header.ts";
+import { faultyProxy } from "./faulty.ts";
 
 const url = process.env.DATABASE_URL;
 const schema = "kasbah_test_app";
@@ -207,9 +208,9 @@ afterAll(async () => {
   await p.end();
 });
 
-function app(s = schema) {
+function app(s = schema, rpc = rpcUrl) {
   const a = kasbah({
-    rpc: rpcUrl,
+    rpc,
     database: url!,
     schema: s,
     contracts: { C: { abi: classB, address: ADDRESS, startBlock: DEPLOYED } },
@@ -236,6 +237,21 @@ function app(s = schema) {
       .set((r) => ({ total: r.total * 2n, events: r.events + 1 }));
   });
   return a;
+}
+
+/** The app's totals over the chain as it is now, through block `to`. */
+function expectedTotals(to: number) {
+  let total = 0n;
+  let events = 0;
+  for (const b of node.blocks.slice(0, to + 1)) {
+    for (const e of b.events) {
+      if (e.keys[0] === selector("Upgraded")) continue;
+      if (e.keys[0] === selector("Counted")) total += BigInt(e.data[0]!);
+      else total *= 2n;
+      events++;
+    }
+  }
+  return { total: total.toString(), events };
 }
 
 async function checkpoint(): Promise<number | undefined> {
@@ -301,16 +317,7 @@ test.skipIf(url === undefined)(
     stop.abort();
     await run;
 
-    let total = 0n;
-    let events = 0;
-    for (const b of node.blocks) {
-      for (const e of b.events) {
-        if (e.keys[0] === selector("Upgraded")) continue;
-        if (e.keys[0] === selector("Counted")) total += BigInt(e.data[0]!);
-        else total *= 2n;
-        events++;
-      }
-    }
+    const { total, events } = expectedTotals(node.blocks.length - 1);
     const p = new pg.Pool({ connectionString: url, max: 1 });
     const { rows } = await p.query(`SELECT total::text, events FROM ${schema}.totals`);
     const logged = (
@@ -327,7 +334,7 @@ test.skipIf(url === undefined)(
       )
     ).rows.map((r) => r.indexname);
     await p.end();
-    expect(rows).toEqual([{ total: total.toString(), events }]);
+    expect(rows).toEqual([{ total, events }]);
     expect(logged).toEqual({ n: events, ids: events });
     expect(keys).toEqual(expect.arrayContaining([`${schema}.log`, `${schema}.totals`]));
     expect(indexes).toEqual(["log_block_index", "log_pkey"]);
@@ -373,3 +380,30 @@ test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", 
     await p.end();
   }
 });
+
+test.skipIf(url === undefined)(
+  "through a flaky endpoint (throttles, 503s, dropped connections, cut-off and partial answers) the state is the chain's",
+  async () => {
+    const s = "kasbah_test_app_faults";
+    const proxy = await faultyProxy(rpcUrl, { share: 0.2 });
+    const status = new Status();
+    // Through the edge of the reorg window: the chain is past the upgrade once the first test has run.
+    const to = node.blocks.length - 1 - 16;
+    try {
+      await app(s, proxy.url).run({ reset: true, to, status });
+      const p = new pg.Pool({ connectionString: url, max: 1 });
+      const { rows } = await p.query(`SELECT total::text, events FROM ${s}.totals`);
+      await p.end();
+      expect(rows).toEqual([expectedTotals(to)]);
+      expect([status.phase, status.checkpoint]).toEqual(["done", to]);
+      for (const n of Object.values(proxy.injected)) expect(n).toBeGreaterThan(0);
+      expect(status.rpc!.retries).toBeGreaterThan(0);
+    } finally {
+      proxy.close();
+      const p = new pg.Pool({ connectionString: url, max: 1 });
+      await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+      await p.end();
+    }
+  },
+  60_000,
+);

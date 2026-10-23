@@ -49,5 +49,9 @@ At 0.x, a minor version may break any of these (README, "License and versions").
 - `test/e2e/`: whole runs against fake nodes (a small HTTP server in each test file), the CLI, and the packed
   package.
 - Fakes are written by hand to the real interface, never with module mocking.
+- Timing (backoff, pacing, pauses) is tested under fake timers, with the node passed in as `RpcClientOptions.fetch`
+  (`test/unit/timing.test.ts`), never by waiting real seconds.
+- Recovery from a bad endpoint is tested through `test/e2e/faulty.ts`, a seeded proxy that throttles, fails,
+  drops and cuts off a share of requests: the run must end on the same state as the chain.
 - Name tests as sentences that state what must hold.
 - Never call a paid RPC from tests; recorded ABIs and responses live in `test/fixtures/`.
