@@ -4,6 +4,7 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `context.client.read` is now `readContract` (and `ReadParameters` is `ReadContractParameters`), as in viem.
 - Config defaults are applied in one place (`DEFAULTS` in `src/config/resolve.ts`); behavior is unchanged.
 - Config mistakes print as one line, without a stack; other errors print with their cause.
 - A `--to` run that reaches its end stores the phase `done`, so `/ready` answers ready.

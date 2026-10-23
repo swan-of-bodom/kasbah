@@ -142,7 +142,7 @@ test("reads are pinned to the indexed block, final ones cached, recent ones pinn
       extension: "0x0",
     } as const;
     const read = (block?: number) =>
-      client.read({
+      client.readContract({
         abi: ekubo,
         address: "0xe",
         functionName: "get_pool_liquidity",
@@ -183,11 +183,16 @@ test("reads are pinned to the indexed block, final ones cached, recent ones pinn
 
 // Compile-time only: arguments are checked against the ABI.
 async function _typed(client: CallClient) {
-  // @ts-expect-error pool_key is required
-  await client.read({ abi: ekubo, address: "0xe", functionName: "get_pool_liquidity", args: {} });
+  await client.readContract({
+    abi: ekubo,
+    address: "0xe",
+    functionName: "get_pool_liquidity",
+    // @ts-expect-error pool_key is required
+    args: {},
+  });
   // @ts-expect-error no such function
-  await client.read({ abi: ekubo, address: "0xe", functionName: "nope" });
-  const r: { reserve0: bigint } = await client.read({
+  await client.readContract({ abi: ekubo, address: "0xe", functionName: "nope" });
+  const r: { reserve0: bigint } = await client.readContract({
     abi: cairo0Pair,
     address: "0xe",
     functionName: "getReserves",

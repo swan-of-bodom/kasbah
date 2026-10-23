@@ -6,7 +6,7 @@ import type { EventCache } from "../db/cache.ts";
 import { type RpcClient, RpcError } from "../rpc/client.ts";
 import { canonical, type Felt, felt, unpadded } from "../types/felt.ts";
 
-export type ReadParameters<TAbi extends Abi, N extends FunctionName<TAbi>> = {
+export type ReadContractParameters<TAbi extends Abi, N extends FunctionName<TAbi>> = {
   abi: TAbi;
   address: string;
   functionName: N;
@@ -26,8 +26,8 @@ export type CallParameters = {
 
 /** Contract reads for handlers, pinned to the block being indexed. */
 export type Client = {
-  read<const TAbi extends Abi, const N extends FunctionName<TAbi>>(
-    p: ReadParameters<TAbi, N>,
+  readContract<const TAbi extends Abi, const N extends FunctionName<TAbi>>(
+    p: ReadContractParameters<TAbi, N>,
   ): Promise<FunctionResult<TAbi, N>>;
   /** Raw `starknet_call`: calldata in, result felts out. */
   call(p: CallParameters): Promise<Felt[]>;
@@ -60,8 +60,8 @@ export class CallClient implements Client {
     this.#max = options.maxEntries ?? MAX_ENTRIES;
   }
 
-  read = async <const TAbi extends Abi, const N extends FunctionName<TAbi>>(
-    p: ReadParameters<TAbi, N>,
+  readContract = async <const TAbi extends Abi, const N extends FunctionName<TAbi>>(
+    p: ReadContractParameters<TAbi, N>,
   ): Promise<FunctionResult<TAbi, N>> => {
     const f = compileFunction(p.abi, p.functionName);
     const felts = await this.#call(p.address, f.selector, f.encode(p.args), p.block, f.name);

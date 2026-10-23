@@ -439,7 +439,7 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 **Call cache** (`context.client`, the readContract equivalent): key = `(block, address, selector, calldata)`,
 immutable once the block is final. Ponder never prunes its `eth_call` cache, which is where your 38 GB came from.
 Built (`src/indexer/client.ts`, `src/abi/functions.ts`):
-- `context.client.read({ abi, address, functionName, args, block? })`, typed from the ABI (arguments as an object
+- `context.client.readContract({ abi, address, functionName, args, block? })`, typed from the ABI (arguments as an object
   keyed by input name; result: one Cairo 1 output as its value, several as a tuple, Cairo 0 named outputs as an
   object). `client.call` for raw calldata. Default block: the one being indexed, state at its end.
 - Final blocks: cached in memory (100k results, oldest dropped) and, with `cache: true`, in the cache schema's

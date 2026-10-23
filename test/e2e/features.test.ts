@@ -381,7 +381,7 @@ function app(
       .set((r) => ({ total: r.total * 2n, events: r.events + 1 }));
   });
   a.on("Every10:block", async ({ event, context }) => {
-    const last = await context.client.read({
+    const last = await context.client.readContract({
       abi: factoryAbi,
       address: FACTORY,
       functionName: "last_child",
