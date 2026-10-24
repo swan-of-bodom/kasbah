@@ -8,6 +8,7 @@ import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
 import type { BlockConfig, RunOptions } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
+import { checkNetwork } from "../config/network.ts";
 import type { Resolved } from "../config/resolve.ts";
 import { EventCache } from "../db/cache.ts";
 import { type Db, Store } from "../db/store.ts";
@@ -97,6 +98,14 @@ export async function open(
   // Built now, so an index kasbah can't create is refused before the backfill, not after it.
   const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
   const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
+  // The RPC first: a wrong one (another network) is refused before the schema is touched.
+  const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency });
+  const endpoint = await probe(rpc);
+  const chainId =
+    config.network !== undefined || config.cache !== undefined
+      ? await rpc.request<string>("starknet_chainId", [])
+      : undefined;
+  if (config.network !== undefined) checkNetwork(config.network, chainId!);
   const pool = await openSchema(config, options, status, buildId, closers);
   const stored = await startup(pool, schema, tables, buildId);
   if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
@@ -105,8 +114,6 @@ export async function open(
     complete: stored.checkpoint === undefined,
     unkeyed: stored.unkeyed,
   });
-  const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency });
-  const endpoint = await probe(rpc);
   const tip = await blockNumber(rpc);
   const plan = planOf(config, options.to, tip);
   if (plan.clamped && options.to !== undefined)
@@ -117,9 +124,7 @@ export async function open(
       tip,
       window: plan.window,
     });
-  const cache = config.cache
-    ? await EventCache.open(pool, await rpc.request<string>("starknet_chainId", []), config.cache)
-    : undefined;
+  const cache = config.cache ? await EventCache.open(pool, chainId!, config.cache) : undefined;
   const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n));
   const factories = await factoriesOf(config, rpc, sources, plan.classTo);
   await Promise.all(

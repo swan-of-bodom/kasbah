@@ -24,6 +24,9 @@ const USAGE = `usage:
                                         --reset drops what it stored and starts over (pnpm fresh)
   kasbah clean [app.ts] [--yes]  deletes what the app stored: the dev container and its volume, or with
                                         DATABASE_URL only the app's schema (asks first; the cache stays)
+  --schema <name>                       Postgres schema for start, dev, clean and serve (DATABASE_SCHEMA); default:
+                                        the config's, else the project directory's name
+  --port <n> / --hostname <host>        where the API listens (PORT / API_HOST; default 42069 on localhost)
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
   --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
@@ -58,6 +61,9 @@ const { positionals, values } = parseArgs({
     debug: { type: "boolean" },
     ws: { type: "boolean" },
     database: { type: "string" },
+    schema: { type: "string" },
+    port: { type: "string" },
+    hostname: { type: "string" },
     events: { type: "boolean" },
     calls: { type: "boolean" },
     chain: { type: "string" },
@@ -73,6 +79,12 @@ const { positionals, values } = parseArgs({
   },
 });
 const [command, arg] = positionals;
+// As environment variables, so `dev`'s child and `resolveConfig` read them like a deployment's.
+if (command !== "init" && command !== "cache") {
+  if (values.schema !== undefined) process.env.DATABASE_SCHEMA = values.schema;
+  if (values.port !== undefined) process.env.PORT = values.port;
+  if (values.hostname !== undefined) process.env.API_HOST = values.hostname;
+}
 try {
   if (values.help || command === undefined) console.log(USAGE);
   else if (command === "init") await init({ ...values, dir: arg, events: values.handle });

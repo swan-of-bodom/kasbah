@@ -22,7 +22,7 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/utils/`: small helpers used across the folders (`sleep`, `chunks`, `errorCode`, `secondsSince`).
 - `src/db/`: the handler-facing store (in memory, flushed with `COPY`), undo journal for the reorg window, and the
   raw-event, header, transaction and call cache (`cache.ts`).
-- `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (config `api: { port }`).
+- `src/api/`: read API: `POST /sql`, `POST /graphql`, `GET /status`, `GET /live` (on in a project, `api: false` turns it off).
 - `src/cli/`: the `kasbah` command: `main.ts` parses arguments, `commands/` has one file per command (`init`
   writes a new project from a contract's ABI), `project.ts` finds and loads the app, `devdb.ts` is the dev database,
   `ui/` the terminal screens (progress dashboard, questions).
@@ -44,10 +44,26 @@ pnpm clean                             # deletes what it stored: the dev contain
                                        # DATABASE_URL only the app's schema (asks; --yes to skip); the cache stays
 ```
 
-A project is laid out like Ponder's: `kasbah.config.ts` (`export default kasbah({ … })`: RPC, database,
-contracts, API), `kasbah.schema.ts` (the tables), `abis/<Contract>.ts`, `src/index.ts` (handlers) and `src/api/index.ts`
+A project is laid out like Ponder's: `kasbah.config.ts` (`export default kasbah({ … })`: network, RPC,
+contracts), `kasbah.schema.ts` (the tables), `abis/<Contract>.ts`, `src/index.ts` (handlers) and `src/api/index.ts`
 (routes), both starting with `import app from "../kasbah.config.ts"`, so they're typed from the config without any
-code generation. `kasbah dev|start|serve` with no file runs the project in the working directory; with a file,
+code generation.
+
+```ts
+export default kasbah({
+  network: "mainnet",                         // refuses an RPC on another chain; without it, the RPC's chain
+  rpc: process.env.KASBAH_RPC_URL!,
+  contracts: { Core: { abi: coreAbi, address: "0x…", startBlock: 165387 } },
+  cache: true,
+});
+```
+
+What the config leaves out, the project gives: the tables are what `kasbah.schema.ts` exports, the database is
+`DATABASE_URL`, the Postgres schema is the directory's name (`my-indexer` → `my_indexer`), and the API is on, at
+port 42069. `--schema`/`DATABASE_SCHEMA`, `--port`/`PORT` and `--hostname`/`API_HOST` win over the config, so one
+config deploys anywhere (hosts like Railway assign `PORT`); `schema`, `tables`, `database` and `api` in the config
+still work, and `api: false` turns the API off. From code (`kasbah()` without the CLI) nothing is implied:
+pass `tables`, and `api` to serve it. `kasbah dev|start|serve` with no file runs the project in the working directory; with a file,
 a single-file app (`examples/jediswap/index.ts`).
 
 Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the app (`postgres:17`, pulled the

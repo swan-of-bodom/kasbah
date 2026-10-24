@@ -4,6 +4,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A project's config needs only `rpc` and `contracts`: the tables come from `kasbah.schema.ts`, the database from
+  `DATABASE_URL`, the schema from the directory's name, and the API is on (42069). `--schema`, `--port` and
+  `--hostname` (`DATABASE_SCHEMA`, `PORT`, `API_HOST`) win over the config. `api: false` turns the API off.
+- `network: "mainnet" | "sepolia"` refuses an RPC on another chain, before the schema is touched. `init` writes it.
+- `init` no longer writes `schema`, `tables`, `api` or `database`; configs that have them work as before.
 - `context.client.readContracts`: several reads in one JSON-RPC batch, shaped like viem's `multicall`.
 - `context.client.read` is now `readContract` (and `ReadParameters` is `ReadContractParameters`), as in viem.
 - Config defaults are applied in one place (`DEFAULTS` in `src/config/resolve.ts`); behavior is unchanged.

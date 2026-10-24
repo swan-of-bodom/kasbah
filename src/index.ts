@@ -26,8 +26,10 @@ export {
   type IndexedEvent,
   kasbah,
   type RunOptions,
+  type Tables,
 } from "./config/app.ts";
 export { ConfigError } from "./config/errors.ts";
+export type { Network } from "./config/network.ts";
 export { bignum, hex } from "./config/schema.ts";
 export type { Db } from "./db/store.ts";
 export type {

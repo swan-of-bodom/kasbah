@@ -26,6 +26,7 @@ const abi = [
 const files = generate({
   dir: "/x/pools",
   rpc: "http://rpc",
+  network: "mainnet",
   database: "postgres://db",
   name: "Pool",
   address: "0x1",
@@ -50,7 +51,10 @@ test("the layout: config, schema, ABI, handlers, routes", () => {
   );
   expect(files["kasbah.config.ts"]).toContain(`import poolAbi from "./abis/Pool.ts";`);
   expect(files["kasbah.config.ts"]).toContain("  ws: true,\n");
-  expect(files["kasbah.config.ts"]).toContain(`schema: "pools",`);
+  // What the layout gives (schema from the directory, tables from kasbah.schema.ts, the API on) isn't written.
+  expect(files["kasbah.config.ts"]).toContain(`  network: "mainnet",\n`);
+  for (const gone of ["schema", "tables", "api:", "database"])
+    expect(files["kasbah.config.ts"]).not.toContain(gone);
   expect(files["src/index.ts"]).toContain(`import app from "../kasbah.config.ts";`);
   expect(files["src/api/index.ts"]).toContain(`app.get("/moved/latest"`);
   expect(JSON.parse(files["package.json"]!).scripts).toMatchObject({

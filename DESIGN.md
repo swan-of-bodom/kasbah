@@ -523,6 +523,14 @@ Target size: under 10k lines for v1.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
+Project defaults (`src/cli/project.ts`, `useProject`): loading a project's `kasbah.config.ts`, the
+CLI fills in what the config leaves out before the handlers load: the schema is the directory's name, the tables
+`kasbah.schema.ts`, the API on. Like Ponder, where these come from the layout and flags, not the config.
+Environment variables (`DATABASE_SCHEMA`, `PORT`, `API_HOST`, which the flags set) win over the config, so a deploy
+picks its schema and port without editing code. `kasbah()` from code implies nothing, so a library user or a
+test never opens a port by surprise. `network` is checked against `starknet_chainId` before the schema opens: an
+RPC on the wrong chain must not drop or write anything.
+
 CLI (`src/cli/main.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info|clear`. The app
 module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
 on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the

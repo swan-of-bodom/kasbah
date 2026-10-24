@@ -13,7 +13,7 @@ import strk from "../fixtures/strk.abi.ts";
 
 const config = (reorgWindow?: number): Config => ({
   rpc: "",
-  database: "",
+  database: "postgres://db",
   contracts: { C: { abi: [], address: "0x1", startBlock: 10 } },
   blocks: { B: { interval: 5, startBlock: 7 } },
   tables: {},

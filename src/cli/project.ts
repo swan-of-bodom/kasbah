@@ -1,17 +1,20 @@
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { RunOptions } from "../config/app.ts";
+import type { Project, RunOptions, Tables } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
 
 export type App = {
   run: (o?: RunOptions) => Promise<void>;
   serve: () => Promise<{ url: string; close: () => Promise<void> }>;
   drop: () => Promise<string>;
+  useProject: (p: Project) => void;
 };
 
 export const CONFIG = "kasbah.config.ts";
+/** The project's tables, when the config doesn't pass `tables`. */
+export const SCHEMA = "kasbah.schema.ts";
 /** What a project registers on the config's app, imported after it when present. */
 export const PROJECT_FILES = ["src/index.ts", "src/api/index.ts"];
 
@@ -30,9 +33,16 @@ export async function load(file: string): Promise<App> {
     throw new ConfigError(
       `${file}: the default export must be the app (export default kasbah(config))`,
     );
-  if (file.endsWith(CONFIG))
-    for (const f of PROJECT_FILES.map((f) => join(dirname(resolve(file)), f)))
+  if (file.endsWith(CONFIG)) {
+    const dir = dirname(resolve(file));
+    const schema = join(dir, SCHEMA);
+    const tables = existsSync(schema)
+      ? ((await import(pathToFileURL(schema).href)) as Tables)
+      : undefined;
+    app.useProject({ name: basename(dir), tables });
+    for (const f of PROJECT_FILES.map((f) => join(dir, f)))
       if (existsSync(f)) await import(pathToFileURL(f).href);
+  }
   return app;
 }
 

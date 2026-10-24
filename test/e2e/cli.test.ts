@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
@@ -256,6 +256,57 @@ test.skipIf(!hasRuntime)(
     }
   },
   240_000,
+);
+
+test.skipIf(url === undefined)(
+  "a project's layout gives the schema (its directory), the tables (kasbah.schema.ts) and the API",
+  async () => {
+    const project = join(dir, "layout-app");
+    mkdirSync(join(project, "src"), { recursive: true });
+    writeFileSync(
+      join(project, "kasbah.schema.ts"),
+      `import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { bignum } from ${JSON.stringify(index)};
+export const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull(), n: integer().notNull() });
+`,
+    );
+    writeFileSync(
+      join(project, "kasbah.config.ts"),
+      `import { kasbah } from ${JSON.stringify(index)};
+export default kasbah({ rpc: ${JSON.stringify(rpcUrl)},
+  contracts: { C: { abi: ${JSON.stringify(abi)}, address: "0xc", startBlock: 0 } }, pollMs: 50, reorgWindow: 4 });
+`,
+    );
+    writeFileSync(
+      join(project, "src/index.ts"),
+      `import app from "../kasbah.config.ts";
+import { totals } from "../kasbah.schema.ts";
+app.on("C:Counted", async ({ event, context }) => {
+  await context.db.insert(totals).values({ id: "all", total: event.args.amount, n: 1 }).onConflictDoUpdate((r) => ({ total: r.total + event.args.amount, n: r.n + 1 }));
+});
+`,
+    );
+    const run = cli(
+      "start",
+      join(project, "kasbah.config.ts"),
+      "--to",
+      String(BLOCKS - 1),
+      "--reset",
+      "--port",
+      "0",
+    );
+    expect(await run.exited).toBe(0);
+    expect(run.out.join("")).toMatch(/API on http:\/\/localhost:\d+/);
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      const r = await p.query("SELECT total::text FROM layout_app.totals WHERE id = 'all'");
+      expect(r.rows[0]?.total).toBe(String((36 * 37) / 2));
+      await p.query("DROP SCHEMA layout_app CASCADE");
+    } finally {
+      await p.end();
+    }
+  },
+  60_000,
 );
 
 test.skipIf(url === undefined)(

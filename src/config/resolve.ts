@@ -1,9 +1,12 @@
-import type { BlockConfig, Config } from "./app.ts";
+import type { BlockConfig, Config, Tables } from "./app.ts";
+import { ConfigError } from "./errors.ts";
 
 /** What the config may leave out: each default is applied here and read nowhere else. */
 export const DEFAULTS = {
-  /** Postgres schema for the app's tables and progress. */
+  /** Postgres schema for the app's tables and progress, from code; the CLI defaults to the project's name. */
   schema: "kasbah",
+  /** The API's port. */
+  port: 42069,
   /** Parallel `getEvents` windows, and the RPC client's cap on requests in flight. */
   concurrency: 32,
   /** Blocks behind the tip a reorg can still replace: indexed live, with an undo journal. */
@@ -17,9 +20,22 @@ export const DEFAULTS = {
 /** The config with every default applied: what the indexer, `serve` and `drop` read. */
 export type Resolved = Omit<
   Config,
-  "schema" | "concurrency" | "reorgWindow" | "pollMs" | "ws" | "cache" | "blocks"
+  | "database"
+  | "schema"
+  | "tables"
+  | "api"
+  | "concurrency"
+  | "reorgWindow"
+  | "pollMs"
+  | "ws"
+  | "cache"
+  | "blocks"
 > & {
+  database: string;
   schema: string;
+  tables: Tables;
+  /** None when the API is off. */
+  api: { port: number; host?: string; readDatabase?: string } | undefined;
   concurrency: number;
   reorgWindow: number;
   pollMs: number;
@@ -30,10 +46,29 @@ export type Resolved = Omit<
   blocks: Record<string, BlockConfig>;
 };
 
-export function resolveConfig(config: Config): Resolved {
+/** `DATABASE_SCHEMA`, `PORT` and `API_HOST` win over the config, so one config deploys anywhere. */
+export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.env): Resolved {
+  const database = config.database ?? env.DATABASE_URL;
+  if (database === undefined || database === "")
+    throw new ConfigError("no database: set DATABASE_URL, or `database` in the config");
+  if (config.tables === undefined)
+    throw new ConfigError("no tables: export them from kasbah.schema.ts, or pass `tables`");
+  const port = env.PORT ? Number(env.PORT) : undefined;
+  if (port !== undefined && !Number.isInteger(port))
+    throw new ConfigError(`PORT=${env.PORT} is not a port number`);
   return {
     ...config,
-    schema: config.schema ?? DEFAULTS.schema,
+    database,
+    schema: env.DATABASE_SCHEMA || config.schema || DEFAULTS.schema,
+    tables: config.tables,
+    api:
+      config.api === undefined || config.api === false
+        ? undefined
+        : {
+            ...config.api,
+            port: port ?? config.api.port ?? DEFAULTS.port,
+            host: env.API_HOST || config.api.host,
+          },
     concurrency: config.concurrency ?? DEFAULTS.concurrency,
     reorgWindow: config.reorgWindow ?? DEFAULTS.reorgWindow,
     pollMs: config.pollMs ?? DEFAULTS.pollMs,
@@ -46,4 +81,15 @@ export function resolveConfig(config: Config): Resolved {
       : undefined,
     blocks: config.blocks ?? {},
   };
+}
+
+/** A project directory's name as a Postgres schema: `my-indexer` and `myIndexer` give `my_indexer`. */
+export function schemaName(name: string): string {
+  const s = name
+    .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
+    .toLowerCase()
+    .replace(/[^a-z0-9_]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+  if (s === "") return DEFAULTS.schema;
+  return (/^[0-9]/.test(s) ? `_${s}` : s).slice(0, 63);
 }

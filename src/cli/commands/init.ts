@@ -6,6 +6,7 @@ import type { Abi, AbiMember } from "../../abi/abi.ts";
 import { abiEvents } from "../../abi/events.ts";
 import { classHistory } from "../../abi/history.ts";
 import { ConfigError } from "../../config/errors.ts";
+import { NETWORKS, type Network, networkName } from "../../config/network.ts";
 import { RpcClient } from "../../rpc/client.ts";
 import { blockNumber } from "../../rpc/methods.ts";
 import { probe } from "../../rpc/probe.ts";
@@ -36,6 +37,8 @@ export type InitOptions = {
 export type Project = {
   dir: string;
   rpc: string;
+  /** The RPC's network, written into the config so another network's RPC is refused; none for other chains. */
+  network: Network | undefined;
   /** `undefined`: none in `.env`, so `dev` starts a container. */
   database: string | undefined;
   name: string;
@@ -72,6 +75,8 @@ const snake = (s: string) =>
     .replace(/([a-z0-9])([A-Z])/g, "$1_$2")
     .toLowerCase();
 const camel = (s: string) => snake(s).replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+const isNetwork = (name: string): name is Network => name in NETWORKS;
 
 /** The column for an argument: plain values get their type, anything else (structs, enums, arrays) jsonb. */
 function columnOf(m: AbiMember): string {
@@ -114,24 +119,19 @@ export function generate(p: Project): Record<string, string> {
     );
   }
   const abiName = `${camel(p.name)}Abi`;
-  const schemaName = snake(basename(p.dir)).replace(/[^a-z0-9_]/g, "_");
   const first = camel(defs[0]!.name);
   const lines = (...l: string[]) => `${l.join("\n")}\n`;
   const config = lines(
     `import { kasbah } from "kasbah";`,
     `import ${abiName} from "./abis/${p.name}.ts";`,
-    `import * as schema from "./kasbah.schema.ts";`,
     "",
     "export default kasbah({",
+    ...(p.network === undefined ? [] : [`  network: "${p.network}",`]),
     "  rpc: process.env.KASBAH_RPC_URL!,",
     ...(p.ws ? ["  ws: true,"] : []),
-    "  database: process.env.DATABASE_URL!,",
-    `  schema: "${schemaName}",`,
     "  contracts: {",
     `    ${p.name}: { abi: ${abiName}, address: "${p.address}", startBlock: ${p.startBlock}${p.timestamps ? ", include: { block: true }" : ""} },`,
     "  },",
-    "  tables: schema,",
-    "  api: { port: 42069, host: process.env.API_HOST },",
     "  cache: true,",
     "});",
   );
@@ -327,7 +327,7 @@ export async function init(o: InitOptions): Promise<void> {
   const target = resolve(dir);
   if (existsSync(target) && readdirSync(target).length > 0)
     throw new ConfigError(`${target} is not empty`);
-  const { rpc, client } = await askRpc(a, o);
+  const { rpc, client, network } = await askRpc(a, o);
   const { address, abi } = await askContract(a, o, client);
   const name =
     o.name ??
@@ -355,6 +355,7 @@ export async function init(o: InitOptions): Promise<void> {
   const files = generate({
     dir: target,
     rpc,
+    network,
     database,
     name,
     address,
@@ -390,13 +391,17 @@ async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
     });
     const client = new RpcClient(rpc, { maxAttempts: 2 });
     try {
-      await ui.step(
+      const connected = await ui.step(
         "Connecting",
-        async () => ({ e: await probe(client), tip: await blockNumber(client) }),
-        ({ e, tip }) =>
-          `${e.node}${e.nodeVersion === undefined ? "" : ` ${e.nodeVersion}`}, spec ${e.spec}, tip ${tip.toLocaleString("en")}`,
+        async () => ({
+          e: await probe(client),
+          tip: await blockNumber(client),
+          chain: networkName(await client.request<string>("starknet_chainId", [])),
+        }),
+        ({ e, tip, chain }) =>
+          `${chain}, ${e.node}${e.nodeVersion === undefined ? "" : ` ${e.nodeVersion}`}, spec ${e.spec}, tip ${tip.toLocaleString("en")}`,
       );
-      return { rpc, client };
+      return { rpc, client, network: isNetwork(connected.chain) ? connected.chain : undefined };
     } catch (e) {
       if (!ask) throw e;
       rpc = undefined;

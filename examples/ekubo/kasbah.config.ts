@@ -1,13 +1,11 @@
 import { kasbah } from "../../src/index.ts";
 import coreAbi from "./abis/Core.ts";
-import * as schema from "./kasbah.schema.ts";
 
 /** Ekubo from its deployment: pools, hourly and daily candles (price, volume, fees, TVL), protocol totals. */
 export default kasbah({
+  network: "mainnet",
   rpc: process.env.KASBAH_RPC_URL!,
   ws: true,
-  database: process.env.DATABASE_URL!,
-  schema: "ekubo",
   contracts: {
     Core: {
       abi: coreAbi,
@@ -17,7 +15,5 @@ export default kasbah({
     },
   },
   blocks: { Snapshot: { interval: 1_800, startBlock: 165_392 } },
-  tables: schema,
-  api: { port: 42069 },
   cache: true,
 });

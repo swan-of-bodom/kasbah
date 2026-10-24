@@ -14,7 +14,8 @@ import type { Include } from "../sync/extras.ts";
 import type { Block } from "../types/block.ts";
 import type { Receipt, Transaction } from "../types/transaction.ts";
 import { ConfigError } from "./errors.ts";
-import { resolveConfig } from "./resolve.ts";
+import type { Network } from "./network.ts";
+import { resolveConfig, schemaName } from "./resolve.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -38,15 +39,24 @@ export type ContractConfig = {
 /** A handler every `interval` blocks from `startBlock` (inclusive), after that block's events. */
 export type BlockConfig = { interval: number; startBlock: number; endBlock?: number };
 
+/** The app's tables, and optionally Drizzle `relations()` for GraphQL: `import * as schema` works as is. */
+export type Tables = Record<string, PgTable | Relations>;
+
 export type Config = {
+  /** Refuse to start when the RPC is on another chain. Without it, the chain is whichever the RPC is on. */
+  network?: Network;
   rpc: string;
-  database: string;
-  /** Postgres schema holding the app's tables. */
+  /** Default: `DATABASE_URL`. */
+  database?: string;
+  /**
+   * Postgres schema holding the app's tables. `DATABASE_SCHEMA` (the CLI's `--schema`) wins over it. Default: the
+   * project directory's name under the CLI, `kasbah` from code.
+   */
   schema?: string;
   contracts: Record<string, ContractConfig>;
   blocks?: Record<string, BlockConfig>;
-  /** The app's tables, and optionally Drizzle `relations()` for GraphQL: `import * as schema` works as is. */
-  tables: Record<string, PgTable | Relations>;
+  /** Default, under the CLI: what `kasbah.schema.ts` exports. */
+  tables?: Tables;
   /** Parallel `getEvents` windows. */
   concurrency?: number;
   /** Blocks behind the tip that can still be reorged: indexed live, with an undo journal. Default 64. */
@@ -58,8 +68,12 @@ export type Config = {
    * wake the follower, which then fetches as when polling; while the socket is down it polls every `pollMs`.
    */
   ws?: string | true;
-  /** Serve the read API (SQL over HTTP, GraphQL, the app's `get`/`post` routes) while indexing. */
-  api?: { port: number; host?: string; readDatabase?: string };
+  /**
+   * The read API (SQL over HTTP, GraphQL, the app's `get`/`post` routes), served while indexing. The CLI serves it
+   * unless `false`; from code, only when given. `PORT` (`--port`) and `API_HOST` (`--hostname`) win over `port`
+   * (default 42069) and `host`.
+   */
+  api?: false | { port?: number; host?: string; readDatabase?: string };
   /**
    * Keep final raw events and call results in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches
    * nothing. `maxCalls`: call results kept, oldest dropped first (default 1M).
@@ -70,6 +84,7 @@ export type Config = {
 export const createConfig = <const C extends Config>(config: C): C => config;
 
 type Contracts<C extends Config> = C["contracts"];
+type TablesOf<C extends Config> = C["tables"] extends Tables ? C["tables"] : Tables;
 type Blocks<C extends Config> =
   C["blocks"] extends Record<string, BlockConfig> ? C["blocks"] : Record<never, never>;
 
@@ -156,8 +171,11 @@ type Checked<C extends Config> = {
   };
 };
 
-export function kasbah<const C extends Config>(config: C & Checked<C>) {
-  const resolved = resolveConfig(config);
+/** What a project's layout gives the CLI: its directory's name, and what `kasbah.schema.ts` exports. */
+export type Project = { name: string; tables?: Tables };
+
+export function kasbah<const C extends Config>(initial: C & Checked<C>) {
+  let config: Config = initial;
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
 
   const routes: Route[] = [];
@@ -167,30 +185,32 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     handlers.set(name, handler as never);
   };
 
-  /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs `api` in the config. */
-  const route = (method: Route["method"]) => (path: string, handler: RouteHandler<C["tables"]>) => {
-    if (config.api === undefined)
-      throw new ConfigError(`${method} ${path}: routes need \`api\` in the config`);
+  /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs the API on. */
+  const route = (method: Route["method"]) => (path: string, handler: RouteHandler<TablesOf<C>>) => {
+    if (config.api === undefined || config.api === false)
+      throw new ConfigError(`${method} ${path}: routes need the API, which \`api\` turns off`);
     routes.push({ method, path, handler: handler as never });
   };
 
-  /** The API alone (`api` in the config), over what an indexer of this app stores: another process, or an earlier run. */
+  /** The API alone, over what an indexer of this app stores: another process, or an earlier run. */
   const serve = async (): Promise<{ url: string; close: () => Promise<void> }> => {
-    if (config.api === undefined) throw new ConfigError("serve needs `api` in the config");
+    const resolved = resolveConfig(config);
+    if (resolved.api === undefined)
+      throw new ConfigError("serve needs the API, which `api` turns off");
     const api = await Api.start({
-      ...config.api,
-      database: config.database,
+      ...resolved.api,
+      database: resolved.database,
       schema: resolved.schema,
-      tables: config.tables,
+      tables: resolved.tables,
       routes,
     });
-    return { url: apiUrl(config.api, api.port), close: () => api.close() };
+    return { url: apiUrl(resolved.api, api.port), close: () => api.close() };
   };
 
   /** Drops the app's schema (its tables and progress), nothing else in the database. Returns the schema. */
   const drop = async (): Promise<string> => {
-    const { schema } = resolved;
-    const pool = new pg.Pool({ connectionString: config.database, max: 1 });
+    const { schema, database } = resolveConfig(config);
+    const pool = new pg.Pool({ connectionString: database, max: 1 });
     try {
       await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
     } finally {
@@ -203,8 +223,20 @@ export function kasbah<const C extends Config>(config: C & Checked<C>) {
     on,
     get: route("GET"),
     post: route("POST"),
-    run: (options: RunOptions = {}) => run(resolved, handlers, options, routes),
+    run: (options: RunOptions = {}) => run(resolveConfig(config), handlers, options, routes),
     serve,
     drop,
+    /**
+     * For the CLI, before the project's handlers and routes load: what the config leaves out, the layout gives. The
+     * schema is the directory's name, the tables `kasbah.schema.ts`, and the API is on.
+     */
+    useProject: (p: Project) => {
+      config = {
+        ...config,
+        schema: config.schema ?? schemaName(p.name),
+        tables: config.tables ?? p.tables,
+        api: config.api ?? {},
+      };
+    },
   };
 }
