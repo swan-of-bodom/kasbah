@@ -141,16 +141,17 @@ export class RpcClient {
   /**
    * Sends calls in one HTTP request, or several when the batch is larger than a second's worth of calls. Resolves in
    * call order. Calls that fail with a retryable error (a throttled call inside an otherwise fine batch, for one) are
-   * sent again on their own; any other call error rejects.
+   * sent again on their own; any other call error rejects, or with `settle` takes that call's place as its `RpcError`.
    */
-  async batch<T extends unknown[]>(calls: Call[]): Promise<T> {
+  async batch<T extends unknown[]>(calls: Call[], o: { settle?: boolean } = {}): Promise<T> {
+    const settle = o.settle === true;
     const size = Math.max(1, Math.floor(this.#rate));
-    if (calls.length <= size) return this.#batch(calls) as Promise<T>;
-    const parts = await Promise.all([...chunks(calls, size)].map((c) => this.#batch(c)));
+    if (calls.length <= size) return this.#batch(calls, settle) as Promise<T>;
+    const parts = await Promise.all([...chunks(calls, size)].map((c) => this.#batch(c, settle)));
     return parts.flat() as T;
   }
 
-  async #batch(calls: Call[]): Promise<unknown[]> {
+  async #batch(calls: Call[], settle: boolean): Promise<unknown[]> {
     const results = new Array<unknown>(calls.length);
     let pending = calls.map((_, i) => i);
     for (let attempt = 1; ; attempt++) {
@@ -169,7 +170,8 @@ export class RpcClient {
           else if (retryable(undefined, a.code)) {
             again.push(pending[j]!);
             failure = a;
-          } else throw a;
+          } else if (settle) results[pending[j]!] = a;
+          else throw a;
         });
         this.#answered(calls.length - again.length);
         pending = again;

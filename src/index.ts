@@ -30,7 +30,15 @@ export {
 export { ConfigError } from "./config/errors.ts";
 export { bignum, hex } from "./config/schema.ts";
 export type { Db } from "./db/store.ts";
-export type { CallParameters, Client, ReadContractParameters } from "./indexer/client.ts";
+export type {
+  CallParameters,
+  Client,
+  ContractFunction,
+  ReadContractParameters,
+  ReadContractsParameters,
+  ReadContractsResults,
+  ReadResult,
+} from "./indexer/client.ts";
 export { type Notice, Status } from "./indexer/status.ts";
 export type { Include } from "./sync/extras.ts";
 export type { Block, GasPrice } from "./types/block.ts";

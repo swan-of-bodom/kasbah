@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { expect, test } from "vitest";
 import { Codec } from "../../src/abi/codec.ts";
 import { compileFunction } from "../../src/abi/functions.ts";
+import { rawSelector } from "../../src/abi/selector.ts";
 import { CallClient } from "../../src/indexer/client.ts";
 import { RpcClient } from "../../src/rpc/client.ts";
 import { felt } from "../../src/types/felt.ts";
@@ -181,6 +182,84 @@ test("reads are pinned to the indexed block, final ones cached, recent ones pinn
   }
 });
 
+/** A node answering `starknet_call` by selector through `fetch`: `token1` fails as a contract error. */
+function callNode() {
+  const requests: string[][] = [];
+  const answers: Record<string, string[]> = {
+    [rawSelector("getReserves")]: ["0x1", "0x2", "0x3"],
+    [rawSelector("token0")]: ["0xa"],
+  };
+  const fetch = (async (_: unknown, init: RequestInit) => {
+    const body = JSON.parse(init.body as string);
+    const calls: { id: number; params: any }[] = [body].flat();
+    requests.push(calls.map((c) => c.params.request.entry_point_selector));
+    const out = calls.map((c) => {
+      const result = answers[c.params.request.entry_point_selector];
+      return result === undefined
+        ? { jsonrpc: "2.0", id: c.id, error: { code: 40, message: "Contract error" } }
+        : { jsonrpc: "2.0", id: c.id, result };
+    });
+    return new Response(JSON.stringify(Array.isArray(body) ? out : out[0]));
+  }) as typeof globalThis.fetch;
+  return { requests, rpc: new RpcClient("http://node", { fetch }) };
+}
+
+const pair = <const N extends "getReserves" | "token0" | "token1">(functionName: N) =>
+  ({ abi: cairo0Pair, address: "0xe", functionName }) as const;
+
+test("readContracts: the reads not cached go out in one request, each failure in its own place", async () => {
+  const node = callNode();
+  const client = new CallClient(node.rpc, { isFinal: (b) => b <= 100 });
+  client.current = { number: 50, hash: "0xh50" };
+  await client.readContract(pair("token0"));
+  const [reserves, token0, token1] = await client.readContracts({
+    contracts: [pair("getReserves"), pair("token0"), pair("token1")],
+  });
+  expect(reserves).toEqual({
+    status: "success",
+    result: { reserve0: 1n, reserve1: 2n, blockTimestampLast: 3n },
+  });
+  expect(token0).toEqual({ status: "success", result: { token0: 10n } });
+  expect(token1.status).toBe("failure");
+  expect(token1.error?.message).toMatch(
+    "call token1 on 0xe at block 50: starknet_call: 40 Contract error",
+  );
+  // token0 came from memory: the batch held the other two.
+  expect(node.requests).toEqual([
+    [rawSelector("token0")],
+    [rawSelector("getReserves"), rawSelector("token1")],
+  ]);
+  expect(client.stats).toEqual({ calls: 3, cached: 1 });
+});
+
+test("readContracts without allowFailure: plain results, and a failure rejects", async () => {
+  const node = callNode();
+  const client = new CallClient(node.rpc, { isFinal: () => true });
+  const [reserves, token0] = await client.readContracts({
+    contracts: [pair("getReserves"), pair("token0")],
+    allowFailure: false,
+    block: 7,
+  });
+  expect(reserves.reserve1).toBe(2n);
+  expect(token0).toEqual({ token0: 10n });
+  await expect(
+    client.readContracts({ contracts: [pair("token0"), pair("token1")], allowFailure: false }),
+  ).rejects.toThrow("call token1");
+  await expect(
+    client.readContracts({
+      contracts: [{ abi: cairo0Pair, address: "0xe", functionName: "nope" as "token0" }],
+      allowFailure: false,
+    }),
+  ).rejects.toThrow("no function nope");
+  expect(
+    (
+      await client.readContracts({
+        contracts: [{ abi: cairo0Pair, address: "0xe", functionName: "nope" as "token0" }],
+      })
+    )[0].status,
+  ).toBe("failure");
+});
+
 // Compile-time only: arguments are checked against the ABI.
 async function _typed(client: CallClient) {
   await client.readContract({
@@ -192,6 +271,24 @@ async function _typed(client: CallClient) {
   });
   // @ts-expect-error no such function
   await client.readContract({ abi: ekubo, address: "0xe", functionName: "nope" });
+  const [a, b] = await client.readContracts({
+    contracts: [
+      { abi: cairo0Pair, address: "0xe", functionName: "getReserves" },
+      {
+        abi: ekubo,
+        address: "0xe",
+        functionName: "get_pool_liquidity",
+        // @ts-expect-error pool_key is required, in a list too
+        args: {},
+      },
+    ],
+    allowFailure: false,
+  });
+  const reserve0: bigint = a.reserve0;
+  const liquidity: bigint = b;
+  const [c] = await client.readContracts({ contracts: [pair("token0")] });
+  if (c.status === "success") c.result satisfies { token0: bigint };
+  void [reserve0, liquidity];
   const r: { reserve0: bigint } = await client.readContract({
     abi: cairo0Pair,
     address: "0xe",

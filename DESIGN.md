@@ -442,6 +442,9 @@ Built (`src/indexer/client.ts`, `src/abi/functions.ts`):
 - `context.client.readContract({ abi, address, functionName, args, block? })`, typed from the ABI (arguments as an object
   keyed by input name; result: one Cairo 1 output as its value, several as a tuple, Cairo 0 named outputs as an
   object). `client.call` for raw calldata. Default block: the one being indexed, state at its end.
+- `context.client.readContracts({ contracts, allowFailure?, block? })`, shaped like viem's `multicall`: the reads not
+  cached go out as one JSON-RPC batch. Starknet has no Multicall3, so it saves round trips, not billed calls (a
+  provider bills each call in a batch). With `allowFailure` (default) each entry is `{ status, result | error }`.
 - Final blocks: cached in memory (100k results, oldest dropped) and, with `cache: true`, in the cache schema's
   `calls` table, written in the commit transactions. Recent blocks: never cached, and pinned by block hash so a
   lagging or reorged node can't answer for another block at that height.

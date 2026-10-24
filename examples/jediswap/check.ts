@@ -24,16 +24,15 @@ const n = (h: string) => BigInt(h);
 let mismatched = 0;
 await Promise.all(
   rows.map(async (p) => {
-    const [r, t0, t1] = await Promise.all([
-      client.readContract({
-        abi: pairAbi,
-        address: p.address,
-        functionName: "get_reserves",
-        block,
-      }),
-      client.readContract({ abi: pairAbi, address: p.address, functionName: "token0", block }),
-      client.readContract({ abi: pairAbi, address: p.address, functionName: "token1", block }),
-    ]);
+    const [r, t0, t1] = await client.readContracts({
+      contracts: [
+        { abi: pairAbi, address: p.address, functionName: "get_reserves" },
+        { abi: pairAbi, address: p.address, functionName: "token0" },
+        { abi: pairAbi, address: p.address, functionName: "token1" },
+      ],
+      allowFailure: false,
+      block,
+    });
     const ok =
       r.reserve0 === BigInt(p.reserve0) &&
       r.reserve1 === BigInt(p.reserve1) &&
