@@ -95,11 +95,18 @@ before indexing; we skip that round trip.
   Ponder's `rpc/index.ts` (unchanged through 0.18.3): doubles until the first 429, which halves it, then +5% per 5 s of
   successes while rate-bound, −5% and a pause (100 ms ×1.5 per 429 in a row, ≤5 s) per 429. Concurrency alone
   couldn't do it: at 1 request in flight, one batch of 100 header calls still went over Alchemy's limit (130 retries
-  in 1,030 requests); paced, Ekubo 310k–315k took 6,232 calls with 0 throttled. Later: several endpoints with
-  latency-based routing, as Ponder does.
+  in 1,030 requests); paced, Ekubo 310k–315k took 6,232 calls with 0 throttled.
+- Several endpoints (`rpc: loadBalance([...])`, `src/rpc/client.ts`): each has its own pacer,
+  capped by its `maxRequestsPerSecond`. A request goes to the endpoint that can send it soonest (counting tokens
+  already claimed by requests picked for it), then the lowest mean latency (an untried one counts as fastest), then
+  the fewest in flight; 5% go to a random ready one so a slow endpoint that recovers is noticed, as in Ponder. Not
+  round robin: that splits evenly, so the slowest or most throttled endpoint sets the pace. A retry avoids the
+  endpoint it failed on. Every endpoint is asked `starknet_chainId` at startup and must agree. The spec probe still
+  asks one endpoint; mixing node versions is on the user.
 - **Continuation tokens are node-specific** (`"<block>-<n>"`, but `n` counts matched events on Pathfinder and raw
-  events on Juno). A pagination chain stays on one endpoint. If the endpoint changes, restart from the token's
-  block number with no token and drop duplicates by `(block, tx_index, event_index)`.
+  events on Juno). A pagination chain stays on one endpoint: the client remembers which endpoint issued each token
+  and sends the next page there. Not done: if that endpoint dies mid-chain, restarting from the token's block on
+  another (dropping duplicates by `(block, tx_index, event_index)`); today the page retries on the same endpoint.
 
 ## 5. Backfill
 

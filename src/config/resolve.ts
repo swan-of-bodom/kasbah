@@ -1,5 +1,7 @@
+import type { RpcEndpoint } from "../rpc/client.ts";
 import type { BlockConfig, Config, Tables } from "./app.ts";
 import { ConfigError } from "./errors.ts";
+import { endpointsOf } from "./rpc.ts";
 
 /** What the config may leave out: each default is applied here and read nowhere else. */
 export const DEFAULTS = {
@@ -20,6 +22,7 @@ export const DEFAULTS = {
 /** The config with every default applied: what the indexer, `serve` and `drop` read. */
 export type Resolved = Omit<
   Config,
+  | "rpc"
   | "database"
   | "schema"
   | "tables"
@@ -31,6 +34,7 @@ export type Resolved = Omit<
   | "cache"
   | "blocks"
 > & {
+  rpc: RpcEndpoint[];
   database: string;
   schema: string;
   tables: Tables;
@@ -56,8 +60,10 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
   const port = env.PORT ? Number(env.PORT) : undefined;
   if (port !== undefined && !Number.isInteger(port))
     throw new ConfigError(`PORT=${env.PORT} is not a port number`);
+  const rpc = endpointsOf(config.rpc);
   return {
     ...config,
+    rpc,
     database,
     schema: env.DATABASE_SCHEMA || config.schema || DEFAULTS.schema,
     tables: config.tables,
@@ -72,7 +78,7 @@ export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.e
     concurrency: config.concurrency ?? DEFAULTS.concurrency,
     reorgWindow: config.reorgWindow ?? DEFAULTS.reorgWindow,
     pollMs: config.pollMs ?? DEFAULTS.pollMs,
-    ws: config.ws === true ? config.rpc.replace(/^http/, "ws") : config.ws,
+    ws: config.ws === true ? rpc[0]!.url.replace(/^http/, "ws") : config.ws,
     cache: config.cache
       ? {
           maxCalls:

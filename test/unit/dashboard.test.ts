@@ -165,6 +165,29 @@ test("rpc: calls per second now against the limit, and the last minute's throttl
   expect(text).toContain("last minute: 3 throttled · 1 timeouts · 0 failed");
 });
 
+test("rpc: with several endpoints, a line each with its calls, limit, latency and troubles", () => {
+  const s = new Status();
+  s.enter("backfill");
+  s.setRange(0, 1000, 0);
+  s.rpc = {
+    requests: 0,
+    calls: 0,
+    retries: 0,
+    throttled: 0,
+    timeouts: 0,
+    failed: 0,
+    bytes: 0,
+    methods: {},
+  };
+  s.endpoints = () => [
+    { host: "a.example", rate: 200, calls: 1_200, throttled: 0, failed: 0, latencyMs: 90 },
+    { host: "b.example", rate: 10, calls: 80, throttled: 3, failed: 1, latencyMs: 400 },
+  ];
+  const text = inside(render(s, { width: 110 })).join("\n");
+  expect(text).toContain("a.example · 1,200 calls · 200/s max · 90 ms");
+  expect(text).toContain("b.example · 80 calls · 10/s max · 400 ms · 3 throttled · 1 failed");
+});
+
 test("the time bar splits waiting for events from waiting for headers; --debug shows the fetcher", () => {
   const s = new Status();
   s.enter("backfill");

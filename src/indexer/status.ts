@@ -1,5 +1,5 @@
 import { monitorEventLoopDelay } from "node:perf_hooks";
-import type { RpcStats } from "../rpc/client.ts";
+import type { EndpointStats, RpcStats } from "../rpc/client.ts";
 import type { FetchGauges } from "../sync/fetch.ts";
 import { secondsSince } from "../utils/time.ts";
 
@@ -163,6 +163,8 @@ export class Status {
   api = "";
   rpc?: RpcStats;
   rate = () => 0;
+  /** Each RPC endpoint's rate, calls and failures, when there are several. */
+  endpoints = (): EndpointStats[] => [];
   cache?: { cachedEvents: number; fetchedEvents: number };
   calls?: { calls: number; cached: number };
   /** `--debug`: the fetcher's state and event loop delay on the screen. */

@@ -30,6 +30,7 @@ export {
 } from "./config/app.ts";
 export { ConfigError } from "./config/errors.ts";
 export type { Network } from "./config/network.ts";
+export { loadBalance, type RpcConfig } from "./config/rpc.ts";
 export { bignum, hex } from "./config/schema.ts";
 export type { Db } from "./db/store.ts";
 export type {
@@ -42,6 +43,7 @@ export type {
   ReadResult,
 } from "./indexer/client.ts";
 export { type Notice, Status } from "./indexer/status.ts";
+export type { RpcEndpoint } from "./rpc/client.ts";
 export type { Include } from "./sync/extras.ts";
 export type { Block, GasPrice } from "./types/block.ts";
 export { type Felt, felt } from "./types/felt.ts";

@@ -12,7 +12,7 @@ the raw-event and call cache, the read API (SQL, GraphQL with relations, live qu
 - `src/types/`: `Block`, `Transaction`, `Receipt` (the spec's shapes) and `felt()`, the one form of a felt.
 - `src/abi/`: ABI model, event decoder and types for Cairo 0 and Cairo 1; class history, so each event decodes with
   the class its contract had at that block.
-- `src/rpc/`: JSON-RPC client (paced in calls per second, retries, zstd), endpoint probe.
+- `src/rpc/`: JSON-RPC client (one or several endpoints, each paced in calls per second; retries, zstd), endpoint probe.
 - `src/sync/`: backfill as an ordered event stream with a memory cap (`fetch.ts`), head following with reorg
   detection (`live.ts`), WebSocket new heads (`heads.ts`), transactions and receipts (`extras.ts`).
 - `src/indexer/`: one run (`run.ts`): its setup (`open.ts`), the phases (`phases/`: factories, backfill, keys,
@@ -56,6 +56,13 @@ export default kasbah({
   contracts: { Core: { abi: coreAbi, address: "0x…", startBlock: 165387 } },
   cache: true,
 });
+```
+
+Several RPCs share the load as in Ponder: each request goes to the one that can take it soonest, the fastest of
+those, and a retry goes to another; `maxRequestsPerSecond` caps one (a free tier, say):
+
+```ts
+rpc: loadBalance([process.env.ALCHEMY_URL!, { url: process.env.BLAST_URL!, maxRequestsPerSecond: 10 }]),
 ```
 
 What the config leaves out, the project gives: the tables are what `kasbah.schema.ts` exports, the database is

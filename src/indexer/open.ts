@@ -8,7 +8,7 @@ import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
 import type { BlockConfig, RunOptions } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
-import { checkNetwork } from "../config/network.ts";
+import { checkNetwork, networkName } from "../config/network.ts";
 import type { Resolved } from "../config/resolve.ts";
 import { EventCache } from "../db/cache.ts";
 import { type Db, Store } from "../db/store.ts";
@@ -101,10 +101,7 @@ export async function open(
   // The RPC first: a wrong one (another network) is refused before the schema is touched.
   const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency });
   const endpoint = await probe(rpc);
-  const chainId =
-    config.network !== undefined || config.cache !== undefined
-      ? await rpc.request<string>("starknet_chainId", [])
-      : undefined;
+  const chainId = await chainOf(rpc, config);
   if (config.network !== undefined) checkNetwork(config.network, chainId!);
   const pool = await openSchema(config, options, status, buildId, closers);
   const stored = await startup(pool, schema, tables, buildId);
@@ -186,6 +183,19 @@ export async function open(
   status.watched = () => ({ contracts: sources.addresses.length, children: sources.children });
   await resume(run, stored.children);
   return run;
+}
+
+/** The chain every endpoint is on, when the network or the cache needs it: endpoints on different chains are refused. */
+async function chainOf(rpc: RpcClient, config: Resolved): Promise<string | undefined> {
+  if (config.network === undefined && config.cache === undefined && config.rpc.length === 1)
+    return undefined;
+  const ids = await rpc.requestEach<string>("starknet_chainId", []);
+  const names = [...new Set(ids.map((id) => networkName(id)))];
+  if (names.length > 1)
+    throw new ConfigError(
+      `rpc: the endpoints are on different chains (${config.rpc.map((e, i) => `${new URL(e.url).host}: ${networkName(ids[i]!)}`).join(", ")})`,
+    );
+  return ids[0];
 }
 
 /** The pool on the app's schema, after dropping it for `reset`, or for a changed build with `onBuildChange: "reset"`. */
@@ -275,6 +285,7 @@ function reportEndpoint(
     factories: r.factories.length,
     rpc: r.rpc.stats,
     rate: () => r.rpc.rate,
+    endpoints: () => (r.rpc.endpoints.length > 1 ? r.rpc.endpoints : []),
     cache: r.cache?.stats,
   });
   status.note({

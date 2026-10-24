@@ -16,6 +16,7 @@ import type { Receipt, Transaction } from "../types/transaction.ts";
 import { ConfigError } from "./errors.ts";
 import type { Network } from "./network.ts";
 import { resolveConfig, schemaName } from "./resolve.ts";
+import type { RpcConfig } from "./rpc.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
@@ -45,7 +46,8 @@ export type Tables = Record<string, PgTable | Relations>;
 export type Config = {
   /** Refuse to start when the RPC is on another chain. Without it, the chain is whichever the RPC is on. */
   network?: Network;
-  rpc: string;
+  /** A URL, `{ url, maxRequestsPerSecond }`, or several with `loadBalance([...])`. */
+  rpc: RpcConfig;
   /** Default: `DATABASE_URL`. */
   database?: string;
   /**

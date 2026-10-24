@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `rpc: loadBalance([...])`: several RPCs, each paced on its own; requests go to the one that can send soonest, then
+  the fastest, retries to another. `{ url, maxRequestsPerSecond }` caps one. They must be on the same chain. With
+  several, the dashboard shows each one's calls, limit, latency and failures.
 - A project's config needs only `rpc` and `contracts`: the tables come from `kasbah.schema.ts`, the database from
   `DATABASE_URL`, the schema from the directory's name, and the API is on (42069). `--schema`, `--port` and
   `--hostname` (`DATABASE_SCHEMA`, `PORT`, `API_HOST`) win over the config. `api: false` turns the API off.

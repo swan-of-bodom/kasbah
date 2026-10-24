@@ -344,6 +344,22 @@ function rpc({ p, label }: Box, status: Status, recent: Recent) {
       ? p.dim("last minute: no throttling, timeouts or failed requests")
       : `last minute: ${minute.map(([k, n]) => (n > 0 ? p.yellow(`${thousands(n)} ${k}`) : p.dim(`0 ${k}`))).join(p.dim(" · "))}`,
   );
+  for (const e of status.endpoints()) {
+    const trouble = [
+      e.throttled > 0 ? p.yellow(`${thousands(e.throttled)} throttled`) : "",
+      e.failed > 0 ? p.yellow(`${thousands(e.failed)} failed`) : "",
+    ].filter(Boolean);
+    label(
+      "",
+      [
+        `${e.host}`,
+        `${thousands(e.calls)} calls`,
+        `${thousands(e.rate)}/s max`,
+        `${e.latencyMs} ms`,
+        ...trouble,
+      ].join(p.dim(" · ")),
+    );
+  }
   const methods = Object.entries(s.methods).sort((a, b) => b[1] - a[1]);
   if (methods.length > 0) {
     const shown = methods
