@@ -356,6 +356,7 @@ function validate(
     if (!(b.interval >= 1)) throw new ConfigError(`${b.name}: interval must be at least 1`);
   }
   for (const h of handlers.keys()) {
+    if (h === "setup") continue;
     const [source] = h.split(":");
     if (config.contracts[source!] === undefined && config.blocks[source!] === undefined)
       throw new ConfigError(`handler ${h}: no contract or block source ${source}`);

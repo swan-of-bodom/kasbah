@@ -3,6 +3,7 @@ import type { RunOptions, StartBlock } from "../config/app.ts";
 import type { Resolved } from "../config/resolve.ts";
 import type { Db } from "../db/store.ts";
 import type { Client } from "./client.ts";
+import { setup } from "./handle.ts";
 import { open, type Run } from "./open.ts";
 import { backfill } from "./phases/backfill.ts";
 import { factories } from "./phases/factories.ts";
@@ -18,9 +19,9 @@ export type AnyHandler = (arg: {
 }) => void | Promise<void>;
 
 /** In order, each from where the database is: one with nothing left to do returns at once. */
-const PHASES: ((run: Run) => Promise<void>)[] = [factories, backfill, keys, live];
+const PHASES: ((run: Run) => Promise<void>)[] = [factories, setup, backfill, keys, live];
 
-/** Runs the app: setup, then each phase. Reports only through `status`. */
+/** Runs the app: opens it, then each phase. Reports only through `status`. */
 export async function run(
   config: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,

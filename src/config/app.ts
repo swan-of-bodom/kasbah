@@ -119,7 +119,8 @@ type EventHandlerName<C extends Config> = {
 
 export type HandlerName<C extends Config> =
   | EventHandlerName<C>
-  | `${keyof Blocks<C> & string}:block`;
+  | `${keyof Blocks<C> & string}:block`
+  | "setup";
 
 export type IndexedBlock<K extends string = string> = { source: K; block: Block };
 
@@ -163,11 +164,19 @@ export type IndexedEvent<
       : never
   : never;
 
-export type Handler<C extends Config, N extends HandlerName<C>> = (arg: {
-  event: IndexedEvent<C, N>;
-  /** `client` reads contract state at the end of the block being indexed (cached once the block is final). */
-  context: { db: Db; client: Client };
-}) => void | Promise<void>;
+/**
+ * `"setup"` runs once, before the first event, on an empty schema (a first run, or after a reset): seed rows there.
+ * Its writes commit with the first indexed blocks; its `client` reads the state before the first of them.
+ */
+export type Handler<C extends Config, N extends HandlerName<C>> = (
+  arg: N extends "setup"
+    ? { context: { db: Db; client: Client } }
+    : {
+        event: IndexedEvent<C, N>;
+        /** `client` reads contract state at the end of the block being indexed (cached once the block is final). */
+        context: { db: Db; client: Client };
+      },
+) => void | Promise<void>;
 
 export type RunOptions = {
   /** Index up to this block and stop. Without it, backfill then follow the head until `signal` aborts. */

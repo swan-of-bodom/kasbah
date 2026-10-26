@@ -103,6 +103,20 @@ export async function handle(
 }
 
 /** Runs `source`'s block handler, if any, for `block`. */
+/** The `setup` handler, if any, when nothing is committed yet: its writes commit with the first blocks. */
+export async function setup(run: Run): Promise<void> {
+  const handler = run.handlers.get("setup");
+  if (handler === undefined || run.position.checkpoint !== undefined) return;
+  run.client.current = { number: Math.max(0, run.plan.start - 1), hash: undefined };
+  const t = performance.now();
+  try {
+    await handler({ context: run.context } as never);
+  } catch (err) {
+    throw new Error(`setup: ${(err as Error).message}`, { cause: err });
+  }
+  run.status.record("setup", performance.now() - t);
+}
+
 export async function fire(run: Run, source: string, block: IndexedBlock["block"]): Promise<void> {
   const handler = run.handlers.get(`${source}:block`);
   if (handler === undefined) return;

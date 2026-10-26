@@ -171,6 +171,11 @@ kasbah({
   },
 });
 
+// setup: a context, no event.
+kasbah(config).on("setup", async ({ context }) => void context.db);
+// @ts-expect-error: setup has no event
+kasbah(config).on("setup", ({ event }) => void event);
+
 // Routes: `db` knows the app's tables, relational queries included.
 const swapsTable = pgTable("swaps", { id: text().primaryKey(), amount: integer().notNull() });
 const routed = kasbah({ ...config, tables: { swapsTable }, api: { port: 0 } });

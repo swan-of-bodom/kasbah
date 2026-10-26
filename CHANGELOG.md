@@ -4,6 +4,7 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `app.on("setup", …)`: runs once before the first event on an empty schema, to seed rows.
 - `finality: "l1"`: a block is final once Ethereum accepted it, instead of `reorgWindow` blocks behind the head.
 - `address: [a, b, c]`: several addresses for one contract name, sharing its ABI and handlers.
 - `endBlock` per contract: nothing after it is fetched or handled.

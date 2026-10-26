@@ -98,6 +98,9 @@ app.on("Core:Swapped", async ({ event, context }) => { /* context.db, context.cl
 export default app;
 ```
 
+`app.on("setup", ({ context }) => …)` runs once before the first event, on an empty schema (a first run or a
+reset), to seed rows; its writes commit with the first blocks, and its `client` reads the state before them.
+
 ```
 pnpm kasbah dev app.ts       # index, follow the head, restart on every change (a changed build re-indexes);
                              # with `api`, GraphiQL at http://localhost:<port>/graphql in a browser

@@ -153,3 +153,28 @@ test.skipIf(url === undefined)(
     }
   },
 );
+
+test.skipIf(url === undefined)(
+  "setup: seeds once, before the first event; a resumed run skips it",
+  async () => {
+    let ran = 0;
+    const seeded = () => {
+      const a = app({ address: "0xc", startBlock: 0 }, settledUrl);
+      a.on("setup", async ({ context }) => {
+        ran++;
+        await context.db.insert(totals).values({ id: "all", total: 1000n });
+      });
+      return a;
+    };
+    await seeded().run({ reset: true, to: 10 });
+    await seeded().run({ to: BLOCKS - 5 });
+    expect(ran).toBe(1);
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      const r = await p.query(`SELECT total::text FROM ${schema}.totals`);
+      expect(r.rows[0].total).toBe(String(1000 + ((BLOCKS - 4) * (BLOCKS - 3)) / 2));
+    } finally {
+      await p.end();
+    }
+  },
+);
