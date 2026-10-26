@@ -50,7 +50,7 @@ export type Note =
   | { kind: "rebuild" }
   | { kind: "api"; url: string }
   /** `to` was inside the reorg window: indexing stops at `through`, the last final block. */
-  | { kind: "clamped"; to: number; through: number; tip: number; window: number }
+  | { kind: "clamped"; to: number; through: number; tip: number; rule: string }
   /** `startBlock: "deployment"` found. */
   | { kind: "deployed"; contract: string; block: number }
   | {
@@ -368,7 +368,7 @@ function describe(n: Note): string {
     case "api":
       return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
     case "clamped":
-      return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip} minus ${n.window}): indexing to ${n.through}`;
+      return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip}, final when ${n.rule}): indexing to ${n.through}`;
     case "deployed":
       return `${n.contract} was deployed in block ${n.block}: indexing from there`;
     case "endpoint":

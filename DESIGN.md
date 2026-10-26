@@ -247,6 +247,9 @@ is always rolled back before the next confirmed block. To decide when we get the
 - Data at or below `l1_accepted` (about 2.6 h behind the head) is irreversible.
 - ACCEPTED_ON_L2 is treated as final, with a small safety window (e.g. 64 blocks) of hash-checked headers. On a
   `parent_hash` mismatch or a `subscriptionReorg`, revert to the common ancestor and refetch.
+- `finality: "l1"` moves the line to `l1_accepted` (read again at most every 30 s): backfill stops there, every
+  later block is live, journaled and hash-checked (`Finality` in `src/indexer/finality.ts`, read by the plan, live
+  and the commit's pruning).
 - **Undo journal instead of Ponder's triggers.** Every write goes through our store, so the store records the
   pre-image of each touched row in the journal, tagged with its block, only for blocks inside the safety window.
   Revert = replay pre-images backwards. Prune entries once their block leaves the window. No database triggers,

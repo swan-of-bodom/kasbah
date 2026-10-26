@@ -78,3 +78,10 @@ test("network: names from chain ids, and an RPC on another chain is refused", ()
     "network is mainnet but the RPC is on sepolia",
   );
 });
+
+test('resolveConfig: `finality: "l1"` has no window to set', () => {
+  expect(resolveConfig({ ...base, finality: "l1" }, {}).finality).toBe("l1");
+  expect(() => resolveConfig({ ...base, finality: "l1", reorgWindow: 10 }, {})).toThrow(
+    "L1 finality has no window",
+  );
+});

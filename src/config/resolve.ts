@@ -69,6 +69,8 @@ export function resolveConfig(
   if (port !== undefined && !Number.isInteger(port))
     throw new ConfigError(`PORT=${env.PORT} is not a port number`);
   const rpc = endpointsOf(config.rpc);
+  if (config.finality !== undefined && config.reorgWindow !== undefined)
+    throw new ConfigError('`finality: "l1"` and `reorgWindow` both set: L1 finality has no window');
   return {
     ...config,
     rpc,

@@ -11,9 +11,11 @@ const schema = "kasbah_test_contracts";
 const BLOCKS = 40;
 const DEPLOYED = 13;
 const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull() });
-const node = counterNode(BLOCKS, DEPLOYED);
+const node = counterNode(BLOCKS, { deployed: DEPLOYED });
+const L1 = 20;
+const settled = counterNode(BLOCKS, { l1: L1 });
 /** Two addresses taking turns, behind a proxy recording each `getEvents` filter. */
-const pair = counterNode(BLOCKS, 0, ["0xc", "0xe"]);
+const pair = counterNode(BLOCKS, { addresses: ["0xc", "0xe"] });
 const asked: { address?: string[]; to_block: { block_number: number } }[] = [];
 const proxy = createServer((req, res) => {
   let body = "";
@@ -28,6 +30,7 @@ const proxy = createServer((req, res) => {
 let rpc: string;
 let pairUrl: string;
 let proxied: string;
+let settledUrl: string;
 
 const listen = async (s: ReturnType<typeof createServer>) => {
   await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
@@ -35,14 +38,12 @@ const listen = async (s: ReturnType<typeof createServer>) => {
 };
 
 beforeAll(async () => {
-  [rpc, pairUrl, proxied] = (await Promise.all([node, pair, proxy].map(listen))) as [
-    string,
-    string,
-    string,
-  ];
+  [rpc, pairUrl, proxied, settledUrl] = (await Promise.all(
+    [node, pair, proxy, settled].map(listen),
+  )) as [string, string, string, string];
 });
 afterAll(async () => {
-  for (const s of [node, pair, proxy]) s.close();
+  for (const s of [node, pair, proxy, settled]) s.close();
   if (url === undefined) return;
   const p = new pg.Pool({ connectionString: url, max: 1 });
   await p.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
@@ -52,6 +53,7 @@ afterAll(async () => {
 const app = (
   c: { address: string | string[]; startBlock: number | "deployment"; endBlock?: number },
   at = rpc,
+  l1 = false,
 ) => {
   const a = kasbah({
     rpc: at,
@@ -59,7 +61,7 @@ const app = (
     schema,
     contracts: { C: { abi: counterAbi, ...c } },
     tables: { totals },
-    reorgWindow: 4,
+    ...(l1 ? { finality: "l1" as const, pollMs: 20 } : { reorgWindow: 4 }),
   });
   a.on("C:Counted", async ({ event, context }) => {
     const v = event.args.amount;
@@ -117,6 +119,37 @@ test.skipIf(url === undefined)(
     for (const f of fetched) {
       expect(f.to_block.block_number).toBeLessThanOrEqual(END);
       expect(f.address!.map(BigInt).sort()).toEqual([0xcn, 0xen]);
+    }
+  },
+);
+
+test.skipIf(url === undefined)(
+  'finality "l1": blocks after the L1-accepted one keep their journal',
+  async () => {
+    const status = new Status();
+    const stop = new AbortController();
+    const run = app({ address: "0xc", startBlock: 0 }, settledUrl, true).run({
+      reset: true,
+      signal: stop.signal,
+      status,
+    });
+    for (let i = 0; i < 500 && status.checkpoint !== BLOCKS - 1; i++)
+      await new Promise((r) => setTimeout(r, 20));
+    stop.abort();
+    await run;
+    expect(status.checkpoint).toBe(BLOCKS - 1);
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      const hashes = await p.query(`SELECT min(number)::int AS lo FROM ${schema}._kasbah_blocks`);
+      expect(hashes.rows[0].lo).toBe(L1);
+      const journal = await p.query(
+        `SELECT min(block)::int AS lo, count(DISTINCT block)::int AS n FROM ${schema}._kasbah_journal`,
+      );
+      expect(journal.rows[0]).toEqual({ lo: L1 + 1, n: BLOCKS - 1 - L1 });
+      const r = await p.query(`SELECT total::text FROM ${schema}.totals`);
+      expect(r.rows[0].total).toBe(String((BLOCKS * (BLOCKS + 1)) / 2));
+    } finally {
+      await p.end();
     }
   },
 );

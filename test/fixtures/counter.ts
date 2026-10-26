@@ -20,9 +20,16 @@ export const counterAbi = [
 
 /**
  * A node serving that chain, the contract at any address from block `deployed`; block n's event comes from
- * `addresses[n % length]`. Listen on it, then point `rpc` at it.
+ * `addresses[n % length]`; L1 accepted blocks through `l1`. Listen on it, then point `rpc` at it.
  */
-export function counterNode(blocks: number, deployed = 0, addresses = ["0xc"]) {
+export function counterNode(
+  blocks: number,
+  {
+    deployed = 0,
+    addresses = ["0xc"],
+    l1 = 0,
+  }: { deployed?: number; addresses?: string[]; l1?: number } = {},
+) {
   const abi = counterAbi;
   const BLOCKS = blocks;
   const hash = (n: number) => `0x${(n + 1).toString(16)}aa`;
@@ -56,7 +63,7 @@ export function counterNode(blocks: number, deployed = 0, addresses = ["0xc"]) {
           case "starknet_blockHashAndNumber":
             return ok({ block_hash: hash(BLOCKS - 1), block_number: BLOCKS - 1 });
           case "starknet_getBlockWithTxHashes": {
-            const n = params.block_id.block_number;
+            const n = params.block_id === "l1_accepted" ? l1 : params.block_id.block_number;
             if (n >= BLOCKS)
               return { jsonrpc: "2.0", id, error: { code: 24, message: "Block not found" } };
             return ok(

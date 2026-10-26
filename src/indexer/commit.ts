@@ -59,7 +59,8 @@ type Writers = {
   sources: Sources;
   status: Status;
   schema: string;
-  window: number;
+  /** The newest final block: journal and hashes below it are dropped. */
+  final: () => number;
   start: number;
 };
 
@@ -109,7 +110,7 @@ export class Position {
    * the run, so nothing retries against them.
    */
   async commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
-    const { pool, store, cache, factories, sources, status, schema, window } = this.#w;
+    const { pool, store, cache, factories, sources, status, schema, final } = this.#w;
     const m = moves(c, this.#watermark);
     const parts = { tables: 0, cache: 0 };
     const timed = async (part: keyof typeof parts, write: () => unknown) => {
@@ -138,8 +139,8 @@ export class Position {
           await timed("cache", () => cache?.persist(tx, -1));
           await insertChildren(tx, c.children);
           await saveHash(tx, c.block);
-          await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [n - window]);
-          await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [n - window]);
+          await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [final()]);
+          await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [final()]);
           break;
         }
         case "revert":
@@ -173,7 +174,7 @@ export class Position {
         break;
       case "block":
         this.#known.set(c.block.number, c.block.hash);
-        for (const n of this.#known.keys()) if (n < c.block.number - window) this.#known.delete(n);
+        for (const n of this.#known.keys()) if (n < final()) this.#known.delete(n);
         break;
       case "revert":
         forgotten = sources.removeChildrenAfter(c.to.number).length;

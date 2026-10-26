@@ -65,6 +65,10 @@ those, and a retry goes to another; `maxRequestsPerSecond` caps one (a free tier
 rpc: loadBalance([process.env.ALCHEMY_URL!, { url: process.env.BLAST_URL!, maxRequestsPerSecond: 10 }]),
 ```
 
+Blocks within `reorgWindow` (64) of the head are indexed with an undo journal, so a reorg can undo them;
+`finality: "l1"` makes that "not yet accepted on Ethereum" (`l1_accepted`, a few hours: about 6,000 blocks),
+for apps that must never show what a reorg could take back.
+
 What the config leaves out, the project gives: the tables are what `kasbah.schema.ts` exports, the database is
 `DATABASE_URL`, the Postgres schema is the directory's name (`my-indexer` → `my_indexer`), and the API is on, at
 port 42069. `--schema`/`DATABASE_SCHEMA`, `--port`/`PORT` and `--hostname`/`API_HOST` win over the config, so one

@@ -81,6 +81,11 @@ export type Config = {
   concurrency?: number;
   /** Blocks behind the tip that can still be reorged: indexed live, with an undo journal. Default 64. */
   reorgWindow?: number;
+  /**
+   * `"l1"`: a block is final once Ethereum accepted it (`l1_accepted`, hours behind the head), instead of
+   * `reorgWindow` blocks behind it. Everything after is indexed live, with its undo journal.
+   */
+  finality?: "l1";
   /** Head polling interval. Default 2 s. */
   pollMs?: number;
   /**

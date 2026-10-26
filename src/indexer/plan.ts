@@ -3,6 +3,7 @@ import type { Resolved } from "../config/resolve.ts";
 /** Where the run goes, fixed at startup from the config, `to` and the tip. */
 export type Plan = {
   live: boolean;
+  /** Blocks between the last final one and the tip, at startup. */
   window: number;
   /** Final blocks: backfilled without a journal, cached. A `to` inside the reorg window stops at its edge. */
   backfillTo: number;
@@ -14,9 +15,15 @@ export type Plan = {
   clamped: boolean;
 };
 
-export function planOf(config: Resolved, to: number | undefined, tip: number): Plan {
-  const window = config.reorgWindow;
-  const backfillTo = to === undefined ? tip - window : Math.min(to, tip - window);
+/** `final`: the newest final block at `tip` (`Finality.finalAt`). */
+export function planOf(
+  config: Resolved,
+  to: number | undefined,
+  tip: number,
+  final = tip - config.reorgWindow,
+): Plan {
+  const window = tip - final;
+  const backfillTo = to === undefined ? final : Math.min(to, final);
   const starts = [...Object.values(config.contracts), ...Object.values(config.blocks)].map(
     (c) => c.startBlock,
   );

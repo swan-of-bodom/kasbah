@@ -82,7 +82,7 @@ export async function resume(run: Run, children: Child[]): Promise<void> {
 }
 
 async function onBlock(run: Run, block: LiveBlock, children: Watched[]): Promise<void> {
-  run.final = Math.max(run.final, block.number - run.plan.window);
+  run.final = Math.max(run.final, await run.finality.finalAt(block.number));
   await run.sources.upgradesIn(block.events, block.number);
   const x = await extras(run, block.events);
   const headers = new Map([[block.number, block.header]]);

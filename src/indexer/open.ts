@@ -23,6 +23,7 @@ import { CallClient, type Client } from "./client.ts";
 import { Position } from "./commit.ts";
 import type { Child } from "./events.ts";
 import { compileFilters } from "./filters.ts";
+import { Finality } from "./finality.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
@@ -57,6 +58,7 @@ export type Run = {
   indexes: Map<PgTable, string[]>;
   plan: Plan;
   position: Position;
+  finality: Finality;
   /** Blocks at or below this can't be reorged: backfill's end, then the head minus the reorg window. */
   final: number;
   client: CallClient;
@@ -114,14 +116,15 @@ export async function open(
     unkeyed: stored.unkeyed,
   });
   const tip = await blockNumber(rpc);
-  const plan = planOf(config, options.to, tip);
+  const finality = new Finality(rpc, config.finality === "l1" ? undefined : config.reorgWindow);
+  const plan = planOf(config, options.to, tip, await finality.finalAt(tip));
   if (plan.clamped && options.to !== undefined)
     status.note({
       kind: "clamped",
       to: options.to,
       through: plan.backfillTo,
       tip,
-      window: plan.window,
+      rule: finality.rule,
     });
   const cache = config.cache ? await EventCache.open(pool, chainId!, config.cache) : undefined;
   const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n));
@@ -148,7 +151,7 @@ export async function open(
       sources,
       status,
       schema,
-      window: plan.window,
+      final: (): number => partial.final,
       start: plan.start,
     },
     { checkpoint: stored.checkpoint, watermark, known: stored.known },
@@ -172,6 +175,7 @@ export async function open(
     indexes,
     plan,
     position,
+    finality,
     final: plan.backfillTo,
     anyInclude: Object.values(config.contracts).some(
       (c) => c.include?.transaction || c.include?.receipt,
