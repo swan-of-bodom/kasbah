@@ -1,5 +1,5 @@
 import type { RpcEndpoint } from "../rpc/client.ts";
-import type { BlockConfig, Config, Tables } from "./app.ts";
+import type { BlockConfig, Config, ContractConfig, StartBlock, Tables } from "./app.ts";
 import { ConfigError } from "./errors.ts";
 import { endpointsOf } from "./rpc.ts";
 
@@ -19,9 +19,13 @@ export const DEFAULTS = {
   maxCalls: 1_000_000,
 } as const;
 
-/** The config with every default applied: what the indexer, `serve` and `drop` read. */
-export type Resolved = Omit<
+/**
+ * The config with every default applied: what the indexer, `serve` and `drop` read. Start blocks are numbers once
+ * the indexer has found the `"deployment"` ones (`S`).
+ */
+export type Resolved<S extends StartBlock = number> = Omit<
   Config,
+  | "contracts"
   | "rpc"
   | "database"
   | "schema"
@@ -34,6 +38,7 @@ export type Resolved = Omit<
   | "cache"
   | "blocks"
 > & {
+  contracts: Record<string, ContractConfig<S>>;
   rpc: RpcEndpoint[];
   database: string;
   schema: string;
@@ -51,7 +56,10 @@ export type Resolved = Omit<
 };
 
 /** `DATABASE_SCHEMA`, `PORT` and `API_HOST` win over the config, so one config deploys anywhere. */
-export function resolveConfig(config: Config, env: NodeJS.ProcessEnv = process.env): Resolved {
+export function resolveConfig(
+  config: Config,
+  env: NodeJS.ProcessEnv = process.env,
+): Resolved<StartBlock> {
   const database = config.database ?? env.DATABASE_URL;
   if (database === undefined || database === "")
     throw new ConfigError("no database: set DATABASE_URL, or `database` in the config");

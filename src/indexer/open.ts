@@ -6,7 +6,7 @@ import pg from "pg";
 import { classHistory } from "../abi/history.ts";
 import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
-import type { BlockConfig, RunOptions } from "../config/app.ts";
+import type { BlockConfig, RunOptions, StartBlock } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
 import { checkNetwork, networkName } from "../config/network.ts";
 import type { Resolved } from "../config/resolve.ts";
@@ -84,7 +84,7 @@ const POOL_SIZE = 8;
  * cache, reads every class, then undoes a reorg that happened while stopped and watches the stored children.
  */
 export async function open(
-  config: Resolved,
+  configured: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,
   routes: readonly Route[],
   options: RunOptions,
@@ -92,18 +92,19 @@ export async function open(
   signal: AbortSignal,
   closers: (() => unknown)[],
 ): Promise<Run> {
-  const { schema } = config;
+  const { schema } = configured;
   status.schema = schema;
-  const blockSources = validate(config, handlers);
-  const tables = Object.values(config.tables).filter((t): t is PgTable => is(t, PgTable));
+  const blockSources = validate(configured, handlers);
+  const tables = Object.values(configured.tables).filter((t): t is PgTable => is(t, PgTable));
   // Built now, so an index kasbah can't create is refused before the backfill, not after it.
   const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
-  const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
   // The RPC first: a wrong one (another network) is refused before the schema is touched.
-  const rpc = new RpcClient(config.rpc, { maxConcurrency: config.concurrency });
+  const rpc = new RpcClient(configured.rpc, { maxConcurrency: configured.concurrency });
   const endpoint = await probe(rpc);
-  const chainId = await chainOf(rpc, config);
-  if (config.network !== undefined) checkNetwork(config.network, chainId!);
+  const chainId = await chainOf(rpc, configured);
+  if (configured.network !== undefined) checkNetwork(configured.network, chainId!);
+  const config = await deployments(configured, rpc, status);
+  const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
   const pool = await openSchema(config, options, status, buildId, closers);
   const stored = await startup(pool, schema, tables, buildId);
   if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
@@ -187,7 +188,7 @@ export async function open(
 }
 
 /** The chain every endpoint is on, when the network or the cache needs it: endpoints on different chains are refused. */
-async function chainOf(rpc: RpcClient, config: Resolved): Promise<string | undefined> {
+async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<string | undefined> {
   if (config.network === undefined && config.cache === undefined && config.rpc.length === 1)
     return undefined;
   const ids = await rpc.requestEach<string>("starknet_chainId", []);
@@ -253,6 +254,29 @@ async function startApi(
 }
 
 /** Each configured contract with the events it has handlers for and the events that upgrade it. */
+/** `startBlock: "deployment"` as a number: the block the contract (or its factory) was deployed in. */
+async function deployments(
+  config: Resolved<StartBlock>,
+  rpc: RpcClient,
+  status: Status,
+): Promise<Resolved> {
+  const tip = await blockNumber(rpc);
+  const contracts = await Promise.all(
+    Object.entries(config.contracts).map(async ([name, c]) => {
+      if (c.startBlock !== "deployment") return [name, c] as const;
+      const address = c.address ?? c.factory.address;
+      const first = (await classHistory(rpc, address, 0, tip))[0]?.from;
+      if (first === undefined)
+        throw new ConfigError(
+          `${name}: startBlock "deployment", but nothing is deployed at ${address}`,
+        );
+      status.note({ kind: "deployed", contract: name, block: first });
+      return [name, { ...c, startBlock: first }] as const;
+    }),
+  );
+  return { ...config, contracts: Object.fromEntries(contracts) as Resolved["contracts"] };
+}
+
 function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>) {
   return Object.entries(config.contracts).map(([name, c]) => ({
     name,
@@ -310,7 +334,10 @@ const META_SQL = [
 ];
 
 /** The block sources, after checking every source and handler name. */
-function validate(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>): BlockSource[] {
+function validate(
+  config: Resolved<StartBlock>,
+  handlers: ReadonlyMap<string, AnyHandler>,
+): BlockSource[] {
   const blockSources = Object.entries(config.blocks).map(([name, b]) => ({ name, ...b }));
   for (const b of blockSources) {
     if (config.contracts[b.name] !== undefined)

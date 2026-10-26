@@ -51,6 +51,8 @@ export type Note =
   | { kind: "api"; url: string }
   /** `to` was inside the reorg window: indexing stops at `through`, the last final block. */
   | { kind: "clamped"; to: number; through: number; tip: number; window: number }
+  /** `startBlock: "deployment"` found. */
+  | { kind: "deployed"; contract: string; block: number }
   | {
       kind: "endpoint";
       node: string;
@@ -367,6 +369,8 @@ function describe(n: Note): string {
       return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
     case "clamped":
       return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip} minus ${n.window}): indexing to ${n.through}`;
+    case "deployed":
+      return `${n.contract} was deployed in block ${n.block}: indexing from there`;
     case "endpoint":
       return `${n.node} endpoint, spec ${n.spec}, tip ${n.tip}; ${plural(n.contracts, "contract")}${n.factories > 0 ? `, ${plural(n.factories, "factory", "factories")}` : ""}${n.blockSources > 0 ? `, ${plural(n.blockSources, "block source")}` : ""}`;
     case "reorg": {

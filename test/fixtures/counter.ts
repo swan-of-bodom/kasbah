@@ -18,8 +18,8 @@ export const counterAbi = [
   },
 ] as const;
 
-/** A node serving that chain, the contract at any address. Listen on it, then point `rpc` at it. */
-export function counterNode(blocks: number) {
+/** A node serving that chain, the contract at any address from block `deployed`. Listen on it, then point `rpc` at it. */
+export function counterNode(blocks: number, deployed = 0) {
   const abi = counterAbi;
   const BLOCKS = blocks;
   const hash = (n: number) => `0x${(n + 1).toString(16)}aa`;
@@ -66,6 +66,8 @@ export function counterNode(blocks: number) {
             );
           }
           case "starknet_getClassHashAt":
+            if (params.block_id.block_number < deployed)
+              return { jsonrpc: "2.0", id, error: { code: 20, message: "Contract not found" } };
             return ok("0xca");
           case "starknet_getClass":
             return ok({ abi: JSON.stringify(abi) });

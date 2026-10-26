@@ -22,9 +22,12 @@ import type { RpcConfig } from "./rpc.ts";
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
 export type FactoryConfig = { address: string; abi: Abi; event: string; parameter: string };
 
-export type ContractConfig = {
+/** A block number, or `"deployment"`: the block the contract (a factory's, for a factory) was deployed in. */
+export type StartBlock = number | "deployment";
+
+export type ContractConfig<S extends StartBlock = StartBlock> = {
   abi: Abi;
-  startBlock: number;
+  startBlock: S;
   /**
    * Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final), and/or
    * its block's header, `Block` (one per block with events, cached when final).

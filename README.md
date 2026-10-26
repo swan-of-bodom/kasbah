@@ -105,7 +105,8 @@ pnpm kasbah serve app.ts     # the API alone over what a run stored (a finished 
 pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--events] [--calls]`
 ```
 
-Per contract, optional:
+Per contract, `startBlock` is a block number or `"deployment"`: the block the contract (a factory's, for a factory)
+was deployed in, found at startup with about 25 `getClassHashAt` calls. Optional:
 - `include: { transaction, receipt, block }`: the event's `Transaction`, `Receipt` and block header (`Block`), typed
   only when asked for (one extra call per transaction, or per block with events; cached once final, free for live
   blocks). All follow the spec's shapes in camelCase, amounts as bigints, felts as hex; `Transaction` and `Receipt`

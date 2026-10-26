@@ -4,6 +4,7 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `startBlock: "deployment"`: indexes from the block the contract (or its factory) was deployed in, found at startup.
 - `filter` per contract: only events whose arguments have the given values (`{ Transfer: { to: "0x…" } }`), typed
   from the ABI. Key arguments are filtered by the node, so only matches are fetched; data arguments after decoding.
 - `rpc: loadBalance([...])`: several RPCs, each paced on its own; requests go to the one that can send soonest, then

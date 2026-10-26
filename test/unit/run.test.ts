@@ -1,7 +1,11 @@
 import { expect, test } from "vitest";
 import type { Config } from "../../src/config/app.ts";
-import { resolveConfig } from "../../src/config/resolve.ts";
+import { type Resolved, resolveConfig as resolve } from "../../src/config/resolve.ts";
 import { moves } from "../../src/indexer/commit.ts";
+
+/** Every start block here is a number already. */
+const resolveConfig = (c: Config) => resolve(c) as Resolved;
+
 import { planOf } from "../../src/indexer/plan.ts";
 import { upgradeEventsOf } from "../../src/indexer/sources.ts";
 import { type Notice, Status } from "../../src/indexer/status.ts";

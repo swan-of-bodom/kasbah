@@ -1,5 +1,5 @@
 import type { Route } from "../api/routes.ts";
-import type { RunOptions } from "../config/app.ts";
+import type { RunOptions, StartBlock } from "../config/app.ts";
 import type { Resolved } from "../config/resolve.ts";
 import type { Db } from "../db/store.ts";
 import type { Client } from "./client.ts";
@@ -22,7 +22,7 @@ const PHASES: ((run: Run) => Promise<void>)[] = [factories, backfill, keys, live
 
 /** Runs the app: setup, then each phase. Reports only through `status`. */
 export async function run(
-  config: Resolved,
+  config: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,
   options: RunOptions = {},
   routes: readonly Route[] = [],
