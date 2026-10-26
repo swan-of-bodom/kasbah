@@ -239,8 +239,13 @@ live, steady state, time from block timestamp to committed: polling every 2 s â‰
 ### 6.3 Pre-confirmed overlay (later)
 
 `getEvents` with `from_block = to_block = "pre_confirmed"`. Pre-confirmed events have no block hash and can
-change, repeat or disappear. Two options: expose them raw through the API, or run handlers in a transaction that
-is always rolled back before the next confirmed block. To decide when we get there.
+change, repeat or disappear. On Alchemy the range also covers blocks closed but not yet accepted
+(one past `latest`), so events at or below the indexed head are dropped. Two options: expose them raw through the
+API, or run handlers in a transaction that is always rolled back before the next confirmed block.
+
+Done: the first (`preConfirmed: true`, `GET /pre-confirmed`, `src/indexer/pre-confirmed.ts`). While live, a loop
+polls with the watched streams every `pollMs`, decodes what a handler would take (`wantedOf`: `endBlock`, filters)
+and replaces a snapshot the API serves. It stops with the follower. The rolled-back overlay waits for a need.
 
 ### 6.4 Finality and reorgs
 

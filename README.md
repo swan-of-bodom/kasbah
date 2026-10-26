@@ -146,7 +146,10 @@ app.get("/pools/:key", async ({ db, params, query }) => {
 
 The API limits GraphQL queries to 1,000 tokens, depth 20 and 30 aliases; `GET /health` answers while it and its
 database are up, `GET /ready` once it follows the head (or, with
-`--to`, once it's done). `GET /metrics` is for Prometheus: checkpoint, head, phase, events and time per handler,
+`--to`, once it's done). `preConfirmed: true` adds `GET /pre-confirmed`: the watched
+events of blocks not yet accepted on L2, decoded (filters applied, no handler run), about a second after their
+transaction: `{ head, at, events: [{ contract, name, args, address, block, transaction, index }] }`. They may still
+change or vanish, and cost one `getEvents` per `pollMs` (about 43,000 a day at 2 s). `GET /metrics` is for Prometheus: checkpoint, head, phase, events and time per handler,
 RPC calls per method and per endpoint, reorgs (`kasbah_*`); from `serve`, the stored checkpoint and phase.
 
 The build id covers config, tables, handler code and a hash of the code files in the app's directory (not

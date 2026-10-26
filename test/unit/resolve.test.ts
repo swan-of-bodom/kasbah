@@ -85,3 +85,8 @@ test('resolveConfig: `finality: "l1"` has no window to set', () => {
     "L1 finality has no window",
   );
 });
+
+test("resolveConfig: `preConfirmed` needs the API", () => {
+  expect(() => resolveConfig({ ...base, preConfirmed: true }, {})).toThrow("the API, which is off");
+  expect(resolveConfig({ ...base, preConfirmed: true, api: {} }, {}).preConfirmed).toBe(true);
+});

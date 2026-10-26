@@ -83,6 +83,20 @@ export function counterNode(
             return ok({ abi: JSON.stringify(abi) });
           case "starknet_getEvents": {
             const f = params.filter;
+            // Pre-confirmed: one event in the block being built, and the last closed block's again.
+            if (f.from_block === "pre_confirmed")
+              return ok({
+                events: [
+                  { ...events[blocks - 1]!, block_hash: undefined },
+                  {
+                    ...events[blocks - 1]!,
+                    block_hash: undefined,
+                    block_number: blocks,
+                    transaction_hash: "0xfeed",
+                    data: ["0x99"],
+                  },
+                ],
+              });
             const from = f.address === undefined ? undefined : [f.address].flat().map(BigInt);
             return ok({
               events: events.filter(

@@ -53,6 +53,8 @@ export type Note =
   | { kind: "clamped"; to: number; through: number; tip: number; rule: string }
   /** `startBlock: "deployment"` found. */
   | { kind: "deployed"; contract: string; block: number }
+  /** Fetching pre-confirmed events failed (noted once per message; retried every poll). */
+  | { kind: "preConfirmed"; error: string }
   | {
       kind: "endpoint";
       node: string;
@@ -369,6 +371,8 @@ function describe(n: Note): string {
       return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
     case "clamped":
       return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip}, final when ${n.rule}): indexing to ${n.through}`;
+    case "preConfirmed":
+      return `pre-confirmed events: ${n.error} (retrying)`;
     case "deployed":
       return `${n.contract} was deployed in block ${n.block}: indexing from there`;
     case "endpoint":

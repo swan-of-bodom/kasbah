@@ -54,6 +54,7 @@ const app = (
   c: { address: string | string[]; startBlock: number | "deployment"; endBlock?: number },
   at = rpc,
   l1 = false,
+  more: { preConfirmed?: boolean } = {},
 ) => {
   const a = kasbah({
     rpc: at,
@@ -63,6 +64,7 @@ const app = (
     tables: { totals },
     ...(l1 ? { finality: "l1" as const, pollMs: 20 } : { reorgWindow: 4 }),
     api: { port: 0 },
+    ...more,
   });
   a.on("C:Counted", async ({ event, context }) => {
     const v = event.args.amount;
@@ -205,5 +207,55 @@ test.skipIf(url === undefined)(
     } finally {
       await served.close();
     }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "preConfirmed: /pre-confirmed serves the decoded events after the indexed head",
+  async () => {
+    const status = new Status();
+    const stop = new AbortController();
+    const a = app({ address: "0xc", startBlock: 0 }, settledUrl, false, { preConfirmed: true });
+    const run = a.run({ reset: true, signal: stop.signal, status });
+    let body: { head: number; events: Record<string, unknown>[] } | undefined;
+    for (let i = 0; i < 500 && body?.head !== BLOCKS - 1; i++) {
+      await new Promise((r) => setTimeout(r, 20));
+      if (status.api === "") continue;
+      const res = await fetch(`${status.api}/pre-confirmed`);
+      if (res.status === 200) body = await res.json();
+    }
+    stop.abort();
+    await run;
+    expect(body?.head).toBe(BLOCKS - 1);
+    expect(body?.events).toEqual([
+      {
+        contract: "C",
+        name: "Counted",
+        args: { amount: "153" },
+        address: `0x${"0".repeat(63)}c`,
+        block: BLOCKS,
+        transaction: { hash: `0x${"0".repeat(60)}feed`, index: 0 },
+        index: 0,
+      },
+    ]);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "preConfirmed off: /pre-confirmed is a 404 that says how to turn it on",
+  async () => {
+    const stop = new AbortController();
+    const status = new Status();
+    const run = app({ address: "0xc", startBlock: 0 }, settledUrl).run({
+      reset: true,
+      signal: stop.signal,
+      status,
+    });
+    for (let i = 0; i < 500 && status.api === ""; i++) await new Promise((r) => setTimeout(r, 20));
+    const res = await fetch(`${status.api}/pre-confirmed`);
+    stop.abort();
+    await run;
+    expect(res.status).toBe(404);
+    expect((await res.json()).error).toContain("preConfirmed: true");
   },
 );

@@ -27,6 +27,7 @@ import { Finality } from "./finality.ts";
 import { metricsOf } from "./metrics.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
+import type { PreConfirmed } from "./pre-confirmed.ts";
 import type { AnyHandler } from "./run.ts";
 import { type FactorySource, factoryReader, Sources, upgradeEventsOf } from "./sources.ts";
 import type { Status } from "./status.ts";
@@ -60,6 +61,8 @@ export type Run = {
   plan: Plan;
   position: Position;
   finality: Finality;
+  /** Kept up to date while live with `preConfirmed`; served by the API. */
+  preConfirmed: { snapshot: PreConfirmed | undefined };
   /** Blocks at or below this can't be reorged: backfill's end, then the head minus the reorg window. */
   final: number;
   client: CallClient;
@@ -110,7 +113,9 @@ export async function open(
   const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
   const pool = await openSchema(config, options, status, buildId, closers);
   const stored = await startup(pool, schema, tables, buildId);
-  if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
+  const preConfirmed: Run["preConfirmed"] = { snapshot: undefined };
+  if (config.api !== undefined)
+    await startApi(config, config.api, routes, status, closers, preConfirmed);
 
   const store = new Store(drizzle(pool), tables, {
     complete: stored.checkpoint === undefined,
@@ -177,6 +182,7 @@ export async function open(
     plan,
     position,
     finality,
+    preConfirmed,
     final: plan.backfillTo,
     anyInclude: Object.values(config.contracts).some(
       (c) => c.include?.transaction || c.include?.receipt,
@@ -245,6 +251,7 @@ async function startApi(
   routes: readonly Route[],
   status: Status,
   closers: (() => unknown)[],
+  preConfirmed: Run["preConfirmed"],
 ): Promise<void> {
   const server = await Api.start({
     ...api,
@@ -253,6 +260,7 @@ async function startApi(
     tables: config.tables,
     routes,
     metrics: () => metricsOf(status),
+    preConfirmed: config.preConfirmed ? () => preConfirmed.snapshot : undefined,
   });
   closers.push(() => server.close());
   status.api = apiUrl(api, server.port);
