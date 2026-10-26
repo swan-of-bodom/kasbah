@@ -19,7 +19,7 @@ export type FollowOptions = {
   address: string | string[];
   keys?: string[][];
   /** More filters, each fetched on its own and merged in chain order (shared by reference, changed in place). */
-  streams?: readonly { addresses: string[]; keys: string[][] }[];
+  streams?: readonly { addresses: string[]; keys: string[][]; to: number | undefined }[];
   chunkSize: number;
   /** Last indexed block. */
   head: BlockRef;
@@ -49,7 +49,11 @@ async function eventsIn(o: FollowOptions, from: number, to: number): Promise<Emi
   const all = (
     await Promise.all([
       pages(o, o.address, o.keys, from, to),
-      ...o.streams.map((s) => pages(o, s.addresses, s.keys, from, to)),
+      ...o.streams.map((s) =>
+        s.to !== undefined && s.to < from
+          ? []
+          : pages(o, s.addresses, s.keys, from, Math.min(to, s.to ?? to)),
+      ),
     ])
   ).flat();
   all.sort(order);

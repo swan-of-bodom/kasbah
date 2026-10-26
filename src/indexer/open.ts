@@ -130,7 +130,7 @@ export async function open(
     Object.entries(config.contracts).flatMap(([name, c]) =>
       c.address === undefined
         ? []
-        : [sources.add(name, c.address, c.startBlock, plan.classTo, false)],
+        : [c.address].flat().map((a) => sources.add(name, a, c.startBlock, plan.classTo, false)),
     ),
   );
   reportEndpoint(status, { endpoint, tip, rpc, cache, sources, factories, blockSources, stored });
@@ -182,7 +182,7 @@ export async function open(
   const run: Run = Object.assign(partial, { client, context: { db: store.db, client } });
   status.checkpoint = position.checkpoint ?? 0;
   status.calls = client.stats;
-  status.watched = () => ({ contracts: sources.addresses.length, children: sources.children });
+  status.watched = () => ({ contracts: sources.watched, children: sources.children });
   await resume(run, stored.children);
   return run;
 }
@@ -264,12 +264,18 @@ async function deployments(
   const contracts = await Promise.all(
     Object.entries(config.contracts).map(async ([name, c]) => {
       if (c.startBlock !== "deployment") return [name, c] as const;
-      const address = c.address ?? c.factory.address;
-      const first = (await classHistory(rpc, address, 0, tip))[0]?.from;
-      if (first === undefined)
-        throw new ConfigError(
-          `${name}: startBlock "deployment", but nothing is deployed at ${address}`,
-        );
+      // With several addresses, the first one deployed.
+      const blocks = await Promise.all(
+        [c.address ?? c.factory.address].flat().map(async (a) => {
+          const from = (await classHistory(rpc, a, 0, tip))[0]?.from;
+          if (from === undefined)
+            throw new ConfigError(
+              `${name}: startBlock "deployment", but nothing is deployed at ${a}`,
+            );
+          return from;
+        }),
+      );
+      const first = Math.min(...blocks);
       status.note({ kind: "deployed", contract: name, block: first });
       return [name, { ...c, startBlock: first }] as const;
     }),
@@ -288,6 +294,7 @@ function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>
         .map((h) => h.slice(name.length + 1)),
     ),
     upgrades: upgradeEventsOf(name, c.abi, c.upgradeEvents),
+    endBlock: c.endBlock,
     filters: compileFilters(name, c.abi, c.filter),
   }));
 }
@@ -319,7 +326,7 @@ function reportEndpoint(
     node: r.endpoint.node,
     spec: r.endpoint.spec,
     tip: r.tip,
-    contracts: r.sources.addresses.length + r.stored.children.length,
+    contracts: r.sources.watched + r.stored.children.length,
     factories: r.factories.length,
     blockSources: r.blockSources.length,
   });
@@ -367,9 +374,13 @@ function buildIdOf(
             k,
             c.address === undefined
               ? [canonical(c.factory.address), c.factory.event, c.factory.parameter]
-              : canonical(c.address),
+              : typeof c.address === "string"
+                ? canonical(c.address)
+                : c.address.map(canonical),
             c.startBlock,
-            c.filter ?? null,
+            // Only when set, so a config without them keeps its build id.
+            ...(c.endBlock === undefined ? [] : [{ endBlock: c.endBlock }]),
+            ...(c.filter === undefined ? [] : [{ filter: c.filter }]),
           ]),
           blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
           tables: tables.map((t) => createTableSql(tableInfo(t))),

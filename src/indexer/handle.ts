@@ -62,6 +62,7 @@ export async function handle(
 ): Promise<void> {
   const w = watchedOf(run, e);
   if (w === undefined || e.block_number! < w.from) return;
+  if (e.block_number! > (run.config.contracts[w.contract]!.endBlock ?? Infinity)) return;
   const decoded = w.decode(e.block_number!, e.keys, e.data);
   if (decoded === undefined) return;
   const name = `${w.contract}:${decoded.name}`;

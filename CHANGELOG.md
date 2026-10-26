@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `address: [a, b, c]`: several addresses for one contract name, sharing its ABI and handlers.
+- `endBlock` per contract: nothing after it is fetched or handled.
 - `startBlock: "deployment"`: indexes from the block the contract (or its factory) was deployed in, found at startup.
 - `filter` per contract: only events whose arguments have the given values (`{ Transfer: { to: "0x…" } }`), typed
   from the ABI. Key arguments are filtered by the node, so only matches are fetched; data arguments after decoding.

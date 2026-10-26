@@ -71,7 +71,10 @@ export function watchedEvents(
   if (sources.streams.length === 0) return main;
   return merge([
     main,
-    ...sources.streams.map((s) => events(run, s.addresses, s.keys, from, to, final, false)),
+    ...sources.streams.flatMap((s) => {
+      const end = Math.min(to, s.to ?? to);
+      return end < from ? [] : [events(run, s.addresses, s.keys, from, end, final, s.cached)];
+    }),
   ]);
 }
 

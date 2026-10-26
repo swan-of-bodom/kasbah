@@ -106,7 +106,10 @@ pnpm kasbah cache info       # each chain's cache and its size; `cache clear [--
 ```
 
 Per contract, `startBlock` is a block number or `"deployment"`: the block the contract (a factory's, for a factory)
-was deployed in, found at startup with about 25 `getClassHashAt` calls. Optional:
+was deployed in, found at startup with about 25 `getClassHashAt` calls. `address` is one address or a list of
+them sharing the ABI and handlers (`event.address` tells them apart). Optional:
+- `endBlock`: the last block indexed for it. Nothing after it is fetched: its events have a request stream of their
+  own that stops there.
 - `include: { transaction, receipt, block }`: the event's `Transaction`, `Receipt` and block header (`Block`), typed
   only when asked for (one extra call per transaction, or per block with events; cached once final, free for live
   blocks). All follow the spec's shapes in camelCase, amounts as bigints, felts as hex; `Transaction` and `Receipt`

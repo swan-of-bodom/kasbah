@@ -18,13 +18,16 @@ export const counterAbi = [
   },
 ] as const;
 
-/** A node serving that chain, the contract at any address from block `deployed`. Listen on it, then point `rpc` at it. */
-export function counterNode(blocks: number, deployed = 0) {
+/**
+ * A node serving that chain, the contract at any address from block `deployed`; block n's event comes from
+ * `addresses[n % length]`. Listen on it, then point `rpc` at it.
+ */
+export function counterNode(blocks: number, deployed = 0, addresses = ["0xc"]) {
   const abi = counterAbi;
   const BLOCKS = blocks;
   const hash = (n: number) => `0x${(n + 1).toString(16)}aa`;
   const events = Array.from({ length: BLOCKS }, (_, n) => ({
-    from_address: "0xc",
+    from_address: addresses[n % addresses.length]!,
     keys: [selector("Counted")],
     data: [`0x${(n + 1).toString(16)}`],
     block_number: n,
@@ -73,11 +76,13 @@ export function counterNode(blocks: number, deployed = 0) {
             return ok({ abi: JSON.stringify(abi) });
           case "starknet_getEvents": {
             const f = params.filter;
+            const from = f.address === undefined ? undefined : [f.address].flat().map(BigInt);
             return ok({
               events: events.filter(
                 (e) =>
                   e.block_number >= f.from_block.block_number &&
-                  e.block_number <= f.to_block.block_number,
+                  e.block_number <= f.to_block.block_number &&
+                  (from === undefined || from.includes(BigInt(e.from_address))),
               ),
             });
           }

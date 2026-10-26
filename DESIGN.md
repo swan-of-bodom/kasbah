@@ -119,6 +119,8 @@ before indexing; we skip that round trip.
   merged in chain order (block, transaction, event index) up to the lowest `through`. They skip the raw-event
   cache, whose coverage is by address and selector. Every filter is also checked after decoding, so data members
   work too and a node's superset match never reaches a handler.
+- **`endBlock`**: a contract with one has its own stream too (its addresses and selectors, cached as usual) that
+  ends at it; its filter streams end there as well.
 - **Windows aligned to 8,192 blocks** (the nodes' bloom aggregate size), at most 81,920 blocks (Pathfinder's scan
   cap). Windows run in parallel; inside a window, follow the token sequentially.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).

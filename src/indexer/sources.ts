@@ -38,12 +38,24 @@ export type ContractSource = {
   handled: Set<string>;
   /** Events announcing a class replacement (see `upgradeEventsOf`): undefined, none known. */
   upgrades: Set<string> | undefined;
+  /** Last block indexed for it: its events are fetched by a stream of its own that stops there. */
+  endBlock?: number;
   /** Filtered events by name; those with `keys` are fetched by their own stream, not the shared one. */
   filters: Map<string, CompiledFilter>;
 };
 
-/** A filtered event's own `getEvents` stream: its contract's addresses (changed in place) and its positional keys. */
-export type Stream = { contract: string; event: string; addresses: string[]; keys: string[][] };
+/**
+ * A `getEvents` stream besides the shared one: a contract's addresses (changed in place) and keys, through `to`.
+ * A contract with an `endBlock` has one; so does each filtered event that keys can fetch (not `cached`: the event
+ * cache records coverage by address and selector, not by key filter).
+ */
+export type Stream = {
+  contract: string;
+  addresses: string[];
+  keys: string[][];
+  to: number | undefined;
+  cached: boolean;
+};
 
 /** Upgrade events of the common upgradeable components (OpenZeppelin, Ekubo, StarkWare), found by name. */
 const UPGRADE_EVENTS = ["Upgraded", "ClassHashReplaced", "ImplementationReplaced"];
@@ -85,7 +97,7 @@ export class Sources {
   readonly addresses: string[] = [];
   /** `keys` filter: handled selectors at position 0. */
   readonly keys: string[][] = [[]];
-  /** One per filtered event a key filter can fetch: merged with the shared stream in chain order. */
+  /** Merged with the shared stream in chain order. */
   readonly streams: Stream[] = [];
   readonly byAddress = new Map<string, Watched>();
   readonly #rpc: RpcClient;
@@ -94,6 +106,8 @@ export class Sources {
   readonly #decoders = new WeakMap<Abi, Decode>();
   readonly #reported = new Set<string>();
   readonly #note: (n: SourceNote) => void;
+  /** Contracts with an `endBlock`, by name: their own stream. */
+  readonly #bounded = new Map<string, Stream>();
   /** Per contract with upgrade events, their selectors. */
   readonly #upgradeSelectors = new Map<string, Set<string>>();
   #children = 0;
@@ -105,9 +119,15 @@ export class Sources {
     this.#rpc = rpc;
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
+      const own = { contract: c.name, to: c.endBlock };
+      if (c.endBlock !== undefined) {
+        const s = { ...own, addresses: [], keys: [[]], cached: true };
+        this.#bounded.set(c.name, s);
+        this.streams.push(s);
+      }
       for (const [event, f] of c.filters)
         if (f.keys !== undefined && c.handled.has(event))
-          this.streams.push({ contract: c.name, event, addresses: [], keys: f.keys });
+          this.streams.push({ ...own, addresses: [], keys: f.keys, cached: false });
       this.#fallback.set(c.name, createDecoder(c.abi));
       if (c.upgrades !== undefined)
         this.#upgradeSelectors.set(
@@ -134,16 +154,25 @@ export class Sources {
     return this.#children;
   }
 
-  /** Handled and upgrade events of `abi` join the `keys` filter, except those their own stream fetches. */
+  /** Watched addresses: every contract's, in one stream or another. */
+  get watched(): number {
+    return this.byAddress.size;
+  }
+
+  /**
+   * Handled and upgrade events of `abi` join the `keys` filter of the contract's stream (its own with an `endBlock`,
+   * else the shared one), except those a filter's stream fetches.
+   */
   #join(c: ContractSource, abi: Abi) {
+    const keys = (this.#bounded.get(c.name)?.keys ?? this.keys)[0]!;
     for (const e of abiEvents(abi)) {
       const own = c.filters.get(e.name)?.keys !== undefined && !c.upgrades?.has(e.name);
       if (
         (c.handled.has(e.name) || c.upgrades?.has(e.name)) &&
         !own &&
-        !this.keys[0]!.includes(e.selectors[0]!)
+        !keys.includes(e.selectors[0]!)
       )
-        this.keys[0]!.push(e.selectors[0]!);
+        keys.push(e.selectors[0]!);
     }
   }
 
@@ -252,7 +281,7 @@ export class Sources {
   watch(w: Watched): boolean {
     if (this.byAddress.has(w.address)) return false;
     this.byAddress.set(w.address, w);
-    this.addresses.push(w.address);
+    if (!this.#bounded.has(w.contract)) this.addresses.push(w.address);
     for (const s of this.streams) if (s.contract === w.contract) s.addresses.push(w.address);
     if (w.child) this.#children++;
     const c = this.#contracts.get(w.contract)!;

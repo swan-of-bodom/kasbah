@@ -28,6 +28,8 @@ export type StartBlock = number | "deployment";
 export type ContractConfig<S extends StartBlock = StartBlock> = {
   abi: Abi;
   startBlock: S;
+  /** Last block indexed for it (inclusive): nothing after it is fetched. */
+  endBlock?: number;
   /**
    * Fetch each event's transaction and/or receipt (one request per transaction hash, cached when final), and/or
    * its block's header, `Block` (one per block with events, cached when final).
@@ -44,7 +46,14 @@ export type ContractConfig<S extends StartBlock = StartBlock> = {
    * Filtered key arguments are filtered by the node, so only matches are fetched; data arguments after decoding.
    */
   filter?: FilterConfig;
-} & ({ address: string; factory?: undefined } | { factory: FactoryConfig; address?: undefined });
+} & (
+  | {
+      /** One address, or several sharing the ABI and handlers (`event.address` tells them apart). */
+      address: string | readonly string[];
+      factory?: undefined;
+    }
+  | { factory: FactoryConfig; address?: undefined }
+);
 
 /** A handler every `interval` blocks from `startBlock` (inclusive), after that block's events. */
 export type BlockConfig = { interval: number; startBlock: number; endBlock?: number };
