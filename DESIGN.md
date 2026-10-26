@@ -536,7 +536,9 @@ Target size: under 10k lines for v1.
      `query`, `body` and the request; what it returns is sent as JSON, a `Response` as is, an `HttpError` as its
      status. Ponder's equivalent is a user Hono app; this keeps the API dependency-free.
    - `GET /health`: 200 while the process and its database answer. `GET /ready`: 200 once the phase is live (or
-     done: a run with `to` that indexed through it, keys built), else 503 with the phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
+     done: a run with `to` that indexed through it, keys built), else 503 with the phase. `GET /metrics`: the
+     `Status` in Prometheus' text format (`src/indexer/metrics.ts`), or, with no indexer in the process, the
+     stored checkpoint and phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
    - Not yet: sharing one live run between streams with the same query.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 

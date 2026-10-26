@@ -24,6 +24,7 @@ import { Position } from "./commit.ts";
 import type { Child } from "./events.ts";
 import { compileFilters } from "./filters.ts";
 import { Finality } from "./finality.ts";
+import { metricsOf } from "./metrics.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
@@ -251,13 +252,13 @@ async function startApi(
     schema: config.schema,
     tables: config.tables,
     routes,
+    metrics: () => metricsOf(status),
   });
   closers.push(() => server.close());
   status.api = apiUrl(api, server.port);
   status.note({ kind: "api", url: status.api });
 }
 
-/** Each configured contract with the events it has handlers for and the events that upgrade it. */
 /** `startBlock: "deployment"` as a number: the block the contract (or its factory) was deployed in. */
 async function deployments(
   config: Resolved<StartBlock>,
@@ -287,6 +288,7 @@ async function deployments(
   return { ...config, contracts: Object.fromEntries(contracts) as Resolved["contracts"] };
 }
 
+/** Each configured contract with the events it has handlers for and the events that upgrade it. */
 function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>) {
   return Object.entries(config.contracts).map(([name, c]) => ({
     name,

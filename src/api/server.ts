@@ -14,6 +14,7 @@ import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
 import { createGraphqlSchema, relationsOf } from "./graphql.ts";
 import { parseLimited } from "./limits.ts";
+import { prometheus } from "./prometheus.ts";
 import { QueryError, Reader, type ReaderOptions } from "./reader.ts";
 import { matcher, type Route } from "./routes.ts";
 
@@ -26,6 +27,8 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   maxLive?: number;
   /** The app's own endpoints, matched after the built-in ones. */
   routes?: readonly Route[];
+  /** `GET /metrics` in Prometheus' format: the indexer's, when it runs the API; else the checkpoint and phase. */
+  metrics?: () => string;
 };
 
 /** The channel the indexer notifies on each commit, with `{"checkpoint": n}`. */
@@ -119,10 +122,12 @@ export class Api {
     match: ReturnType<typeof matcher>;
     handler: Route["handler"];
   }[];
+  readonly #metrics: (() => string) | undefined;
   #unlisten: (() => Promise<void>) | undefined;
 
   private constructor(reader: Reader, schema: GraphQLSchema, o: ApiOptions) {
     this.#reader = reader;
+    this.#metrics = o.metrics;
     this.#schema = schema;
     this.#maxLive = o.maxLive ?? 1_000;
     this.#tables = o.tables;
@@ -175,6 +180,10 @@ export class Api {
         return res.end();
       }
       if (path === "/status" && req.method === "GET") return send(res, 200, await this.#status());
+      if (path === "/metrics" && req.method === "GET") {
+        res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
+        return res.end(this.#metrics?.() ?? (await this.#storedMetrics()));
+      }
       // For a load balancer or orchestrator: up (and its database reachable), and caught up with the head.
       if (path === "/health" && req.method === "GET") {
         await this.#reader.sql("SELECT 1");
@@ -243,6 +252,25 @@ export class Api {
       console.error("[kasbah api]", e);
       send(res, 500, { error: "internal error" });
     }
+  }
+
+  /** Without the indexer in this process: what its last commit stored. */
+  async #storedMetrics(): Promise<string> {
+    const s = await this.#status();
+    return prometheus([
+      {
+        name: "phase",
+        type: "gauge",
+        help: "The phase running (1).",
+        samples: [[{ phase: s.phase ?? "starting" }, 1]],
+      },
+      {
+        name: "checkpoint",
+        type: "gauge",
+        help: "Last block committed.",
+        samples: [[{}, Number(s.checkpoint ?? 0)]],
+      },
+    ]);
   }
 
   async #status(): Promise<Record<string, string>> {

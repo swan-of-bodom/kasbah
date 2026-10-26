@@ -62,6 +62,7 @@ const app = (
     contracts: { C: { abi: counterAbi, ...c } },
     tables: { totals },
     ...(l1 ? { finality: "l1" as const, pollMs: 20 } : { reorgWindow: 4 }),
+    api: { port: 0 },
   });
   a.on("C:Counted", async ({ event, context }) => {
     const v = event.args.amount;
@@ -175,6 +176,34 @@ test.skipIf(url === undefined)(
       expect(r.rows[0].total).toBe(String(1000 + ((BLOCKS - 4) * (BLOCKS - 3)) / 2));
     } finally {
       await p.end();
+    }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "/metrics: the indexer's while it runs, the stored checkpoint from serve",
+  async () => {
+    const status = new Status();
+    const stop = new AbortController();
+    const a = app({ address: "0xc", startBlock: 0 }, settledUrl);
+    const run = a.run({ reset: true, signal: stop.signal, status });
+    for (let i = 0; i < 500 && status.checkpoint !== BLOCKS - 1; i++)
+      await new Promise((r) => setTimeout(r, 20));
+    const live = await (await fetch(`${status.api}/metrics`)).text();
+    stop.abort();
+    await run;
+    expect(live).toContain(`kasbah_checkpoint ${BLOCKS - 1}\n`);
+    expect(live).toContain('kasbah_phase{phase="live"} 1');
+    expect(live).toContain(`kasbah_handler_calls_total{handler="C:Counted"} ${BLOCKS}`);
+    expect(live).toMatch(/kasbah_rpc_method_calls_total\{method="starknet_getEvents"\} \d+/);
+    expect(live).toContain("# TYPE kasbah_events_handled_total counter");
+
+    const served = await a.serve();
+    try {
+      const stored = await (await fetch(`${served.url}/metrics`)).text();
+      expect(stored).toContain(`kasbah_checkpoint ${BLOCKS - 1}\n`);
+    } finally {
+      await served.close();
     }
   },
 );
