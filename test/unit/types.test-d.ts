@@ -144,6 +144,33 @@ kasbah({
   contracts: { Core: { abi: ekubo, address: "0x1", startBlock: 0, upgradeEvents: ["Upgraded"] } },
 });
 
+// filter names events of the ABI and their arguments, with the arguments' types (numbers for integers too).
+kasbah({
+  ...config,
+  contracts: {
+    Core: {
+      abi: ekubo,
+      address: "0x1",
+      startBlock: 0,
+      filter: { PositionUpdated: { locker: ["0x1", "0x2"] }, SavedBalance: { amount: 5 } },
+    },
+  },
+});
+kasbah({
+  ...config,
+  contracts: {
+    // @ts-expect-error: not an event of the ABI
+    Core: { abi: ekubo, address: "0x1", startBlock: 0, filter: { Upgraded: {} } },
+  },
+});
+kasbah({
+  ...config,
+  contracts: {
+    // @ts-expect-error: not an argument of the event
+    Core: { abi: ekubo, address: "0x1", startBlock: 0, filter: { Swapped: { nope: 1 } } },
+  },
+});
+
 // Routes: `db` knows the app's tables, relational queries included.
 const swapsTable = pgTable("swaps", { id: text().primaryKey(), amount: integer().notNull() });
 const routed = kasbah({ ...config, tables: { swapsTable }, api: { port: 0 } });

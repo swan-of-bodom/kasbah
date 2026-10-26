@@ -1,6 +1,6 @@
 import type { Batch } from "../../sync/fetch.ts";
 import { secondsSince } from "../../utils/time.ts";
-import { events } from "../events.ts";
+import { watchedEvents } from "../events.ts";
 import { blockHeaders, fire, handle, type Prefetched, prefetch } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
 
@@ -11,7 +11,7 @@ const FLUSH_BYTES = 64 << 20;
 
 /** Final blocks from the checkpoint to the backfill's end: a commit every `FLUSH_EVENTS` events or `FLUSH_BYTES` of extras. */
 export async function backfill(run: Run): Promise<void> {
-  const { status, sources, cache, signal, position } = run;
+  const { status, cache, signal, position } = run;
   const first = position.next;
   const to = run.plan.backfillTo;
   if (first > to) return;
@@ -21,7 +21,7 @@ export async function backfill(run: Run): Promise<void> {
   const handledBefore = status.handled;
   let through = first - 1;
   let since = 0;
-  const batches = events(run, sources.addresses, sources.keys, first, to, true);
+  const batches = watchedEvents(run, first, to, true);
   // Headers, transactions and receipts of the next batch are fetched while this one is handled.
   const waited = (what: "events" | "extras", ms: number) =>
     what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);

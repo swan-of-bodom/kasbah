@@ -67,6 +67,7 @@ export async function handle(
   const name = `${w.contract}:${decoded.name}`;
   const handler = run.handlers.get(name);
   if (handler === undefined) return;
+  if (run.sources.filterOf(w.contract, decoded.name)?.matches(decoded.args) === false) return;
   const x = extras.get(e.transaction_hash);
   const event = {
     contract: w.contract,

@@ -44,6 +44,7 @@ export async function live(run: Run): Promise<void> {
     rpc,
     address: sources.addresses,
     keys: sources.keys,
+    streams: sources.streams,
     chunkSize: endpoint.maxChunk,
     head,
     known: position.known,

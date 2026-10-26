@@ -8,6 +8,7 @@ import { Api } from "../api/server.ts";
 import type { Db } from "../db/store.ts";
 import { quote } from "../db/table.ts";
 import type { Client } from "../indexer/client.ts";
+import type { FilterConfig } from "../indexer/filters.ts";
 import { apiUrl, run } from "../indexer/run.ts";
 import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
@@ -35,6 +36,11 @@ export type ContractConfig = {
    * any, the class is checked at every poll. `[]`: never upgrades, never checked.
    */
   upgradeEvents?: readonly string[];
+  /**
+   * Only events whose arguments have these values (one, or a list of allowed ones): `{ Transfer: { to: "0x…" } }`.
+   * Filtered key arguments are filtered by the node, so only matches are fetched; data arguments after decoding.
+   */
+  filter?: FilterConfig;
 } & ({ address: string; factory?: undefined } | { factory: FactoryConfig; address?: undefined });
 
 /** A handler every `interval` blocks from `startBlock` (inclusive), after that block's events. */
@@ -166,10 +172,29 @@ export type RunOptions = {
   status?: Status;
 };
 
-/** `upgradeEvents` are events of each contract's ABI. */
+/** A filter value: the argument's type (a number for an integer too), or a list of them. */
+type FilterValue<V> = V extends bigint
+  ? bigint | number | readonly (bigint | number)[]
+  : V | readonly V[];
+
+/** `filter` as written, with each event and argument checked against the ABI: a misspelled name is `never`. */
+type FilterOf<A extends Abi, F> = {
+  [E in keyof F]: E extends EventName<A>
+    ? {
+        [K in keyof F[E]]: K extends keyof EventArgs<A, E>
+          ? FilterValue<EventArgs<A, E>[K]>
+          : never;
+      }
+    : never;
+};
+
+/** `upgradeEvents` and `filter` are events of each contract's ABI. */
 type Checked<C extends Config> = {
   contracts: {
-    [K in keyof Contracts<C>]: { upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[] };
+    [K in keyof Contracts<C>]: {
+      upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[];
+      filter?: FilterOf<Contracts<C>[K]["abi"], NonNullable<Contracts<C>[K]["filter"]>>;
+    };
   };
 };
 

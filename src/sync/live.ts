@@ -18,6 +18,8 @@ export type FollowOptions = {
   rpc: RpcClient;
   address: string | string[];
   keys?: string[][];
+  /** More filters, each fetched on its own and merged in chain order (shared by reference, changed in place). */
+  streams?: readonly { addresses: string[]; keys: string[][] }[];
   chunkSize: number;
   /** Last indexed block. */
   head: BlockRef;
@@ -42,17 +44,41 @@ const BLOCK_NOT_FOUND = 24;
 const lagging = (e: unknown) => e instanceof RpcError && e.code === BLOCK_NOT_FOUND;
 
 async function eventsIn(o: FollowOptions, from: number, to: number): Promise<EmittedEvent[]> {
+  if (o.streams === undefined || o.streams.length === 0)
+    return pages(o, o.address, o.keys, from, to);
+  const all = (
+    await Promise.all([
+      pages(o, o.address, o.keys, from, to),
+      ...o.streams.map((s) => pages(o, s.addresses, s.keys, from, to)),
+    ])
+  ).flat();
+  all.sort(order);
+  return all.filter((e, i) => i === 0 || order(all[i - 1]!, e) !== 0);
+}
+
+const order = (a: EmittedEvent, b: EmittedEvent) =>
+  a.block_number! - b.block_number! ||
+  a.transaction_index - b.transaction_index ||
+  a.event_index - b.event_index;
+
+async function pages(
+  o: FollowOptions,
+  address: string | string[],
+  keys: string[][] | undefined,
+  from: number,
+  to: number,
+): Promise<EmittedEvent[]> {
   // An empty address or key list would match every event on the chain.
   if (
-    (Array.isArray(o.address) && o.address.length === 0) ||
-    (o.keys !== undefined && o.keys[0]?.length === 0)
+    (Array.isArray(address) && address.length === 0) ||
+    (keys !== undefined && keys[0]?.length === 0)
   )
     return [];
   const filter = {
     from_block: { block_number: from },
     to_block: { block_number: to },
-    address: o.address,
-    keys: o.keys,
+    address,
+    keys,
   };
   const out: EmittedEvent[] = [];
   let token: string | undefined;

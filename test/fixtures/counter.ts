@@ -16,7 +16,7 @@ export const counterAbi = [
     kind: "enum",
     variants: [{ name: "Counted", type: "c::Counted", kind: "nested" }],
   },
-];
+] as const;
 
 /** A node serving that chain, the contract at any address. Listen on it, then point `rpc` at it. */
 export function counterNode(blocks: number) {

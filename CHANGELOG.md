@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `filter` per contract: only events whose arguments have the given values (`{ Transfer: { to: "0x…" } }`), typed
+  from the ABI. Key arguments are filtered by the node, so only matches are fetched; data arguments after decoding.
 - `rpc: loadBalance([...])`: several RPCs, each paced on its own; requests go to the one that can send soonest, then
   the fastest, retries to another. `{ url, maxRequestsPerSecond }` caps one. They must be on the same chain. With
   several, the dashboard shows each one's calls, limit, latency and failures.

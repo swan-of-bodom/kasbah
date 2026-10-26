@@ -114,6 +114,11 @@ before indexing; we skip that round trip.
 
 - **One filter for everything:** all watched addresses in one `address` array, the union of handled event
   selectors at key position 0 (`keys: [[sel1, sel2, …]]`). One request covers every contract at once.
+- **Filters by argument** (`filter`): an event whose filter names fixed-width key members gets a stream of its own,
+  `keys: [[selector], [values…], [], …]` over its contract's addresses, left out of the shared one; the streams are
+  merged in chain order (block, transaction, event index) up to the lowest `through`. They skip the raw-event
+  cache, whose coverage is by address and selector. Every filter is also checked after decoding, so data members
+  work too and a node's superset match never reaches a handler.
 - **Windows aligned to 8,192 blocks** (the nodes' bloom aggregate size), at most 81,920 blocks (Pathfinder's scan
   cap). Windows run in parallel; inside a window, follow the token sequentially.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).

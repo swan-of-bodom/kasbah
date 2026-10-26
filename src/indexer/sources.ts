@@ -10,6 +10,7 @@ import { ConfigError } from "../config/errors.ts";
 import type { RpcClient } from "../rpc/client.ts";
 import { canonical } from "../types/felt.ts";
 import { chunks } from "../utils/chunks.ts";
+import type { CompiledFilter } from "./filters.ts";
 import type { Note } from "./status.ts";
 
 /** What `Sources` reports: class replacements and skipped ABI events. */
@@ -37,7 +38,12 @@ export type ContractSource = {
   handled: Set<string>;
   /** Events announcing a class replacement (see `upgradeEventsOf`): undefined, none known. */
   upgrades: Set<string> | undefined;
+  /** Filtered events by name; those with `keys` are fetched by their own stream, not the shared one. */
+  filters: Map<string, CompiledFilter>;
 };
+
+/** A filtered event's own `getEvents` stream: its contract's addresses (changed in place) and its positional keys. */
+export type Stream = { contract: string; event: string; addresses: string[]; keys: string[][] };
 
 /** Upgrade events of the common upgradeable components (OpenZeppelin, Ekubo, StarkWare), found by name. */
 const UPGRADE_EVENTS = ["Upgraded", "ClassHashReplaced", "ImplementationReplaced"];
@@ -79,6 +85,8 @@ export class Sources {
   readonly addresses: string[] = [];
   /** `keys` filter: handled selectors at position 0. */
   readonly keys: string[][] = [[]];
+  /** One per filtered event a key filter can fetch: merged with the shared stream in chain order. */
+  readonly streams: Stream[] = [];
   readonly byAddress = new Map<string, Watched>();
   readonly #rpc: RpcClient;
   readonly #contracts = new Map<string, ContractSource>();
@@ -97,6 +105,9 @@ export class Sources {
     this.#rpc = rpc;
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
+      for (const [event, f] of c.filters)
+        if (f.keys !== undefined && c.handled.has(event))
+          this.streams.push({ contract: c.name, event, addresses: [], keys: f.keys });
       this.#fallback.set(c.name, createDecoder(c.abi));
       if (c.upgrades !== undefined)
         this.#upgradeSelectors.set(
@@ -113,16 +124,23 @@ export class Sources {
     this.#note = note;
   }
 
+  /** The filter on a contract's event, if any: events it doesn't match aren't handled. */
+  filterOf(contract: string, event: string): CompiledFilter | undefined {
+    return this.#contracts.get(contract)?.filters.get(event);
+  }
+
   /** Factory children watched. */
   get children(): number {
     return this.#children;
   }
 
-  /** Handled and upgrade events of `abi` join the `keys` filter. */
+  /** Handled and upgrade events of `abi` join the `keys` filter, except those their own stream fetches. */
   #join(c: ContractSource, abi: Abi) {
     for (const e of abiEvents(abi)) {
+      const own = c.filters.get(e.name)?.keys !== undefined && !c.upgrades?.has(e.name);
       if (
         (c.handled.has(e.name) || c.upgrades?.has(e.name)) &&
+        !own &&
         !this.keys[0]!.includes(e.selectors[0]!)
       )
         this.keys[0]!.push(e.selectors[0]!);
@@ -235,6 +253,7 @@ export class Sources {
     if (this.byAddress.has(w.address)) return false;
     this.byAddress.set(w.address, w);
     this.addresses.push(w.address);
+    for (const s of this.streams) if (s.contract === w.contract) s.addresses.push(w.address);
     if (w.child) this.#children++;
     const c = this.#contracts.get(w.contract)!;
     for (const s of w.spans) this.#join(c, s.abi);
@@ -265,8 +284,8 @@ export class Sources {
     this.#children -= removed.length;
     if (removed.length > 0) {
       const gone = new Set(removed);
-      const kept = this.addresses.filter((a) => !gone.has(a));
-      this.addresses.splice(0, this.addresses.length, ...kept);
+      for (const list of [this.addresses, ...this.streams.map((x) => x.addresses)])
+        list.splice(0, list.length, ...list.filter((a) => !gone.has(a)));
     }
     return removed;
   }

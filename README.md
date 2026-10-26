@@ -117,6 +117,11 @@ Per contract, optional:
 - `upgradeEvents`: events that announce a class replacement, so the class is read again only when one is emitted.
   `Upgraded`, `ClassHashReplaced` and `ImplementationReplaced` are found in the ABI by default; a contract with none
   is checked at every poll, `[]` never.
+- `filter`: only events whose arguments have these values, one or a list of allowed ones:
+  `filter: { Transfer: { to: "0x…" }, Swapped: { amount: [1n, 2n] } }`. Names and types are checked against the ABI.
+  When a filtered argument is a key (`#[key]`), the node does the filtering, so only matches are fetched (those
+  events skip the event cache); data arguments are filtered after decoding. Plain values only (felts, integers,
+  `u256`, addresses, booleans).
 
 Endpoints of your own, next to `/sql` and `/graphql` (needs `api`):
 

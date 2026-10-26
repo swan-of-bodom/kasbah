@@ -22,6 +22,7 @@ import { canonical } from "../types/felt.ts";
 import { CallClient, type Client } from "./client.ts";
 import { Position } from "./commit.ts";
 import type { Child } from "./events.ts";
+import { compileFilters } from "./filters.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
@@ -263,6 +264,7 @@ function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>
         .map((h) => h.slice(name.length + 1)),
     ),
     upgrades: upgradeEventsOf(name, c.abi, c.upgradeEvents),
+    filters: compileFilters(name, c.abi, c.filter),
   }));
 }
 
@@ -332,20 +334,24 @@ function buildIdOf(
 ): string {
   return createHash("sha256")
     .update(
-      JSON.stringify({
-        contracts: Object.entries(config.contracts).map(([k, c]) => [
-          k,
-          c.address === undefined
-            ? [canonical(c.factory.address), c.factory.event, c.factory.parameter]
-            : canonical(c.address),
-          c.startBlock,
-        ]),
-        blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
-        tables: tables.map((t) => createTableSql(tableInfo(t))),
-        // Their code too: a changed handler means the stored results are stale.
-        handlers: [...handlers].map(([name, h]) => [name, h.toString()]).sort(),
-        source: salt ?? null,
-      }),
+      JSON.stringify(
+        {
+          contracts: Object.entries(config.contracts).map(([k, c]) => [
+            k,
+            c.address === undefined
+              ? [canonical(c.factory.address), c.factory.event, c.factory.parameter]
+              : canonical(c.address),
+            c.startBlock,
+            c.filter ?? null,
+          ]),
+          blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
+          tables: tables.map((t) => createTableSql(tableInfo(t))),
+          // Their code too: a changed handler means the stored results are stale.
+          handlers: [...handlers].map(([name, h]) => [name, h.toString()]).sort(),
+          source: salt ?? null,
+        },
+        (_, v) => (typeof v === "bigint" ? v.toString() : v),
+      ),
     )
     .digest("hex")
     .slice(0, 16);
