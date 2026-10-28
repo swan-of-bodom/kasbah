@@ -4,8 +4,6 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
-- `preConfirmed: true`: `GET /pre-confirmed` serves the watched events of blocks not yet accepted, decoded, about a
-  second after their transaction (no handler runs on them).
 - `GET /metrics` for Prometheus: checkpoint, head, phase, handlers, RPC calls per method and endpoint, reorgs.
 - `app.on("setup", …)`: runs once before the first event on an empty schema, to seed rows.
 - `finality: "l1"`: a block is final once Ethereum accepted it, instead of `reorgWindow` blocks behind the head.

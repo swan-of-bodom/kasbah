@@ -89,12 +89,6 @@ export type Config = {
   /** Head polling interval. Default 2 s. */
   pollMs?: number;
   /**
-   * While following the head, also poll the blocks not yet accepted on L2 (one `getEvents` per `pollMs`) and serve
-   * their watched events, decoded, at `GET /pre-confirmed`: about a second after a transaction, before any handler
-   * runs on it. They may still change or vanish. Needs the API.
-   */
-  preConfirmed?: boolean;
-  /**
    * WebSocket endpoint for `starknet_subscribeNewHeads` (`true`: the `rpc` URL with `ws` for `http`). Heads only
    * wake the follower, which then fetches as when polling; while the socket is down it polls every `pollMs`.
    */

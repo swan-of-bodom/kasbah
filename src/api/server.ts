@@ -12,7 +12,6 @@ import {
 } from "graphql";
 import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
-import type { PreConfirmed } from "../indexer/pre-confirmed.ts";
 import { createGraphqlSchema, relationsOf } from "./graphql.ts";
 import { parseLimited } from "./limits.ts";
 import { prometheus } from "./prometheus.ts";
@@ -30,8 +29,6 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   routes?: readonly Route[];
   /** `GET /metrics` in Prometheus' format: the indexer's, when it runs the API; else the checkpoint and phase. */
   metrics?: () => string;
-  /** `GET /pre-confirmed`, with `preConfirmed`: the indexer's latest snapshot (undefined: not live yet). */
-  preConfirmed?: () => PreConfirmed | undefined;
 };
 
 /** The channel the indexer notifies on each commit, with `{"checkpoint": n}`. */
@@ -126,13 +123,11 @@ export class Api {
     handler: Route["handler"];
   }[];
   readonly #metrics: (() => string) | undefined;
-  readonly #preConfirmed: ApiOptions["preConfirmed"];
   #unlisten: (() => Promise<void>) | undefined;
 
   private constructor(reader: Reader, schema: GraphQLSchema, o: ApiOptions) {
     this.#reader = reader;
     this.#metrics = o.metrics;
-    this.#preConfirmed = o.preConfirmed;
     this.#schema = schema;
     this.#maxLive = o.maxLive ?? 1_000;
     this.#tables = o.tables;
@@ -185,17 +180,6 @@ export class Api {
         return res.end();
       }
       if (path === "/status" && req.method === "GET") return send(res, 200, await this.#status());
-      if (path === "/pre-confirmed" && req.method === "GET") {
-        if (this.#preConfirmed === undefined)
-          return send(res, 404, {
-            error:
-              "pre-confirmed events are off: set `preConfirmed: true`, with the indexer serving the API",
-          });
-        const s = this.#preConfirmed();
-        return s === undefined
-          ? send(res, 503, { error: "not following the head yet" })
-          : send(res, 200, s);
-      }
       if (path === "/metrics" && req.method === "GET") {
         res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
         return res.end(this.#metrics?.() ?? (await this.#storedMetrics()));

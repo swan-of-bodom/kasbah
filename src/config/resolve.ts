@@ -69,8 +69,6 @@ export function resolveConfig(
   if (port !== undefined && !Number.isInteger(port))
     throw new ConfigError(`PORT=${env.PORT} is not a port number`);
   const rpc = endpointsOf(config.rpc);
-  if (config.preConfirmed && (config.api === undefined || config.api === false))
-    throw new ConfigError("`preConfirmed` serves its events through the API, which is off");
   if (config.finality !== undefined && config.reorgWindow !== undefined)
     throw new ConfigError('`finality: "l1"` and `reorgWindow` both set: L1 finality has no window');
   return {

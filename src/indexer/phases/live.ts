@@ -5,7 +5,6 @@ import { felt } from "../../types/felt.ts";
 import { type Child, children as created } from "../events.ts";
 import { extras, fire, handle } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
-import { followPreConfirmed } from "../pre-confirmed.ts";
 import type { Watched } from "../sources.ts";
 
 /** Poll interval while the socket delivers heads: polling then only catches a head the socket missed. */
@@ -41,38 +40,28 @@ export async function live(run: Run): Promise<void> {
   }
   /** Children created in the blocks of the current tick, by block: committed with their block. */
   let children = new Map<number, Watched[]>();
-  // Its own signal: it stops with the follower, whether that returns or throws.
-  const done = new AbortController();
-  const pending = config.preConfirmed
-    ? followPreConfirmed(run, AbortSignal.any([signal, done.signal]))
-    : undefined;
-  try {
-    await follow({
-      rpc,
-      address: sources.addresses,
-      keys: sources.keys,
-      streams: sources.streams,
-      chunkSize: endpoint.maxChunk,
-      head,
-      known: position.known,
-      signal,
-      pollMs,
-      // With a socket up, a missed head costs at most 15 s; without, poll as usual.
-      wait:
-        heads === undefined
-          ? undefined
-          : (s) => heads.wait(heads.healthy ? Math.max(pollMs, SOCKET_POLL_MS) : pollMs, s),
-      prepare: async (from, to) => {
-        children = await discover(run, from, to);
-        await sources.checkClasses(from, to);
-      },
-      onBlock: (block) => onBlock(run, block, children.get(block.number) ?? []),
-      onReorg: (ancestor, replaced) => reorg(run, ancestor, replaced, false),
-    });
-  } finally {
-    done.abort();
-    await pending;
-  }
+  await follow({
+    rpc,
+    address: sources.addresses,
+    keys: sources.keys,
+    streams: sources.streams,
+    chunkSize: endpoint.maxChunk,
+    head,
+    known: position.known,
+    signal,
+    pollMs,
+    // With a socket up, a missed head costs at most 15 s; without, poll as usual.
+    wait:
+      heads === undefined
+        ? undefined
+        : (s) => heads.wait(heads.healthy ? Math.max(pollMs, SOCKET_POLL_MS) : pollMs, s),
+    prepare: async (from, to) => {
+      children = await discover(run, from, to);
+      await sources.checkClasses(from, to);
+    },
+    onBlock: (block) => onBlock(run, block, children.get(block.number) ?? []),
+    onReorg: (ancestor, replaced) => reorg(run, ancestor, replaced, false),
+  });
 }
 
 /** At open, if it stopped while live: the blocks indexed last may have been reorged since (backfill trusts its start). */

@@ -53,20 +53,6 @@ export async function blockHeaders(run: Run, numbers: number[]): Promise<Map<num
   return found;
 }
 
-/** `e` decoded with its address's class at its block, when a handler takes it (after `endBlock` and filters). */
-export function wantedOf(run: Run, e: EmittedEvent) {
-  const w = watchedOf(run, e);
-  if (w === undefined || e.block_number! < w.from) return undefined;
-  if (e.block_number! > (run.config.contracts[w.contract]!.endBlock ?? Infinity)) return undefined;
-  const decoded = w.decode(e.block_number!, e.keys, e.data);
-  if (decoded === undefined) return undefined;
-  const handler = run.handlers.get(`${w.contract}:${decoded.name}`);
-  if (handler === undefined) return undefined;
-  if (run.sources.filterOf(w.contract, decoded.name)?.matches(decoded.args) === false)
-    return undefined;
-  return { w, decoded, handler };
-}
-
 /** Decodes `e` with its address's class at that block and runs its handler, if any. */
 export async function handle(
   run: Run,
@@ -74,10 +60,15 @@ export async function handle(
   extras: Map<string, Extras>,
   headers: Map<number, Block>,
 ): Promise<void> {
-  const wanted = wantedOf(run, e);
-  if (wanted === undefined) return;
-  const { w, decoded, handler } = wanted;
+  const w = watchedOf(run, e);
+  if (w === undefined || e.block_number! < w.from) return;
+  if (e.block_number! > (run.config.contracts[w.contract]!.endBlock ?? Infinity)) return;
+  const decoded = w.decode(e.block_number!, e.keys, e.data);
+  if (decoded === undefined) return;
   const name = `${w.contract}:${decoded.name}`;
+  const handler = run.handlers.get(name);
+  if (handler === undefined) return;
+  if (run.sources.filterOf(w.contract, decoded.name)?.matches(decoded.args) === false) return;
   const x = extras.get(e.transaction_hash);
   const event = {
     contract: w.contract,
@@ -111,6 +102,7 @@ export async function handle(
   run.status.record(name, performance.now() - t);
 }
 
+/** Runs `source`'s block handler, if any, for `block`. */
 /** The `setup` handler, if any, when nothing is committed yet: its writes commit with the first blocks. */
 export async function setup(run: Run): Promise<void> {
   const handler = run.handlers.get("setup");
@@ -125,7 +117,6 @@ export async function setup(run: Run): Promise<void> {
   run.status.record("setup", performance.now() - t);
 }
 
-/** Runs `source`'s block handler, if any, for `block`. */
 export async function fire(run: Run, source: string, block: IndexedBlock["block"]): Promise<void> {
   const handler = run.handlers.get(`${source}:block`);
   if (handler === undefined) return;
