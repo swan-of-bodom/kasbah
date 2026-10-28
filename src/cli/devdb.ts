@@ -5,7 +5,8 @@ import pg from "pg";
 import { ConfigError } from "../config/errors.ts";
 import { sleep } from "../utils/sleep.ts";
 
-export const IMAGE = "postgres:17";
+/** Fully qualified: Podman refuses or prompts for a short name, depending on the distro's registries. */
+export const IMAGE = "docker.io/library/postgres:17";
 
 export type DevDatabase = { url: string; container: string; runtime: string; stop: () => void };
 

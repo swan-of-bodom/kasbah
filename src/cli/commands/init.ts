@@ -249,7 +249,7 @@ CMD ["node", "node_modules/kasbah/dist/cli/main.js", "start"]
 
 const COMPOSE = `services:
   postgres:
-    image: postgres:17
+    image: docker.io/library/postgres:17
     environment:
       POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-kasbah}
     volumes:

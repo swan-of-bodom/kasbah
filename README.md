@@ -77,7 +77,7 @@ still work, and `api: false` turns the API off. From code (`kasbah()` without th
 pass `tables`, and `api` to serve it. `kasbah dev|start|serve` with no file runs the project in the working directory; with a file,
 a single-file app (`examples/jediswap/index.ts`).
 
-Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the app (`postgres:17`, pulled the
+Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the app (`docker.io/library/postgres:17`, pulled the
 first time; one container and volume per app directory, on a free localhost port), stopped when `dev` exits, data
 kept for the next run. `start` never does: it needs `DATABASE_URL`.
 
@@ -182,7 +182,7 @@ pnpm fixtures    # refetch test/fixtures from mainnet (needs KASBAH_RPC_URL in .
 A local Postgres for the tests and the example:
 
 ```
-docker run -d --name kasbah-pg -e POSTGRES_PASSWORD=kasbah -e POSTGRES_DB=kasbah -p 127.0.0.1:5544:5432 postgres:17
+docker run -d --name kasbah-pg -e POSTGRES_PASSWORD=kasbah -e POSTGRES_DB=kasbah -p 127.0.0.1:5544:5432 docker.io/library/postgres:17
 ```
 
 Node 24+. Fixtures: Ekubo Core (Cairo 1, flat and nested variants), STRK (OpenZeppelin ERC20, key members), two
