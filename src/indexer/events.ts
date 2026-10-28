@@ -57,8 +57,9 @@ export async function* events(
 }
 
 /**
- * The watched contracts' events: the shared stream merged with each filtered event's own (`sources.streams`). Those
- * skip the raw-event cache, which records what it holds by address and selector, not by key filter.
+ * The watched contracts' events: the shared stream merged with each contract's own (`sources.streams`), each from
+ * its contract's start block. Filter streams skip the raw-event cache, which records what it holds by address and
+ * selector, not by key filter.
  */
 export function watchedEvents(
   run: Run,
@@ -67,15 +68,42 @@ export function watchedEvents(
   final: boolean,
 ): AsyncGenerator<Batch> {
   const { sources } = run;
-  const main = events(run, sources.addresses, sources.keys, from, to, final);
+  const main = shared(run, from, to, final);
   if (sources.streams.length === 0) return main;
   return merge([
     main,
     ...sources.streams.flatMap((s) => {
+      const start = Math.max(from, s.from);
       const end = Math.min(to, s.to ?? to);
-      return end < from ? [] : [events(run, s.addresses, s.keys, from, end, final, s.cached)];
+      return end < start ? [] : [events(run, s.addresses, s.keys, start, end, final, s.cached)];
     }),
   ]);
+}
+
+/**
+ * The shared stream, cut at each configured contract's start block, as Ponder clips its filters: each piece asks only
+ * for the addresses started by then, so a contract starting late isn't fetched (and dropped) from the earliest start.
+ * Factory children join at once: nothing is emitted before their creation.
+ */
+async function* shared(run: Run, from: number, to: number, final: boolean): AsyncGenerator<Batch> {
+  const { sources } = run;
+  const startOf = (a: string) => {
+    const w = sources.byAddress.get(a)!;
+    return w.child ? Number.NEGATIVE_INFINITY : w.from;
+  };
+  const cuts = [...new Set(sources.addresses.map(startOf))]
+    .filter((s) => s > from && s <= to)
+    .sort((a, b) => a - b);
+  if (cuts.length === 0) {
+    yield* events(run, sources.addresses, sources.keys, from, to, final);
+    return;
+  }
+  const edges = [from, ...cuts, to + 1];
+  for (let i = 0; i < edges.length - 1; i++) {
+    const [lo, hi] = [edges[i]!, edges[i + 1]! - 1];
+    const started = sources.addresses.filter((a) => startOf(a) <= lo);
+    yield* events(run, started, sources.keys, lo, hi, final);
+  }
 }
 
 const order = (a: EmittedEvent, b: EmittedEvent) =>

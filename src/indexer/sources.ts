@@ -53,6 +53,8 @@ export type Stream = {
   contract: string;
   addresses: string[];
   keys: string[][];
+  /** Its contract's start block: nothing before it is fetched. */
+  from: number;
   to: number | undefined;
   cached: boolean;
 };
@@ -119,7 +121,7 @@ export class Sources {
     this.#rpc = rpc;
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
-      const own = { contract: c.name, to: c.endBlock };
+      const own = { contract: c.name, from: c.startBlock, to: c.endBlock };
       if (c.endBlock !== undefined) {
         const s = { ...own, addresses: [], keys: [[]], cached: true };
         this.#bounded.set(c.name, s);

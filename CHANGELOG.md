@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Backfill asks for each contract only from its own start block: one starting late next to an early one is no longer
+  fetched from the earliest start and dropped.
 - `GET /metrics` for Prometheus: checkpoint, head, phase, handlers, RPC calls per method and endpoint, reorgs.
 - `app.on("setup", …)`: runs once before the first event on an empty schema, to seed rows.
 - `finality: "l1"`: a block is final once Ethereum accepted it, instead of `reorgWindow` blocks behind the head.

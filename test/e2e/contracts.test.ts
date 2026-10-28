@@ -16,7 +16,11 @@ const L1 = 20;
 const settled = counterNode(BLOCKS, { l1: L1 });
 /** Two addresses taking turns, behind a proxy recording each `getEvents` filter. */
 const pair = counterNode(BLOCKS, { addresses: ["0xc", "0xe"] });
-const asked: { address?: string[]; to_block: { block_number: number } }[] = [];
+const asked: {
+  address?: string[];
+  from_block: { block_number: number };
+  to_block: { block_number: number };
+}[] = [];
 const proxy = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
@@ -205,5 +209,60 @@ test.skipIf(url === undefined)(
     } finally {
       await served.close();
     }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "start blocks: a contract starting later isn't fetched before its start",
+  async () => {
+    asked.length = 0;
+    const START = 20;
+    const a = kasbah({
+      rpc: proxied,
+      database: url,
+      schema,
+      contracts: {
+        Early: { abi: counterAbi, address: "0xc", startBlock: 0 },
+        Late: { abi: counterAbi, address: "0xe", startBlock: START },
+      },
+      tables: { totals },
+      reorgWindow: 4,
+    });
+    for (const name of ["Early:Counted", "Late:Counted"] as const)
+      a.on(name, async ({ event, context }) => {
+        const v = event.args.amount;
+        await context.db
+          .insert(totals)
+          .values({ id: event.contract, total: v })
+          .onConflictDoUpdate((r) => ({ total: r.total + v }));
+      });
+    await a.run({ reset: true, to: BLOCKS - 5 });
+
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    try {
+      const rows = (await p.query(`SELECT id, total::text FROM ${schema}.totals ORDER BY id`)).rows;
+      // 0xc emits in even blocks, 0xe in odd ones; block n counts n + 1.
+      let early = 0;
+      let late = 0;
+      for (let n = 0; n <= BLOCKS - 5; n++) {
+        if (n % 2 === 0) early += n + 1;
+        else if (n >= START) late += n + 1;
+      }
+      expect(rows).toEqual([
+        { id: "Early", total: String(early) },
+        { id: "Late", total: String(late) },
+      ]);
+    } finally {
+      await p.end();
+    }
+    const withLate = asked.filter(
+      (f) => Array.isArray(f.address) && f.address.some((x) => BigInt(x) === 0xen),
+    );
+    expect(withLate.length).toBeGreaterThan(0);
+    for (const f of withLate) expect(f.from_block.block_number).toBeGreaterThanOrEqual(START);
+    const before = asked.filter(
+      (f) => Array.isArray(f.address) && f.from_block.block_number < START,
+    );
+    expect(before.length).toBeGreaterThan(0);
   },
 );
