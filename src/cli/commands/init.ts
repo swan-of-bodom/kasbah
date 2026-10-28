@@ -4,7 +4,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import pg from "pg";
 import type { Abi, AbiMember } from "../../abi/abi.ts";
 import { abiEvents } from "../../abi/events.ts";
-import { classHistory } from "../../abi/history.ts";
+import { deployedAt } from "../../abi/history.ts";
 import { ConfigError } from "../../config/errors.ts";
 import { NETWORKS, type Network, networkName } from "../../config/network.ts";
 import { RpcClient } from "../../rpc/client.ts";
@@ -473,7 +473,7 @@ async function askStart(
   if (o.start === undefined)
     deployed = await ui.step(
       "Finding its deployment block",
-      async () => (await classHistory(client, address, 0, tip))[0]?.from ?? 0,
+      async () => (await deployedAt(client, address, tip)) ?? 0,
       (b) => `block ${b.toLocaleString("en")}`,
     );
   return Number(

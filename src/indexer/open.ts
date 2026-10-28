@@ -3,7 +3,7 @@ import { is } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import pg from "pg";
-import { classHistory } from "../abi/history.ts";
+import { classHistory, deployedAt } from "../abi/history.ts";
 import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
 import type { BlockConfig, RunOptions, StartBlock } from "../config/app.ts";
@@ -272,7 +272,7 @@ async function deployments(
       // With several addresses, the first one deployed.
       const blocks = await Promise.all(
         [c.address ?? c.factory.address].flat().map(async (a) => {
-          const from = (await classHistory(rpc, a, 0, tip))[0]?.from;
+          const from = await deployedAt(rpc, a, tip);
           if (from === undefined)
             throw new ConfigError(
               `${name}: startBlock "deployment", but nothing is deployed at ${a}`,

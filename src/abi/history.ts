@@ -25,6 +25,23 @@ async function classAt(
   }
 }
 
+/** The block `address` was deployed in, or undefined if not by `to`: a binary search, about 25 calls. */
+export async function deployedAt(
+  rpc: RpcClient,
+  address: string,
+  to: number,
+): Promise<number | undefined> {
+  if ((await classAt(rpc, address, to)) === undefined) return undefined;
+  if ((await classAt(rpc, address, 0)) !== undefined) return 0;
+  let [lo, hi] = [0, to];
+  while (hi - lo > 1) {
+    const mid = lo + Math.floor((hi - lo) / 2);
+    if ((await classAt(rpc, address, mid)) === undefined) lo = mid;
+    else hi = mid;
+  }
+  return hi;
+}
+
 /**
  * Every class a contract had over `[from, to]`, found by bisecting `getClassHashAt`: about 25 calls per change.
  * A class replaced and then restored between two probes is invisible; probes every `step` blocks bound that window.
