@@ -177,6 +177,7 @@ pnpm kasbah start examples/ekubo/kasbah.config.ts --to 300000   # Ekubo: a proje
 # from deployment to block 300,000: 652,647 events, 2.6 min; with timestamps, one header per block with events (79,184)
 pnpm typecheck   # includes the type tests (test/*.test-d.ts) on the real ABIs
 pnpm fixtures    # refetch test/fixtures from mainnet (needs KASBAH_RPC_URL in .env, see .env.example)
+cd documentation && pnpm install && pnpm dev   # the docs site (Vocs), http://localhost:5173
 ```
 
 A local Postgres for the tests and the example:

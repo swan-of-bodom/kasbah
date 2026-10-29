@@ -14,7 +14,8 @@
       "!**/dist",
       "!test/fixtures/*.json",
       "!test/.tmp-*",
-      "!pnpm-lock.yaml"
+      "!**/pnpm-lock.yaml",
+      "!documentation/src/pages.gen.ts"
     ]
   },
   "formatter": {

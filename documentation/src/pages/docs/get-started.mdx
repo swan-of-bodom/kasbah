@@ -1,0 +1,22 @@
+# Get started [Create a project and index your first contract]
+
+## Create a project
+
+```sh
+kasbah init my-indexer
+```
+
+`init` asks for the RPC, a contract address (its ABI and deployment block are read from the chain), the events to
+handle and Postgres (or none), then writes the project: `kasbah.config.ts`, `kasbah.schema.ts`, the ABI, a table and a
+handler per event.
+
+## Run it
+
+```sh
+cd my-indexer
+pnpm install
+pnpm dev
+```
+
+Without `DATABASE_URL`, `dev` runs Postgres in a Docker or Podman container for the project. The API listens on
+port 42069, with GraphiQL at `http://localhost:42069/graphql`.
