@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A second API process on the same schema (a zero-downtime deploy, `serve`) no longer locks out the first: every
+  process now sets the same password on the `<schema>_reader` role, derived from the database URL.
+
 - Backfill asks for each contract only from its own start block: one starting late next to an early one is no longer
   fetched from the earliest start and dropped.
 - `GET /metrics` for Prometheus: checkpoint, head, phase, handlers, RPC calls per method and endpoint, reorgs.

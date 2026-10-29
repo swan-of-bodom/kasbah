@@ -52,11 +52,6 @@ last commit and undoes anything written after it.
 One `start` writes; any number of `serve` processes on the same `DATABASE_URL` and schema serve the API, behind a
 load balancer.
 
-:::warning
-Each process that starts sets a new password on the `<schema>_reader` role, so the others can no longer open
-connections. Until that's fixed, give every process the same `api.readDatabase`.
-:::
-
 ## Platforms
 
 - [Railway](/docs/production/railway)

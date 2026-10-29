@@ -189,6 +189,22 @@ test.skipIf(url === undefined)("SQL: settings made by one query don't reach the 
   ).toEqual([["on"]]);
 });
 
+test.skipIf(url === undefined)(
+  "two API processes on one schema: the first still opens new connections",
+  async () => {
+    const second = await Api.start({ database: url!, schema, tables: { pools }, port: 0 });
+    try {
+      // More queries at once than the first has connections open, so it must open new ones.
+      const all = await Promise.all(
+        Array.from({ length: 12 }, () => post("/sql", { sql: "select count(*)::int from pools" })),
+      );
+      for (const r of all) expect(r.status).toBe(200);
+    } finally {
+      await second.close();
+    }
+  },
+);
+
 test.skipIf(url === undefined)("GraphQL: one row by primary key, composite keys too", async () => {
   expect(await gql(`{ pool(id: "p04") { id swaps volume note extra } }`)).toEqual({
     data: {

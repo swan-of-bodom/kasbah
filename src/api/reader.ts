@@ -1,4 +1,4 @@
-import { randomBytes } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import pg from "pg";
 import { quote, type TableInfo } from "../db/table.ts";
@@ -46,7 +46,8 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
 }
 
 /**
- * Read-only access for the API. Queries run as a role that can only SELECT the app's tables, in a read-only
+ * Read-only access for the API. Queries run as a role that can only SELECT the app's tables (its password derived
+ * from the database URL, so every process on the schema agrees on it), in a read-only
  * transaction with a timeout that is always rolled back, so nothing a query sets outlives it.
  */
 export class Reader {
@@ -66,12 +67,18 @@ export class Reader {
 
   static async connect(o: ReaderOptions): Promise<Reader> {
     let url = o.readDatabase;
-    const owner = new pg.Pool({ connectionString: o.database, max: 1 });
+    const owner = new pg.Client({ connectionString: o.database });
+    await owner.connect();
     try {
       let role: string;
+      await owner.query("BEGIN");
+      // Processes starting at once would race to create the role and grant to it.
+      await owner.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`${o.schema}_reader`]);
       if (url === undefined) {
         role = `${o.schema}_reader`;
-        const password = randomBytes(24).toString("hex");
+        // The same for every process on this database and schema: one starting (a deploy, `serve`) sets the
+        // password the others already use, instead of locking them out.
+        const password = createHmac("sha256", o.database).update(role).digest("hex");
         await owner.query(
           `DO $$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role.replace(/'/g, "''")}') THEN CREATE ROLE ${quote(role)} LOGIN; END IF; END $$`,
         );
@@ -89,6 +96,7 @@ export class Reader {
       for (const t of o.tables)
         await owner.query(`GRANT SELECT ON ${quote(o.schema)}.${quote(t.name)} TO ${quote(role)}`);
       await owner.query(`GRANT SELECT ON ${quote(o.schema)}._kasbah_meta TO ${quote(role)}`);
+      await owner.query("COMMIT");
     } finally {
       await owner.end();
     }

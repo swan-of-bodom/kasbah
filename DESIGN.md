@@ -514,7 +514,12 @@ Target size: under 10k lines for v1.
 4. Live polling, undo journal, crash recovery. Done.
 5. Read API. Done (`src/api/`):
    - `POST /sql` `{ sql, params }` → `{ columns, rows }`. Runs as `<schema>_reader`, a login role kasbah creates
-     (or `api.readDatabase`) with SELECT on the app's tables and `_kasbah_meta` only. Each query: one read-only
+     (or `api.readDatabase`) with SELECT on the app's tables and `_kasbah_meta` only. Its password is an HMAC
+     of the database URL and the role's name, so every process on the schema sets the same one (at first
+     each start set a random one, locking out the processes already running: a zero-downtime deploy's old
+     instance, `serve` replicas). The setup runs in one transaction under an advisory lock, so processes starting
+     at once don't race. Ponder instead reads with the indexer's own login on read-only connections and checks
+     each query against a 1,200-line SQL allow list; a role keeps Postgres as the guard. Each query: one read-only
      transaction with a timeout (10 s), always rolled back, so nothing it sets outlives it; sent wrapped as
      `SELECT * FROM (<sql>) LIMIT $n` with the extended protocol, so only one SELECT/WITH/VALUES statement parses;
      at most 10,000 rows.
@@ -530,6 +535,12 @@ Target size: under 10k lines for v1.
      sent only when the result changed (one run at a time per stream, commits during a run coalesce). A bad query
      is a plain 400 before the stream opens. Readers can't fake a notice: their transactions always roll back,
      and Postgres delivers notices only on commit (mutation-checked). Checked on mainnet with Ekubo live.
+     TODO, when many clients watch at once (to revisit later):
+     - Re-run only the streams a commit affects, as Ponder does, without a SQL parser: the commit's notice names the
+       tables it wrote (the store knows them), and each stream learns the tables its query reads once, from
+       Postgres' `EXPLAIN` when it opens. Today every open stream re-runs after every commit.
+     - An API cache: a route's or query's result kept in memory until the next commit, so N visitors in one block
+       cost one query (ARCHITECTURE §15 stage 1 in the camel repo).
    - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables`
      takes both, so `import * as schema` works, as in Ponder). A to-one field is the related row, batched: all
      lookups of one level go out as one `WHERE (cols) IN (…)`. A to-many field is a page with the top-level
