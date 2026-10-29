@@ -1,0 +1,18 @@
+# Monitoring [Health checks and metrics]
+
+| Endpoint | Answers |
+| --- | --- |
+| `GET /health` | 200 while the process and its database are up |
+| `GET /ready` | 200 once it follows the head (or a `--to` run is done), else 503 |
+| `GET /status` | the checkpoint and phase |
+| `GET /metrics` | Prometheus metrics |
+
+`/metrics` includes the checkpoint, head, phase, events and time per handler, RPC calls per method and endpoint, and
+reorgs, all named `kasbah_*`.
+
+```yaml [prometheus.yml]
+scrape_configs:
+  - job_name: kasbah
+    static_configs:
+      - targets: ["localhost:42069"]
+```

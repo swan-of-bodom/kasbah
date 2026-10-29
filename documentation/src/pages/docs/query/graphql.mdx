@@ -1,0 +1,27 @@
+# GraphQL [A GraphQL API generated from your tables]
+
+`POST /graphql`, with GraphiQL at [localhost:42069/graphql](http://localhost:42069/graphql) in a browser.
+
+```graphql
+{
+  pools(where: { swaps_gt: 100 }, orderBy: swaps, orderDirection: desc, limit: 10) {
+    items {
+      id
+      swaps
+    }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
+  pool(id: "0x…") {
+    liquidity
+  }
+}
+```
+
+Per table: one row by primary key (`pool`) and a page (`pools`) with `where`, `orderBy`, `orderDirection`, `limit`
+and `after`. Filters: `_gt`, `_gte`, `_lt`, `_lte`, `_not`, `_in`, `_not_in`, `AND`, `OR`. Numbers past 32 bits
+are strings.
+
+Drizzle `relations()` exported from `kasbah.schema.ts` become fields: a to-one is the related row, a to-many a page.

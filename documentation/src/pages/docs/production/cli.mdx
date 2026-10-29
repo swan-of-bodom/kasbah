@@ -1,0 +1,30 @@
+# CLI [Every kasbah command]
+
+```bash
+kasbah init [dir]      # a new project
+kasbah dev             # index, follow the head, restart on changes
+kasbah start           # the same, for production
+kasbah serve           # the API only, over what an indexer stored
+kasbah clean           # delete what the app stored
+kasbah cache info      # the shared cache and its size
+kasbah cache clear     # --events, --calls
+```
+
+## Options
+
+- `--to <block>`: stop at this block (`start`).
+- `--reset`: drop what the app stored first (`pnpm fresh` is `dev --reset`).
+- `--schema <name>`, `--port <n>`, `--hostname <host>`: override the config.
+- `--ui` / `--no-ui`: the progress screen, or plain logs.
+- `--debug`: more on the progress screen: fetch buffers, waits, event loop delay.
+
+## Environment
+
+| Variable | Used for |
+| --- | --- |
+| `KASBAH_RPC_URL` | the RPC (as written by `init`) |
+| `DATABASE_URL` | Postgres |
+| `DATABASE_SCHEMA` | the app's schema |
+| `PORT`, `API_HOST` | where the API listens |
+
+`.env` in the project directory is read automatically.

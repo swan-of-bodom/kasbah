@@ -1,0 +1,12 @@
+# SQL over HTTP [Query your tables with SQL]
+
+```bash
+curl localhost:42069/sql \
+  -d '{"sql": "SELECT id, swaps FROM pools ORDER BY swaps DESC LIMIT $1", "params": [10]}'
+```
+
+```json
+{ "columns": ["id", "swaps"], "rows": [["0x…", 812]] }
+```
+
+Queries run read-only. Or connect to Postgres directly: your tables are in the app's schema.

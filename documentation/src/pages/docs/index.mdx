@@ -1,0 +1,19 @@
+# Overview [What kasbah is and how it works]
+
+kasbah reads events from a Starknet node and runs your TypeScript handlers on them. The handlers write to
+Postgres tables you define, and an API serves those tables.
+
+```text
+Starknet RPC ──▶ events ──▶ your handlers ──▶ Postgres ──▶ SQL · GraphQL · your routes
+```
+
+A project is four files:
+
+| File | What it holds |
+| --- | --- |
+| `kasbah.config.ts` | the network, the RPC and the contracts to index |
+| `kasbah.schema.ts` | your tables (Drizzle) |
+| `src/index.ts` | event handlers |
+| `src/api/index.ts` | your API routes (optional) |
+
+Next: [install it](/docs/installation), then follow the [quickstart](/docs/quickstart).

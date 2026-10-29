@@ -1,0 +1,82 @@
+# Installation [Install kasbah and its requirements]
+
+:::warning
+**THIS IS STILL TODO.** kasbah isn't published yet: the commands below are placeholders for the methods it
+will have. Only [from source](#from-source) works today.
+:::
+
+## Requirements
+
+- **Node.js 22.18 or later** (the app's `.ts` files run with Node's type stripping).
+- **Postgres 17**, or Docker or Podman: without `DATABASE_URL`, `dev` runs Postgres in a container for you.
+- **A Starknet RPC** on spec 0.10 (Alchemy, Blast, your own Pathfinder or Juno).
+
+## New project
+
+:::code-group
+
+```bash [pnpm]
+pnpm create kasbah my-indexer
+```
+
+```bash [npm]
+npm create kasbah@latest my-indexer
+```
+
+```bash [yarn]
+yarn create kasbah my-indexer
+```
+
+```bash [bun]
+bun create kasbah my-indexer
+```
+
+:::
+
+## Into an existing project
+
+:::code-group
+
+```bash [pnpm]
+pnpm add kasbah drizzle-orm
+```
+
+```bash [npm]
+npm install kasbah drizzle-orm
+```
+
+```bash [yarn]
+yarn add kasbah drizzle-orm
+```
+
+```bash [bun]
+bun add kasbah drizzle-orm
+```
+
+:::
+
+`drizzle-orm` is a peer dependency: your tables and kasbah share one copy.
+
+## CLI only
+
+```bash
+curl -fsSL https://kasbah.dev/install.sh | sh
+```
+
+## Docker
+
+```bash
+docker pull ghcr.io/swan-of-bodom/kasbah:latest
+```
+
+Every project also gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [Deploy](/docs/production/deploy).
+
+## From source
+
+This one works today: build the package and install the tarball.
+
+```bash
+git clone https://github.com/swan-of-bodom/kasbah
+cd kasbah && pnpm install && pnpm pack
+cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz drizzle-orm
+```

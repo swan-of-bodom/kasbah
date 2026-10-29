@@ -1,0 +1,38 @@
+# Options [Finality, cache, API and database settings]
+
+```ts [kasbah.config.ts]
+export default kasbah({
+  network: "mainnet",
+  rpc: process.env.KASBAH_RPC_URL!,
+  contracts: { /* … */ },
+  finality: "l1",
+  cache: true,
+  api: {
+    port: 42069,
+  },
+});
+```
+
+## Finality
+
+- `reorgWindow`: blocks behind the head that a reorg can still replace. Default `64`. They're indexed with an undo
+  journal, so a reorg undoes them.
+- `finality: "l1"`: a block is final only once Ethereum accepted it, a few hours behind the head. Use it when your
+  app must never show data a reorg could take back. Don't set both.
+
+## Cache
+
+- `cache: true` keeps final raw events and contract reads in Postgres, shared by every app on the chain, so a
+  re-index fetches nothing again. `{ maxCalls }` caps the reads kept (default 1,000,000).
+
+```bash
+kasbah cache info
+kasbah cache clear --events
+```
+
+## API and database
+
+- `api`: `{ port, host, readDatabase }`, or `false` to turn the API off. Defaults to port 42069 on localhost.
+- `database`: a Postgres URL. Default: `DATABASE_URL`.
+- `schema`: the Postgres schema for the app's tables. Default: the project directory's name.
+- `tables`: default, what `kasbah.schema.ts` exports.

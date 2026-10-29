@@ -1,0 +1,30 @@
+# Handlers [Run code for each event]
+
+```ts [src/index.ts]
+import app from "../kasbah.config.ts";
+
+app.on("Core:Swapped", async ({ event, context }) => {
+  event.args;              // decoded, typed from the ABI
+  event.address;           // the contract that emitted it
+  event.block.number;      // also hash; the whole header with include.block
+  event.transaction.hash;
+  event.index;             // position in the transaction
+  event.log;               // raw keys and data
+
+  context.db;              // read and write your tables
+  context.client;          // read contracts at this block
+});
+```
+
+Events are handled in chain order, one at a time. Integers are `bigint`, felts and addresses are `0x` and 64
+lowercase hex digits, so `===` compares them. `felt(x)` gives that form for your own values.
+
+## Setup
+
+Runs once, before the first event, on an empty database. Use it to seed rows.
+
+```ts
+app.on("setup", async ({ context }) => {
+  await context.db.insert(totals).values({ id: "all", swaps: 0 });
+});
+```

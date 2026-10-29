@@ -1,0 +1,42 @@
+# Tables and writes [Define your tables and write to them from handlers]
+
+Tables are [Drizzle](https://orm.drizzle.team) tables. `bignum` stores `u128`/`u256` values exactly, `hex` stores
+felts and addresses.
+
+```ts [kasbah.schema.ts]
+import { integer, pgTable, text } from "drizzle-orm/pg-core";
+import { bignum, hex } from "kasbah";
+
+export const pools = pgTable("pools", {
+  id: text().primaryKey(),
+  token0: hex().notNull(),
+  token1: hex().notNull(),
+  liquidity: bignum().notNull(),
+  swaps: integer().notNull(),
+});
+```
+
+## Writing
+
+```ts
+const { db } = context;
+
+await db.insert(pools).values({ id, token0, token1, liquidity: 0n, swaps: 0 });
+
+await db
+  .insert(pools)
+  .values({ id, token0, token1, liquidity: 0n, swaps: 1 })
+  .onConflictDoUpdate((row) => ({ swaps: row.swaps + 1 }));
+
+const pool = await db.find(pools, { id });          // null if none
+
+await db.update(pools, { id }).set((row) => ({ liquidity: row.liquidity + delta }));
+
+await db.delete(pools, { id });
+```
+
+Writes stay in memory and are written in one transaction per batch of blocks. Near the head, each block's writes are
+journaled, so a reorg can undo them.
+
+Changing a table, the config or a handler changes the build: `dev` re-indexes, and `start` refuses to run over data
+built by different code.

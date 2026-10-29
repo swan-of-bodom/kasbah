@@ -10,9 +10,54 @@ export default defineConfig({
   sidebar: [
     {
       text: "Introduction",
-      items: [{ text: "Get started", link: "/docs/get-started" }],
+      items: [
+        { text: "Overview", link: "/docs" },
+        { text: "Installation", link: "/docs/installation" },
+        { text: "Quickstart", link: "/docs/quickstart" },
+        { text: "Project layout", link: "/docs/project-layout" },
+      ],
+    },
+    {
+      text: "Config",
+      items: [
+        { text: "Network and RPC", link: "/docs/config/network" },
+        { text: "Contracts", link: "/docs/config/contracts" },
+        { text: "Block intervals", link: "/docs/config/blocks" },
+        { text: "Options", link: "/docs/config/options" },
+      ],
+    },
+    {
+      text: "Indexing",
+      items: [
+        { text: "Handlers", link: "/docs/indexing/handlers" },
+        { text: "Tables and writes", link: "/docs/indexing/database" },
+        { text: "Read contracts", link: "/docs/indexing/read-contracts" },
+      ],
+    },
+    {
+      text: "Query",
+      items: [
+        { text: "SQL over HTTP", link: "/docs/query/sql" },
+        { text: "GraphQL", link: "/docs/query/graphql" },
+        { text: "Live queries", link: "/docs/query/live" },
+        { text: "API routes", link: "/docs/query/routes" },
+      ],
+    },
+    {
+      text: "Production",
+      items: [
+        { text: "CLI", link: "/docs/production/cli" },
+        { text: "Deploy", link: "/docs/production/deploy" },
+        { text: "Monitoring", link: "/docs/production/monitoring" },
+      ],
     },
   ],
-  topNav: [{ text: "Docs", link: "/docs/get-started", match: "/docs" }],
+  topNav: [
+    { text: "Docs", link: "/docs", match: "/docs" },
+    {
+      text: "Changelog",
+      link: "https://github.com/swan-of-bodom/kasbah/blob/main/CHANGELOG.md",
+    },
+  ],
   socials: [{ icon: "github", link: "https://github.com/swan-of-bodom/kasbah" }],
 });

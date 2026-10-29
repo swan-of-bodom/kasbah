@@ -1,0 +1,37 @@
+# Project layout [The files of a project and what each one does]
+
+```text
+my-indexer/
+├── kasbah.config.ts     network, RPC, contracts
+├── kasbah.schema.ts     tables
+├── abis/Core.ts        the contract's ABI, `as const`
+├── src/
+│   ├── index.ts        event handlers
+│   └── api/index.ts    API routes (optional)
+├── .env                KASBAH_RPC_URL, DATABASE_URL
+├── Dockerfile
+└── docker-compose.yml
+```
+
+Handlers and routes import the app from the config, so they're typed from it without code generation:
+
+```ts [src/index.ts]
+import app from "../kasbah.config.ts";
+import { swaps } from "../kasbah.schema.ts";
+
+app.on("Core:Swapped", async ({ event, context }) => {
+  // event.args is typed from abis/Core.ts
+});
+```
+
+What the config leaves out, the project gives:
+
+| Setting | Default |
+| --- | --- |
+| tables | what `kasbah.schema.ts` exports |
+| database | `DATABASE_URL` (or a dev container) |
+| Postgres schema | the directory's name: `my-indexer` → `my_indexer` |
+| API | on, port 42069 |
+
+`DATABASE_SCHEMA`, `PORT` and `API_HOST` (or `--schema`, `--port`, `--hostname`) win over the config, so one config
+deploys anywhere.

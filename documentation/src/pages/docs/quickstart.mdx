@@ -1,0 +1,61 @@
+# Quickstart [Index your first contract in a few minutes]
+
+::::steps
+
+### Create a project
+
+```bash
+kasbah init my-indexer
+```
+
+`init` asks for your RPC, a contract address (its ABI and deployment block are read from the chain), the events to
+handle and a database (or none). It writes a working project: config, a table and a handler per event.
+
+To skip the questions:
+
+```bash
+kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps --yes
+```
+
+### Start the dev server
+
+```bash
+cd my-indexer
+pnpm install
+pnpm dev
+```
+
+It backfills from the start block, then follows the head. A progress screen shows the phase, the time left and where
+the time goes. Every file change restarts it.
+
+### Query your data
+
+Open [http://localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL, or use SQL over HTTP:
+
+```bash
+curl localhost:42069/sql -d '{"sql": "SELECT * FROM swapped ORDER BY block DESC LIMIT 5"}'
+```
+
+### Change a handler
+
+Edit `src/index.ts`: the dev server re-indexes with the new code.
+
+```ts [src/index.ts]
+app.on("Core:Swapped", async ({ event, context }) => {
+  await context.db.insert(swapped).values({
+    id: `${event.transaction.hash}:${event.index}`,
+    block: event.block.number,
+    transaction: event.transaction.hash,
+    locker: event.args.locker,
+  });
+});
+```
+
+::::
+
+Useful while developing:
+
+```bash
+pnpm fresh   # drop what dev stored and index from scratch
+pnpm clean   # delete it: the dev container, or the app's schema in your database
+```

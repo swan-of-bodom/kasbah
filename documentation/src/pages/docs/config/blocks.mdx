@@ -1,0 +1,20 @@
+# Block intervals [Run a handler every N blocks]
+
+```ts [kasbah.config.ts]
+blocks: {
+  Hourly: {
+    interval: 1_200,
+    startBlock: 900_000,
+    endBlock: 1_000_000, // optional
+  },
+},
+```
+
+```ts [src/index.ts]
+app.on("Hourly:block", async ({ event, context }) => {
+  const { number, timestamp } = event.block;
+  // snapshot something every 1,200 blocks
+});
+```
+
+A block handler runs after that block's events.

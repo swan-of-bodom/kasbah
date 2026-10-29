@@ -1,0 +1,18 @@
+# API routes [Your own endpoints next to SQL and GraphQL]
+
+```ts [src/api/index.ts]
+import { eq } from "drizzle-orm";
+import { HttpError } from "kasbah";
+import app from "../../kasbah.config.ts";
+import { pools } from "../../kasbah.schema.ts";
+
+app.get("/pools/:id", async ({ db, params }) => {
+  const pool = await db.query.pools.findFirst({ where: eq(pools.id, params.id!) });
+  if (pool === undefined) throw new HttpError(404, "no such pool");
+  return pool;
+});
+```
+
+- `db` is a read-only, typed Drizzle database.
+- `params`, `query` (URL search params), `body` (for `app.post`) and the request.
+- Return a value for JSON (bigints as strings), or a `Response` for your own headers and status.

@@ -1,0 +1,35 @@
+# Network and RPC [Which chain to index, and through which nodes]
+
+```ts [kasbah.config.ts]
+import { kasbah } from "kasbah";
+
+export default kasbah({
+  network: "mainnet",
+  rpc: process.env.KASBAH_RPC_URL!,
+  contracts: { /* … */ },
+});
+```
+
+- `network`: `"mainnet"` or `"sepolia"`. The indexer refuses to start if the RPC is on another chain.
+- `rpc`: a URL, `{ url, maxRequestsPerSecond }`, or several with `loadBalance`.
+
+## Several RPCs
+
+```ts
+import { loadBalance } from "kasbah";
+
+rpc: loadBalance([
+  process.env.ALCHEMY_URL!,
+  { url: process.env.BLAST_URL!, maxRequestsPerSecond: 10 },
+]),
+```
+
+Each request goes to the endpoint that can take it soonest, then the fastest; a failed request is retried on another.
+`maxRequestsPerSecond` caps one, for a free tier say. All endpoints must be on the same chain.
+
+## Following the head
+
+- `pollMs`: how often the head is checked. Default `2000`.
+- `ws`: `true` (the RPC URL as `wss://`) or a WebSocket URL: new heads wake the indexer at once, with polling as the
+  fallback.
+- `concurrency`: `getEvents` requests in parallel during backfill. Default `32`.
