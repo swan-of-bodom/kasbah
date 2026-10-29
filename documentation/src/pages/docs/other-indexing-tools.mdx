@@ -1,0 +1,70 @@
+# Other indexing tools [Other ways to index Starknet, and when to use them]
+
+kasbah is one way to get Starknet data into a database. Depending on what you need, one of these may fit
+better.
+
+## Write your own handlers
+
+### Apibara
+
+TypeScript indexers (`defineIndexer`) fed by Apibara's DNA streams, with plugins that write to Postgres (Drizzle),
+MongoDB or SQLite. Streams come from Apibara's hosted service, or you run the DNA server yourself over a Starknet
+RPC. It also supports EVM chains. Open source (Apache-2.0).
+[apibara.com](https://www.apibara.com)
+
+### Checkpoint
+
+Snapshot Labs' indexer: TypeScript "writers" over Starknet RPC, a GraphQL schema for your entities, data in
+Postgres, served over GraphQL. The closest in shape to kasbah. Open source (MIT), still in beta.
+[github.com/snapshot-labs/checkpoint](https://github.com/snapshot-labs/checkpoint)
+
+### SubQuery
+
+TypeScript block, transaction and event handlers over Starknet RPC, data in Postgres, served over GraphQL. A good
+fit if you already use SubQuery on other chains. Open source (GPL-3.0).
+[subquery.network](https://subquery.network/doc/indexer/quickstart/quickstart_chains/starknet.html)
+
+### Substreams
+
+StreamingFast's Firehose for Starknet turns blocks into a stream that Rust (WASM) Substreams modules process, with
+sinks to SQL databases and subgraphs. Suited to large, parallel pipelines if you're comfortable with Rust. Open
+source (Apache-2.0).
+[github.com/streamingfast/firehose-starknet](https://github.com/streamingfast/firehose-starknet)
+
+### Juno plugins
+
+Nethermind's Juno node loads a Go plugin that is called on every new block and every reverted block: an indexer
+that lives inside your own node, with no RPC in between. Open source (Apache-2.0).
+[juno.nethermind.io/plugins](https://juno.nethermind.io/plugins)
+
+## No code
+
+### Torii
+
+Dojo's indexer. For games and apps built with Dojo, it indexes a world's models and token transfers
+automatically, into SQLite, and serves them over GraphQL, gRPC and SQL. Use it instead of kasbah for a Dojo
+world. Open source (Apache-2.0).
+[book.dojoengine.org/toolchain/torii](https://book.dojoengine.org/toolchain/torii)
+
+### Dune
+
+Starknet blocks, transactions, events and calls as SQL tables, queried in Dune's hosted warehouse. Best for
+analytics and dashboards, not for an app's backend. Hosted.
+[docs.dune.com](https://docs.dune.com/data-catalog/starknet/overview)
+
+### Goldsky
+
+Hosted Turbo pipelines that stream Starknet mainnet's raw blocks, events, messages and transactions into a database
+you own. Hosted, paid.
+[docs.goldsky.com](https://docs.goldsky.com/chains/starknet)
+
+### Explorer APIs
+
+Voyager and StarkScan offer hosted REST APIs (events, transactions, contracts) with an API key. Enough for
+occasional lookups without running anything.
+[docs.voyager.online](https://docs.voyager.online)
+
+## EVM only
+
+[Ponder](https://ponder.sh), [rindexer](https://rindexer.xyz) and [Envio](https://envio.dev) don't index Starknet.
+kasbah follows Ponder's design, so a Ponder project will feel familiar.

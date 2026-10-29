@@ -11,10 +11,12 @@ export default defineConfig({
     {
       text: "Introduction",
       items: [
-        { text: "Overview", link: "/docs" },
+        { text: "What is kasbah?", link: "/docs" },
+        { text: "Why kasbah?", link: "/docs/why" },
         { text: "Installation", link: "/docs/installation" },
         { text: "Quickstart", link: "/docs/quickstart" },
         { text: "Project layout", link: "/docs/project-layout" },
+        { text: "Other indexing tools", link: "/docs/other-indexing-tools" },
       ],
     },
     {

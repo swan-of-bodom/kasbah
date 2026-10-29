@@ -1,0 +1,35 @@
+# Why kasbah? [What it does differently, and when to use something else]
+
+## Built for Starknet
+
+- Cairo 0 and Cairo 1 ABIs, nested event enums, `u256`, `ByteArray` and structs decode to typed values.
+- Each event is decoded with the class its contract had at that block, so upgraded contracts index correctly.
+- Filters on `#[key]` arguments are sent to the node, so only matching events are downloaded.
+- `finality: "l1"` treats a block as final once Ethereum accepted it.
+
+## Typed without code generation
+
+Event arguments, contract reads, config names and filters are typed from the ABI you import. A misspelled event or
+argument is a TypeScript error.
+
+## Fast to backfill
+
+Parallel `getEvents` windows, an optional cache of raw events and contract reads, and contracts fetched only from
+their own start block. The Ekubo example indexes 652,647 events in 2.6 minutes.
+
+## Familiar
+
+The project layout and API follow [Ponder](https://ponder.sh): `kasbah.config.ts`, `kasbah.schema.ts`,
+`app.on("Contract:Event", …)`, Drizzle tables, SQL over HTTP and GraphQL.
+
+## Yours to run
+
+One process, your Postgres, your RPC. The code is Apache-2.0.
+
+## When to use something else
+
+- A Dojo world: [Torii](/docs/other-indexing-tools#torii) indexes it with no code.
+- Analytics and dashboards in SQL: [Dune](/docs/other-indexing-tools#dune).
+- EVM chains: Ponder or rindexer.
+
+More in [Other indexing tools](/docs/other-indexing-tools).

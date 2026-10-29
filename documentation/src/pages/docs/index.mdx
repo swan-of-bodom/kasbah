@@ -1,4 +1,4 @@
-# Overview [What kasbah is and how it works]
+# What is kasbah? [A Starknet indexer you write in TypeScript and run yourself]
 
 kasbah reads events from a Starknet node and runs your TypeScript handlers on them. The handlers write to
 Postgres tables you define, and an API serves those tables.
@@ -16,4 +16,5 @@ A project is four files:
 | `src/index.ts` | event handlers |
 | `src/api/index.ts` | your API routes (optional) |
 
-Next: [install it](/docs/installation), then follow the [quickstart](/docs/quickstart).
+It runs as one Node.js process next to Postgres, with any Starknet RPC on spec 0.10. There's no hosted service and
+nothing to sign up for.
