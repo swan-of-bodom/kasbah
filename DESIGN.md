@@ -492,7 +492,7 @@ About 43k lines in Ponder's `core/src`. Not needed here:
   `fragments.ts`
 - Multicall3 and viem integration in `indexing/client.ts`
 - reorg triggers and per-table shadow tables
-- `ponder dev` drop-and-rebuild, the views schema (maybe later), live-query NOTIFY (maybe later)
+- `ponder dev` drop-and-rebuild, the views schema (TODO, see the schema lock), live-query NOTIFY (maybe later)
 - `utils/sql-parse.ts` (1.5k lines, libpg-query) used only for raw-SQL flush logic
 
 Target size: under 10k lines for v1.
@@ -582,6 +582,13 @@ claim it), and every commit checks `FOR SHARE` that this process still owns it, 
 longer than the timeout and was taken over writes nothing more (Ponder only logs a failed heartbeat). An advisory
 lock would be simpler and free on a crash, but poolers (PgBouncer, Supabase, Neon pooled URLs) break session locks
 and a dropped connection releases it at once. `clean` refuses a schema a live indexer holds.
+
+TODO, stable views (to revisit later), as Ponder's `--views-schema` / `ponder db create-views`:
+with a schema per deploy, a client reading the tables with its own SQL (a dashboard, a BI tool) must follow the new
+schema name after every deploy. A views schema with a fixed name (`my_indexer`) holding one view per table, repointed
+at the new deploy's tables once it's ready (`/ready`), keeps that name stable. The API, GraphQL and routes don't need
+it: each process reads its own schema. Old deploy schemas would also want Ponder's `db list` / `db prune` (the lock's
+heartbeat tells live ones from dead ones); today `clean --schema` drops one at a time.
 
 `kasbah()` from code implies nothing, so a library user or a
 test never opens a port by surprise. `network` is checked against `starknet_chainId` before the schema opens: an
