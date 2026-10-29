@@ -1,0 +1,76 @@
+# CLI [Every kasbah command and flag]
+
+## init
+
+```bash
+kasbah init [dir]
+```
+
+Creates a project. Asks for whatever isn't given as a flag.
+
+| Flag | Description |
+| --- | --- |
+| `--rpc <url>` | the Starknet RPC |
+| `--address <0x…>` | the contract; its ABI and deployment block are read from the chain |
+| `--name <Name>` | its name in the config, `Core` in `Core:Swapped` |
+| `--handle <A,B>` | events to write handlers and tables for |
+| `--start <block>` | the start block (default: its deployment) |
+| `--database <url>` | a Postgres URL (default: a dev container) |
+| `--timestamps` | a `timestamp` column in each table |
+| `--no-ws` | poll only, no WebSocket |
+| `--yes` | take the defaults, ask nothing |
+
+## dev
+
+```bash
+kasbah dev [--reset] [--no-ui] [--debug]
+```
+
+Indexes, follows the head and restarts on every file change. A new build drops the old data. Without
+`DATABASE_URL`, runs Postgres in a container. `--reset` drops everything first (`pnpm fresh`).
+
+## start
+
+```bash
+kasbah start [--to <block>] [--reset]
+```
+
+The same for production: needs `DATABASE_URL`, refuses data from another build. `--to` stops at that block.
+Ctrl-C or `SIGTERM` finishes the current block and exits; a third one exits at once.
+
+## serve
+
+```bash
+kasbah serve
+```
+
+The API only, over what a `start` with the same schema stores.
+
+## clean
+
+```bash
+kasbah clean [--yes]
+```
+
+Deletes the dev container and its volume, or with `DATABASE_URL`, only the app's schema. Asks first, unless
+`--yes`. The cache stays.
+
+## cache
+
+```bash
+kasbah cache info [--chain <id>]
+kasbah cache clear [--events] [--calls] [--chain <id>]
+```
+
+The shared cache of raw events and contract reads, per chain.
+
+## Common flags
+
+| Flag | Env | Default |
+| --- | --- | --- |
+| `--schema <name>` | `DATABASE_SCHEMA` | the config's, else the directory's name |
+| `--port <n>` | `PORT` | `42069` |
+| `--hostname <host>` | `API_HOST` | `localhost` |
+| `--ui` / `--no-ui` | | on for `dev` in a terminal |
+
+Every command reads `.env` from the working directory. Variables already set win.

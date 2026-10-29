@@ -1,7 +1,7 @@
 # Tables and writes [Define your tables and write to them from handlers]
 
 Tables are [Drizzle](https://orm.drizzle.team) tables. `bignum` stores `u128`/`u256` values exactly, `hex` stores
-felts and addresses.
+addresses and class hashes.
 
 ```ts [kasbah.schema.ts]
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
@@ -15,6 +15,19 @@ export const pools = pgTable("pools", {
   swaps: integer().notNull(),
 });
 ```
+
+## Column types
+
+| Cairo | Column | TypeScript |
+| --- | --- | --- |
+| `u8` … `u32`, `i8` … `i32`, `bool` | `integer()`, `boolean()` | `number`, `boolean` |
+| `u64`, `u128`, `u256`, `i64`, `i128`, `felt252` | `bignum()` | `bigint` |
+| `ContractAddress`, `ClassHash`, `EthAddress` | `hex()` | `` `0x${string}` `` |
+| `ByteArray` | `text()` | `string` |
+| structs, enums, arrays | `jsonb()` | objects (bigints as decimal strings) |
+
+Use the transaction hash and event index as the primary key for one row per event:
+`` `${event.transaction.hash}:${event.index}` ``. Composite keys work with Drizzle's `primaryKey()`.
 
 ## Writing
 
@@ -34,6 +47,24 @@ await db.update(pools, { id }).set((row) => ({ liquidity: row.liquidity + delta 
 
 await db.delete(pools, { id });
 ```
+
+## Errors
+
+```ts
+await db.insert(pools).values({ id: "a", … });
+await db.insert(pools).values({ id: "a", … });
+// Error: pools: a row with key a already exists
+
+await db.update(pools, { id: "missing" }).set({ swaps: 1 });
+// Error: pools: no row with key missing
+
+await db.delete(pools, { id: "missing" }); // false
+```
+
+`.onConflictDoNothing()` inserts only if the key is new: it returns the row it inserted, or `null` if there was
+one.
+
+## How writes are stored
 
 Writes stay in memory and are written in one transaction per batch of blocks. Near the head, each block's writes are
 journaled, so a reorg can undo them.

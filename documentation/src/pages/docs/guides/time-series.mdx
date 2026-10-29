@@ -1,0 +1,66 @@
+# Time-series data [Hourly and daily candles from swap events]
+
+Keep one row per pool per period, and fold every event into it. This is how the
+[Ekubo example](https://github.com/swan-of-bodom/kasbah/tree/main/examples/ekubo) builds price and volume
+candles.
+
+```ts [kasbah.schema.ts]
+import { doublePrecision, integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
+import { bignum } from "kasbah";
+
+export const candles = pgTable(
+  "candles",
+  {
+    pool: text().notNull(),
+    interval: integer().notNull(), // 3600 or 86400
+    time: integer().notNull(),     // the period's start, unix seconds
+    open: doublePrecision().notNull(),
+    high: doublePrecision().notNull(),
+    low: doublePrecision().notNull(),
+    close: doublePrecision().notNull(),
+    volume: bignum().notNull(),
+  },
+  (t) => [primaryKey({ columns: [t.pool, t.interval, t.time] })],
+);
+```
+
+```ts [src/index.ts]
+// poolId and priceOf are your own helpers: see the Ekubo example.
+const INTERVALS = [3_600, 86_400];
+
+app.on("Core:Swapped", async ({ event, context }) => {
+  const pool = poolId(event.args.pool_key);
+  const price = priceOf(event.args.sqrt_ratio_after);
+  const volume = event.args.delta.amount0.mag;
+  for (const interval of INTERVALS) {
+    const time = event.block.timestamp - (event.block.timestamp % interval);
+    await context.db
+      .insert(candles)
+      .values({ pool, interval, time, open: price, high: price, low: price, close: price, volume })
+      .onConflictDoUpdate((c) => ({
+        high: Math.max(c.high, price),
+        low: Math.min(c.low, price),
+        close: price,
+        volume: c.volume + volume,
+      }));
+  }
+});
+```
+
+The first event of a period inserts the row (its price is the open). Every later one updates it.
+
+`event.block.timestamp` needs `include: { block: true }`, or the `timestamps` answer in `init`.
+
+Serve them from a route:
+
+```ts [src/api/index.ts]
+app.get("/pools/:id/candles", async ({ db, params, query }) => {
+  const interval = Number(query.get("interval") ?? 3_600);
+  return db
+    .select()
+    .from(candles)
+    .where(and(eq(candles.pool, params.id!), eq(candles.interval, interval)))
+    .orderBy(desc(candles.time))
+    .limit(200);
+});
+```

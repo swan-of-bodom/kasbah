@@ -16,6 +16,7 @@ export default defineConfig({
         { text: "Installation", link: "/docs/installation" },
         { text: "Quickstart", link: "/docs/quickstart" },
         { text: "Project layout", link: "/docs/project-layout" },
+        { text: "Database", link: "/docs/database" },
         { text: "Other indexing tools", link: "/docs/other-indexing-tools" },
       ],
     },
@@ -46,11 +47,24 @@ export default defineConfig({
       ],
     },
     {
+      text: "Guides",
+      items: [{ text: "Time-series data", link: "/docs/guides/time-series" }],
+    },
+    {
       text: "Production",
       items: [
-        { text: "CLI", link: "/docs/production/cli" },
-        { text: "Deploy", link: "/docs/production/deploy" },
+        { text: "Self-hosting", link: "/docs/production/self-hosting" },
+        { text: "Railway", link: "/docs/production/railway" },
+        { text: "Render", link: "/docs/production/render" },
+        { text: "VPS", link: "/docs/production/vps" },
         { text: "Monitoring", link: "/docs/production/monitoring" },
+      ],
+    },
+    {
+      text: "Reference",
+      items: [
+        { text: "kasbah.config.ts", link: "/docs/reference/config" },
+        { text: "CLI", link: "/docs/reference/cli" },
       ],
     },
   ],

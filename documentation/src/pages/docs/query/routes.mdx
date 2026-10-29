@@ -1,7 +1,7 @@
 # API routes [Your own endpoints next to SQL and GraphQL]
 
 ```ts [src/api/index.ts]
-import { eq } from "drizzle-orm";
+import { eq, inArray } from "drizzle-orm";
 import { HttpError } from "kasbah";
 import app from "../../kasbah.config.ts";
 import { pools } from "../../kasbah.schema.ts";
@@ -13,6 +13,16 @@ app.get("/pools/:id", async ({ db, params }) => {
 });
 ```
 
-- `db` is a read-only, typed Drizzle database.
+```ts [src/api/index.ts]
+app.post("/pools/batch", async ({ db, body }) => {
+  const { ids } = body as { ids: string[] };
+  return db.select().from(pools).where(inArray(pools.id, ids));
+});
+```
+
+- `db` is a read-only, typed Drizzle database. Routes have no RPC client: read what handlers stored.
 - `params`, `query` (URL search params), `body` (for `app.post`) and the request.
 - Return a value for JSON (bigints as strings), or a `Response` for your own headers and status.
+
+Built-in paths come first and can't be overridden: `/sql`, `/graphql`, `/live`, `/status`, `/health`, `/ready` and
+`/metrics`.

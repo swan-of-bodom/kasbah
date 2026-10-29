@@ -7,8 +7,35 @@
 | `GET /status` | the checkpoint and phase |
 | `GET /metrics` | Prometheus metrics |
 
-`/metrics` includes the checkpoint, head, phase, events and time per handler, RPC calls per method and endpoint, and
-reorgs, all named `kasbah_*`.
+```bash
+curl localhost:42069/status
+```
+
+```json
+{ "checkpoint": "1873500", "phase": "live" }
+```
+
+## Metrics
+
+All named `kasbah_*`.
+
+| Metric | Type | Description |
+| --- | --- | --- |
+| `phase` | gauge | the phase running, as a label |
+| `checkpoint` | gauge | last block committed |
+| `head` | gauge | newest block the node has |
+| `live_block_timestamp_seconds` | gauge | timestamp of the last live block |
+| `reorgs_total` | counter | reorgs undone |
+| `events_handled_total` | counter | events and block handlers run |
+| `watched_contracts`, `watched_children` | gauge | addresses watched, factory children |
+| `handler_calls_total`, `handler_seconds_total` | counter | calls and time per `handler` |
+| `seconds_total` | counter | time spent waiting, per `part` |
+| `rpc_requests_total`, `rpc_calls_total` | counter | HTTP requests (a batch is one) and JSON-RPC calls |
+| `rpc_retries_total`, `rpc_throttled_total`, `rpc_timeouts_total`, `rpc_failed_total` | counter | RPC trouble |
+| `rpc_bytes_total` | counter | bytes received |
+| `rpc_method_calls_total`, `endpoint_calls_total` | counter | calls per `method`, per `endpoint` |
+
+`now - live_block_timestamp_seconds` is how far behind the chain you are.
 
 ```yaml [prometheus.yml]
 scrape_configs:

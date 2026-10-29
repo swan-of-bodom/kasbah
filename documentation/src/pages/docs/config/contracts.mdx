@@ -15,7 +15,8 @@ The key (`Core`) names the contract in handlers: `app.on("Core:Swapped", …)`.
 ## Address and range
 
 - `address`: one address, or a list sharing the ABI and handlers (`event.address` tells them apart).
-- `startBlock`: a block number, or `"deployment"` to start where the contract was deployed.
+- `startBlock`: a block number, or `"deployment"` to start where the contract was deployed (found by a binary
+  search: about 25 calls at startup).
 - `endBlock`: the last block indexed. Nothing after it is fetched.
 
 ```ts
@@ -59,8 +60,12 @@ filter: {
 },
 ```
 
-Event and argument names are checked against the ABI. Key arguments (`#[key]`) are filtered by the node, so only
-matches are downloaded; data arguments are filtered after decoding.
+Event and argument names are checked against the ABI. A value or a list of allowed values, for plain types only:
+felts, integers, `u256`, `bool`, addresses and class hashes.
+
+- Key arguments (`#[key]`) are filtered by the node, so only matches are downloaded. Those requests skip the event
+  cache.
+- Data arguments are filtered after decoding: everything is downloaded.
 
 ## Transactions, receipts and block headers
 

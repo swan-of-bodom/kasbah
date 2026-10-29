@@ -1,0 +1,56 @@
+# kasbah.config.ts [Every option, its type and its default]
+
+:::tip
+For examples, see [Network and RPC](/docs/config/network), [Contracts](/docs/config/contracts),
+[Block intervals](/docs/config/blocks) and [Options](/docs/config/options).
+:::
+
+```ts [kasbah.config.ts]
+import { kasbah } from "kasbah";
+
+export default kasbah({
+  network: "mainnet",
+  rpc: process.env.KASBAH_RPC_URL!,
+  contracts: {},
+});
+```
+
+## Top level
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `rpc` | `string \| { url, maxRequestsPerSecond? } \| loadBalance([...])` | **Required** | Starknet RPC on spec 0.10. |
+| `contracts` | `Record<string, Contract>` | **Required** | What to index, by name. |
+| `network` | `"mainnet" \| "sepolia"` | the RPC's chain | Refuse to start on another chain. |
+| `blocks` | `Record<string, BlockInterval>` | none | Handlers every N blocks. |
+| `reorgWindow` | `number` | `64` | Blocks behind the head a reorg can still replace. |
+| `finality` | `"l1"` | none | Final once Ethereum accepted the block. Not with `reorgWindow`. |
+| `pollMs` | `number` | `2000` | Head polling interval, ms. |
+| `ws` | `string \| true` | none | WebSocket for new heads. `true`: the RPC URL as `ws`. |
+| `concurrency` | `number` | `32` | `getEvents` requests in parallel. |
+| `cache` | `boolean \| { maxCalls? }` | `false` | Keep final events and reads in Postgres. `maxCalls` default 1,000,000. |
+| `api` | `false \| { port?, host?, readDatabase? }` | port `42069`, localhost | The read API. `PORT` and `API_HOST` win. |
+| `database` | `string` | `DATABASE_URL` | Postgres URL. |
+| `schema` | `string` | the directory's name | Postgres schema. `DATABASE_SCHEMA` wins. |
+| `tables` | `Record<string, PgTable>` | `kasbah.schema.ts` | Your tables. |
+
+## Contract
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `abi` | `Abi` (`as const`) | **Required** | Its ABI. |
+| `address` | `string \| string[]` | **Required**, or `factory` | One or several addresses. |
+| `factory` | `{ address, abi, event, parameter }` | none | Index every child the factory creates. |
+| `startBlock` | `number \| "deployment"` | **Required** | First block. `"deployment"` finds it (about 25 calls at startup). |
+| `endBlock` | `number` | none | Last block, inclusive. |
+| `filter` | `{ [event]: { [arg]: value \| value[] } }` | none | Only matching events. |
+| `include` | `{ transaction?, receipt?, block? }` | none | Extra fields on `event`. |
+| `upgradeEvents` | `string[]` | `Upgraded`, `ClassHashReplaced`, `ImplementationReplaced` | Events that announce a new class. `[]`: never upgrades. |
+
+## Block interval
+
+| Option | Type | Default | Description |
+| --- | --- | --- | --- |
+| `interval` | `number` | **Required** | Every N blocks. |
+| `startBlock` | `number` | **Required** | First block, inclusive. |
+| `endBlock` | `number` | none | Last block, inclusive. |

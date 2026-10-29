@@ -9,4 +9,11 @@ curl localhost:42069/sql \
 { "columns": ["id", "swaps"], "rows": [["0x…", 812]] }
 ```
 
-Queries run read-only. Or connect to Postgres directly: your tables are in the app's schema.
+## Rules
+
+- One `SELECT` (or `WITH`, `VALUES`), on the app's tables only, through a role that can only read them.
+- `$1`, `$2`… are `params`.
+- A 10 s timeout, and at most 10,000 rows: more is an error (`more than 10000 rows: add a LIMIT`).
+- Errors come back as `{ "error": "…" }` with a 4xx status.
+
+To query from your own tools, see [Direct SQL](/docs/database#direct-sql).

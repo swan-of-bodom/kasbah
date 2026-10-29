@@ -1,0 +1,54 @@
+# Railway [Deploy with a Railway Postgres]
+
+:::warning
+Needs the published package, which is **STILL TODO** (see [Installation](/docs/installation)).
+:::
+
+::::steps
+
+### Push your project to GitHub
+
+`init` already wrote the `Dockerfile` Railway builds with.
+
+### Create the service
+
+In Railway: **New Project → Deploy from GitHub repo**, and pick it.
+
+### Add Postgres
+
+**Create → Database → Add PostgreSQL**.
+
+### Set the variables
+
+On the indexer service, **Variables**:
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | **Add Reference → Postgres → `DATABASE_URL`** |
+| `KASBAH_RPC_URL` | your RPC URL |
+
+`PORT` is set by Railway and used automatically; the Dockerfile sets `API_HOST=0.0.0.0`.
+
+### One schema per deploy
+
+**Settings → Deploy → Custom Start Command**:
+
+```bash
+/bin/sh -c "exec node node_modules/kasbah/dist/cli/main.js start --schema $RAILWAY_DEPLOYMENT_ID"
+```
+
+Each deploy indexes into its own schema while the old one keeps serving. `exec` lets it receive `SIGTERM`.
+
+### Health check
+
+**Settings → Deploy → Healthcheck Path**: `/ready`, and **Healthcheck Timeout**: `3600` (the most Railway allows).
+Traffic moves to a new deploy only once it's caught up. A backfill longer than an hour fails the deploy: turn on
+`cache: true` so later deploys re-index from the cache.
+
+### Get a URL
+
+**Settings → Networking → Generate Domain**. Then open `https://<domain>/graphql`.
+
+::::
+
+Old schemas stay in the database. Delete them with `kasbah clean --schema <id> --yes`.

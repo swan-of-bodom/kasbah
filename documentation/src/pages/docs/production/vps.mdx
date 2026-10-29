@@ -1,0 +1,59 @@
+# VPS [Docker Compose and Caddy on your own server]
+
+:::warning
+Needs the published package, which is **STILL TODO** (see [Installation](/docs/installation)).
+:::
+
+`init` writes a `docker-compose.yml` with Postgres and the indexer: health-checked, restarted on failure, the API
+on `127.0.0.1:42069` only.
+
+::::steps
+
+### Copy the project to the server
+
+```bash
+git clone https://github.com/you/my-indexer && cd my-indexer
+```
+
+### Set the variables
+
+```bash [.env]
+KASBAH_RPC_URL=https://…
+POSTGRES_PASSWORD=a-long-random-password
+DATABASE_SCHEMA=my_indexer
+```
+
+Set `DATABASE_SCHEMA`: inside the container the directory is `/app`, so the default would be `app`.
+
+### Start it
+
+```bash
+docker compose up -d --build
+docker compose logs -f indexer
+```
+
+### Put Caddy in front
+
+Caddy gets a TLS certificate for your domain and forwards to the API:
+
+```text [/etc/caddy/Caddyfile]
+api.example.com {
+  reverse_proxy 127.0.0.1:42069
+}
+```
+
+```bash
+sudo systemctl reload caddy
+```
+
+::::
+
+## Updating
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+The old container finishes its block and stops; the new one resumes. If the build changed, set a new
+`DATABASE_SCHEMA` first: `start` refuses the old schema, and the new one indexes from scratch (or from the cache).

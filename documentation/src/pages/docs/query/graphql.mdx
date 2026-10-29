@@ -20,8 +20,38 @@
 }
 ```
 
-Per table: one row by primary key (`pool`) and a page (`pools`) with `where`, `orderBy`, `orderDirection`, `limit`
-and `after`. Filters: `_gt`, `_gte`, `_lt`, `_lte`, `_not`, `_in`, `_not_in`, `AND`, `OR`. Numbers past 32 bits
-are strings.
+Per table, two fields: one row by primary key (`pool`) and a page (`pools`).
+
+| Argument | Description |
+| --- | --- |
+| `where` | `{ column: value }`, or `column_gt`, `_gte`, `_lt`, `_lte`, `_not`, `_in`, `_not_in`; `AND` and `OR` lists |
+| `orderBy`, `orderDirection` | a column, `asc` (default) or `desc` |
+| `limit` | default 100, at most 1,000 |
+| `after` | the last page's `pageInfo.endCursor` |
+
+Numbers past 32 bits (`u64`, `u128`, `u256`) are strings.
+
+## Paging
+
+```graphql
+query ($after: String) {
+  pools(orderBy: swaps, orderDirection: desc, limit: 100, after: $after) {
+    items { id swaps }
+    pageInfo { hasNextPage endCursor }
+  }
+}
+```
+
+Pass `endCursor` as `after` until `hasNextPage` is false.
+
+## Indexing status
+
+```graphql
+{ _meta { checkpoint phase } }
+```
+
+## Limits
+
+A request can have at most 1,000 tokens, a depth of 20 and 30 aliases.
 
 Drizzle `relations()` exported from `kasbah.schema.ts` become fields: a to-one is the related row, a to-many a page.

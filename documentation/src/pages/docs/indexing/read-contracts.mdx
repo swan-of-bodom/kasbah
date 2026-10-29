@@ -4,10 +4,11 @@
 final.
 
 ```ts
-const reserves = await context.client.readContract({
-  abi: pairAbi,
-  address: event.address,
-  functionName: "get_reserves",
+const balance = await context.client.readContract({
+  abi: erc20Abi,
+  address: token,
+  functionName: "balance_of",
+  args: { account: event.args.to },
 });
 ```
 
@@ -25,3 +26,15 @@ const [name, symbol] = await context.client.readContracts({
 
 - `block`: read at another block instead.
 - `call({ address, entrypoint, calldata })`: a raw call, felts in and out.
+
+## Arguments and results
+
+- `args` is an object by input name, typed from the ABI.
+- One output is its value (`bigint` for a `u256`); several are a tuple; Cairo 0 functions return an object by name.
+- With `allowFailure` left on, each entry of `readContracts` is `{ status: "success", result }` or
+  `{ status: "failure", error }`.
+
+## Caching
+
+Reads at final blocks are cached: in memory, and in Postgres with `cache: true`, so a re-index makes no calls.
+`readContracts` saves round trips, but the provider still bills each call in it.

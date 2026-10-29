@@ -1,0 +1,39 @@
+# Render [Deploy with a Render Postgres]
+
+:::warning
+Needs the published package, which is **STILL TODO** (see [Installation](/docs/installation)).
+:::
+
+::::steps
+
+### Push your project to GitHub
+
+`init` already wrote the `Dockerfile` Render builds with.
+
+### Create the database
+
+**New → Postgres**. Once it's up, copy its **Internal Database URL**.
+
+### Create the service
+
+**New → Web Service**, pick the repository, **Language: Docker**. Choose the same region as the database.
+
+### Set the variables
+
+| Variable | Value |
+| --- | --- |
+| `DATABASE_URL` | the Internal Database URL |
+| `KASBAH_RPC_URL` | your RPC URL |
+| `DATABASE_SCHEMA` | `my_indexer` |
+
+`PORT` is set by Render and used automatically.
+
+### Health check
+
+**Advanced → Health Check Path**: `/health`.
+
+::::
+
+Render keeps the old instance running until the new one is healthy, so on a code change both run at once. Change
+`DATABASE_SCHEMA` with every build (`my_indexer_v2`, …), as in
+[one schema per deploy](/docs/production/self-hosting#one-schema-per-deploy).

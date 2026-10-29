@@ -1,0 +1,64 @@
+# Self-hosting [What to know before running it in production]
+
+:::warning
+The deploy guides need the published package, which is **STILL TODO** (see [Installation](/docs/installation)).
+:::
+
+## Database
+
+- Set `DATABASE_URL`. `start` never starts a container.
+- Keep the database close: every batch of blocks is a transaction, and latency adds up.
+- The API reads through its own role, `<schema>_reader`, with `SELECT` grants only. To create it, the
+  `DATABASE_URL` user needs the `CREATEROLE` privilege. Where the provider doesn't give it, create a read-only user
+  yourself and pass it as `api.readDatabase`.
+
+## One schema per deploy
+
+`start` refuses a schema that holds another build. Give each deploy its own:
+
+```bash
+kasbah start --schema my_indexer_$(git rev-parse --short HEAD)
+```
+
+With `cache: true`, a new schema re-indexes from the cache, so it fetches nothing it already fetched. When it's
+ready, switch traffic to it, then delete the old one:
+
+```bash
+kasbah clean --schema my_indexer_1a2b3c4 --yes
+```
+
+:::warning
+Never run two `start` processes on one schema: nothing stops them, and both write. This is the case during a
+rolling deploy that keeps the old container up until the new one is healthy, so use a new schema per deploy.
+:::
+
+## Health checks
+
+| Endpoint | 200 when | Use it for |
+| --- | --- | --- |
+| `/health` | the process and its database are up | restart a stuck process |
+| `/ready` | backfill done, following the head | send traffic only once data is current |
+
+`/ready` returns 503 during the backfill, which can take minutes to hours. Platforms that wait for it need a long
+enough timeout.
+
+## Stopping and crashes
+
+`SIGTERM` finishes the block in progress, commits it and exits. After a crash, the next `start` resumes from the
+last commit and undoes anything written after it.
+
+## Several API servers
+
+One `start` writes; any number of `serve` processes on the same `DATABASE_URL` and schema serve the API, behind a
+load balancer.
+
+:::warning
+Each process that starts sets a new password on the `<schema>_reader` role, so the others can no longer open
+connections. Until that's fixed, give every process the same `api.readDatabase`.
+:::
+
+## Platforms
+
+- [Railway](/docs/production/railway)
+- [Render](/docs/production/render)
+- [VPS with Docker Compose](/docs/production/vps)

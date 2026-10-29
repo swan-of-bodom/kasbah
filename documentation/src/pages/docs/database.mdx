@@ -1,0 +1,56 @@
+# Database [Where your data lives, and when it's rebuilt]
+
+## Development
+
+Without `DATABASE_URL`, `pnpm dev` starts Postgres 17 in a container (Docker or Podman, whichever is installed),
+one per project directory, kept between runs. `pnpm clean` deletes it.
+
+With `DATABASE_URL` set, in `.env` or the environment, it uses that database instead and never starts a container.
+
+```bash [.env]
+DATABASE_URL=postgres://user:password@localhost:5432/postgres
+```
+
+## Schemas
+
+Your tables live in a Postgres schema, named after the project directory: `my-indexer` → `my_indexer`. Change it
+with `DATABASE_SCHEMA` or `--schema`:
+
+```bash
+pnpm start --schema my_indexer_v2
+```
+
+kasbah also keeps its progress in that schema (table `_kasbah_meta`), so one database can hold many
+apps, or many versions of one app, side by side.
+
+## Builds
+
+A build is your config, tables and source files. Change any of them and the build changes:
+
+- `dev` drops the schema and indexes again from scratch.
+- `start` refuses to run over data from another build:
+
+```text
+schema "my_indexer" holds another build of this app (config, tables or handlers changed); run with reset
+```
+
+Run the new build in a new schema (see [Self-hosting](/docs/production/self-hosting#one-schema-per-deploy)), or pass
+`--reset` to drop the old data first.
+
+:::danger
+Never point `pnpm dev` at your production database with the production schema: the first code change drops it.
+Use another `--schema`, or no `DATABASE_URL` at all.
+:::
+
+## Direct SQL
+
+You can read the tables with any Postgres client:
+
+```sql
+SET search_path TO my_indexer;
+SELECT id, swaps FROM pools ORDER BY swaps DESC LIMIT 10;
+```
+
+- Read only. Writes from outside are not undone on a reorg, and the next build doesn't keep them.
+- Primary keys and indexes are created once the backfill is done, so queries during the backfill scan whole tables.
+- The schema changes when you deploy a new build in a new schema: point your client at the new one.

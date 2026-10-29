@@ -16,8 +16,9 @@ app.on("Core:Swapped", async ({ event, context }) => {
 });
 ```
 
-Events are handled in chain order, one at a time. Integers are `bigint`, felts and addresses are `0x` and 64
-lowercase hex digits, so `===` compares them. `felt(x)` gives that form for your own values.
+Events are handled in chain order, one at a time. `u64` and wider integers and `felt252` are `bigint`, smaller
+integers `number`. Addresses and class hashes are `0x` and 64 lowercase hex digits, so `===` compares them; `felt(x)`
+gives that form for your own values.
 
 ## Setup
 
@@ -28,3 +29,17 @@ app.on("setup", async ({ context }) => {
   await context.db.insert(totals).values({ id: "all", swaps: 0 });
 });
 ```
+
+## FAQ
+
+**In what order do handlers run?** By block, then transaction, then event within it, across all contracts. Block
+handlers run after their block's events. One handler at a time, never in parallel.
+
+**What happens on a reorg?** Blocks within `reorgWindow` of the head are written with an undo journal. When the
+chain replaces them, their writes are undone and the new blocks are handled.
+
+**What if the process crashes?** The next start resumes from the last committed block and undoes anything written
+after it, so nothing is applied twice.
+
+**Backfill and live?** The backfill fetches history in parallel windows up to the last final block; then the
+indexer follows the head block by block. Handlers can't tell the difference.

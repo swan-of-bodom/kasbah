@@ -7,7 +7,9 @@ will have. Only [from source](#from-source) works today.
 
 ## Requirements
 
-- **Node.js 22.18 or later** (the app's `.ts` files run with Node's type stripping).
+- **Node.js 22.18 or later.** Your `.ts` files run with Node's type stripping, so imports need the `.ts`
+  extension, and TypeScript-only syntax that emits code (`enum`, `namespace`) isn't supported.
+- **TypeScript 5** for editor types and `pnpm typecheck`. ABIs must be `as const`, or nothing is typed.
 - **Postgres 17**, or Docker or Podman: without `DATABASE_URL`, `dev` runs Postgres in a container for you.
 - **A Starknet RPC** on spec 0.10 (Alchemy, Blast, your own Pathfinder or Juno).
 
@@ -25,10 +27,6 @@ npm create kasbah@latest my-indexer
 
 ```bash [yarn]
 yarn create kasbah my-indexer
-```
-
-```bash [bun]
-bun create kasbah my-indexer
 ```
 
 :::
@@ -49,10 +47,6 @@ npm install kasbah drizzle-orm
 yarn add kasbah drizzle-orm
 ```
 
-```bash [bun]
-bun add kasbah drizzle-orm
-```
-
 :::
 
 `drizzle-orm` is a peer dependency: your tables and kasbah share one copy.
@@ -69,7 +63,7 @@ curl -fsSL https://kasbah.dev/install.sh | sh
 docker pull ghcr.io/swan-of-bodom/kasbah:latest
 ```
 
-Every project also gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [Deploy](/docs/production/deploy).
+Every project also gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [VPS](/docs/production/vps).
 
 ## From source
 
