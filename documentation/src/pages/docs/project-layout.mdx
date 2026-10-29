@@ -30,7 +30,7 @@ What the config leaves out, the project gives:
 | --- | --- |
 | tables | what `kasbah.schema.ts` exports |
 | database | `DATABASE_URL` (or a dev container) |
-| Postgres schema | the directory's name: `my-indexer` → `my_indexer` |
+| Postgres schema | `dev`: the directory's name (`my-indexer` → `my_indexer`); `start` and `serve` need one |
 | API | on, port 42069 |
 
 `DATABASE_SCHEMA`, `PORT` and `API_HOST` (or `--schema`, `--port`, `--hostname`) win over the config, so one config

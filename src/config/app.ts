@@ -9,6 +9,7 @@ import type { Db } from "../db/store.ts";
 import { quote } from "../db/table.ts";
 import type { Client } from "../indexer/client.ts";
 import type { FilterConfig } from "../indexer/filters.ts";
+import { inUse } from "../indexer/lock.ts";
 import { apiUrl, run } from "../indexer/run.ts";
 import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
@@ -224,8 +225,11 @@ type Checked<C extends Config> = {
   };
 };
 
-/** What a project's layout gives the CLI: its directory's name, and what `kasbah.schema.ts` exports. */
-export type Project = { name: string; tables?: Tables };
+/**
+ * What a project's layout gives the CLI: its directory's name, and what `kasbah.schema.ts` exports. `schemaRequired`
+ * (`start`, `serve`): no schema from the directory's name, as in Ponder, so production never guesses one.
+ */
+export type Project = { name: string; tables?: Tables; schemaRequired?: boolean };
 
 export function kasbah<const C extends Config>(initial: C & Checked<C>) {
   let config: Config = initial;
@@ -265,6 +269,8 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
     const { schema, database } = resolveConfig(config);
     const pool = new pg.Pool({ connectionString: database, max: 1 });
     try {
+      if (await inUse(pool, schema))
+        throw new ConfigError(`schema "${schema}" is in use by a running indexer: stop it first`);
       await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
     } finally {
       await pool.end();
@@ -284,6 +290,10 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
      * schema is the directory's name, the tables `kasbah.schema.ts`, and the API is on.
      */
     useProject: (p: Project) => {
+      if (p.schemaRequired && config.schema === undefined && !process.env.DATABASE_SCHEMA)
+        throw new ConfigError(
+          "no schema: pass --schema or set DATABASE_SCHEMA (a new one per deploy), or set `schema` in the config",
+        );
       config = {
         ...config,
         schema: config.schema ?? schemaName(p.name),

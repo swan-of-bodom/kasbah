@@ -4,6 +4,13 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- One indexer per schema, as in Ponder: a running indexer holds its schema with a heartbeat; a second one waits once
+  for it to expire (25 s), then refuses. A clean stop releases it at once; after a crash the next one takes over.
+  An indexer whose schema was taken over stops at its next commit. `clean` refuses a schema in use.
+- `dev` refuses a schema `start` made (the first change would have dropped it), and `start` drops one `dev` made.
+- `start` and `serve` need a schema name (`--schema`, `DATABASE_SCHEMA` or `schema` in the config) instead of taking
+  the directory's: in a container that was `app`. `init`'s `docker-compose.yml` sets `DATABASE_SCHEMA`.
+
 - A second API process on the same schema (a zero-downtime deploy, `serve`) no longer locks out the first: every
   process now sets the same password on the `<schema>_reader` role, derived from the database URL.
 

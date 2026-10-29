@@ -213,7 +213,7 @@ test.skipIf(url === undefined)(
     // No app file: the project's kasbah.config.ts, src/index.ts and src/api/index.ts.
     const started = await run(
       join(project, "node_modules/.bin/kasbah"),
-      ["start", "--to", "15", "--reset"],
+      ["start", "--schema", "kasbah_test_init", "--to", "15", "--reset"],
       { cwd: project, env, encoding: "utf8" },
     );
     expect(started.stdout).toMatch(/backfill done: 16 handled/);

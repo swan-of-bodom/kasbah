@@ -26,7 +26,8 @@ export function target(arg: string | undefined): string {
   return CONFIG;
 }
 
-export async function load(file: string): Promise<App> {
+/** `schemaRequired`: `start` and `serve`, which never take the schema from the directory's name. */
+export async function load(file: string, o: { schemaRequired?: boolean } = {}): Promise<App> {
   const mod = (await import(pathToFileURL(resolve(file)).href)) as { default?: unknown };
   const app = mod.default as App | undefined;
   if (typeof app?.run !== "function")
@@ -39,7 +40,7 @@ export async function load(file: string): Promise<App> {
     const tables = existsSync(schema)
       ? ((await import(pathToFileURL(schema).href)) as Tables)
       : undefined;
-    app.useProject({ name: basename(dir), tables });
+    app.useProject({ name: basename(dir), tables, schemaRequired: o.schemaRequired });
     for (const f of PROJECT_FILES.map((f) => join(dir, f)))
       if (existsSync(f)) await import(pathToFileURL(f).href);
   }

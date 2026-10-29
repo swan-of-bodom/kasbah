@@ -70,7 +70,8 @@ Blocks within `reorgWindow` (64) of the head are indexed with an undo journal, s
 for apps that must never show what a reorg could take back.
 
 What the config leaves out, the project gives: the tables are what `kasbah.schema.ts` exports, the database is
-`DATABASE_URL`, the Postgres schema is the directory's name (`my-indexer` → `my_indexer`), and the API is on, at
+`DATABASE_URL`, the Postgres schema is the directory's name for `dev` (`my-indexer` → `my_indexer`; `start` and
+`serve` need one named, as in Ponder), and the API is on, at
 port 42069. `--schema`/`DATABASE_SCHEMA`, `--port`/`PORT` and `--hostname`/`API_HOST` win over the config, so one
 config deploys anywhere (hosts like Railway assign `PORT`); `schema`, `tables`, `database` and `api` in the config
 still work, and `api: false` turns the API off. From code (`kasbah()` without the CLI) nothing is implied:
@@ -173,7 +174,7 @@ pnpm install     # also points git at .githooks: a commit Biome would change is 
 pnpm test        # all tests; the Postgres ones need DATABASE_URL in .env
 pnpm lint        # Biome: formatting (100 columns), imports, lint rules; CI runs it, with typecheck and test
 pnpm lint:fix    # fixes what it can
-pnpm kasbah start examples/ekubo/kasbah.config.ts --to 300000   # Ekubo: a project like init writes
+pnpm kasbah start examples/ekubo/kasbah.config.ts --schema ekubo --to 300000   # Ekubo: a project like init writes
 # from deployment to block 300,000: 652,647 events, 2.6 min; with timestamps, one header per block with events (79,184)
 pnpm typecheck   # includes the type tests (test/*.test-d.ts) on the real ABIs
 pnpm fixtures    # refetch test/fixtures from mainnet (needs KASBAH_RPC_URL in .env, see .env.example)

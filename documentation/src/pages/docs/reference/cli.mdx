@@ -35,7 +35,8 @@ Indexes, follows the head and restarts on every file change. A new build drops t
 kasbah start [--to <block>] [--reset]
 ```
 
-The same for production: needs `DATABASE_URL`, refuses data from another build. `--to` stops at that block.
+The same for production: needs `DATABASE_URL` and a schema name (`--schema`), refuses data from another build and a
+schema another indexer is running on. `--to` stops at that block.
 Ctrl-C or `SIGTERM` finishes the current block and exits; a third one exits at once.
 
 ## serve
@@ -68,7 +69,7 @@ The shared cache of raw events and contract reads, per chain.
 
 | Flag | Env | Default |
 | --- | --- | --- |
-| `--schema <name>` | `DATABASE_SCHEMA` | the config's, else the directory's name |
+| `--schema <name>` | `DATABASE_SCHEMA` | the config's; for `dev` and `clean`, else the directory's name; **required** for `start` and `serve` |
 | `--port <n>` | `PORT` | `42069` |
 | `--hostname <host>` | `API_HOST` | `localhost` |
 | `--ui` / `--no-ui` | | on for `dev` in a terminal |

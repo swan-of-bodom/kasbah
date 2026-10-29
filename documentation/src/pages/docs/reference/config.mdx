@@ -31,7 +31,7 @@ export default kasbah({
 | `cache` | `boolean \| { maxCalls? }` | `false` | Keep final events and reads in Postgres. `maxCalls` default 1,000,000. |
 | `api` | `false \| { port?, host?, readDatabase? }` | port `42069`, localhost | The read API. `PORT` and `API_HOST` win. |
 | `database` | `string` | `DATABASE_URL` | Postgres URL. |
-| `schema` | `string` | the directory's name | Postgres schema. `DATABASE_SCHEMA` wins. |
+| `schema` | `string` | `dev`: the directory's name | Postgres schema. `DATABASE_SCHEMA` wins. `start`/`serve` need one. |
 | `tables` | `Record<string, PgTable>` | `kasbah.schema.ts` | Your tables. |
 
 ## Contract

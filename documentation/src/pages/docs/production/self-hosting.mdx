@@ -27,10 +27,10 @@ ready, switch traffic to it, then delete the old one:
 kasbah clean --schema my_indexer_1a2b3c4 --yes
 ```
 
-:::warning
-Never run two `start` processes on one schema: nothing stops them, and both write. This is the case during a
-rolling deploy that keeps the old container up until the new one is healthy, so use a new schema per deploy.
-:::
+Only one indexer runs on a schema at a time: a second one waits once (up to 25 seconds) and then stops with
+`schema "…" is in use by another indexer`. During a rolling deploy, which keeps the old container up until the new
+one is healthy, that's what a new deploy on the old schema would do, so use a new schema per deploy. See
+[One indexer per schema](/docs/database#one-indexer-per-schema).
 
 ## Health checks
 

@@ -4,6 +4,7 @@ import type { EventCache } from "../db/cache.ts";
 import type { Store } from "../db/store.ts";
 import { transaction } from "../db/transaction.ts";
 import type { BlockRef, LiveBlock } from "../sync/live.ts";
+import type { SchemaLock } from "./lock.ts";
 import type { Sources, Watched } from "./sources.ts";
 import type { Status } from "./status.ts";
 
@@ -59,6 +60,8 @@ type Writers = {
   sources: Sources;
   status: Status;
   schema: string;
+  /** Checked in every commit: nothing is written once another indexer took the schema over. */
+  lock: SchemaLock;
   /** The newest final block: journal and hashes below it are dropped. */
   final: () => number;
   start: number;
@@ -110,7 +113,7 @@ export class Position {
    * the run, so nothing retries against them.
    */
   async commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
-    const { pool, store, cache, factories, sources, status, schema, final } = this.#w;
+    const { pool, store, cache, factories, sources, status, schema, lock, final } = this.#w;
     const m = moves(c, this.#watermark);
     const parts = { tables: 0, cache: 0 };
     const timed = async (part: keyof typeof parts, write: () => unknown) => {
@@ -121,6 +124,7 @@ export class Position {
     let undone = 0;
     const started = performance.now();
     await transaction(pool, async (tx) => {
+      await lock.check(tx);
       switch (c.kind) {
         case "children":
           await timed("cache", () => cache?.persist(tx, c.through));

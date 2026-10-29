@@ -36,5 +36,6 @@ kasbah cache clear --events
 
 - `api`: `{ port, host, readDatabase }`, or `false` to turn the API off. Defaults to port 42069 on localhost.
 - `database`: a Postgres URL. Default: `DATABASE_URL`.
-- `schema`: the Postgres schema for the app's tables. Default: the project directory's name.
+- `schema`: the Postgres schema for the app's tables. Default for `dev`: the project directory's name; `start` and
+  `serve` need one (here, or `--schema`, or `DATABASE_SCHEMA`).
 - `tables`: default, what `kasbah.schema.ts` exports.

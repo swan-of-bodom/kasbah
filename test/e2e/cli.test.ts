@@ -63,6 +63,12 @@ const until = async (c: () => Promise<boolean>, ms = 20_000) => {
   }
 };
 const sum = (BLOCKS * (BLOCKS + 1)) / 2;
+/** `dev` refuses a schema `start` made: the tests that switch between them start clean. */
+const dropSchema = async () => {
+  const p = new pg.Pool({ connectionString: url, max: 1 });
+  await p.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+  await p.end();
+};
 const cli = (...args: string[]) => {
   const out: string[] = [];
   const p = spawn(process.execPath, ["--no-warnings", "src/cli/main.ts", ...args], {
@@ -96,6 +102,7 @@ test.skipIf(url === undefined)(
 test.skipIf(url === undefined)(
   "dev: restarts on a change and re-indexes a changed build",
   async () => {
+    await dropSchema();
     writeFileSync(appFile, appSource(3).replace('"RPC"', JSON.stringify(rpcUrl)));
     const run = cli("dev", appFile);
     try {
@@ -118,8 +125,12 @@ test.skipIf(url === undefined)(
 test.skipIf(url === undefined)(
   "dev --reset re-indexes from block 0; clean drops the app's schema (with --yes when not asked)",
   async () => {
+    await dropSchema();
     writeFileSync(appFile, appSource(4).replace('"RPC"', JSON.stringify(rpcUrl)));
-    expect(await cli("start", appFile, "--to", String(BLOCKS - 1), "--reset").exited).toBe(0);
+    const first = cli("dev", appFile, "--no-ui");
+    await until(async () => /backfill done/.test(first.out.join("")));
+    first.p.kill("SIGINT");
+    expect(await first.exited).toBe(0);
     const run = cli("dev", appFile, "--reset", "--no-ui");
     try {
       await until(async () => /backfill done: (\d+) handled/.test(run.out.join("")));
@@ -259,7 +270,7 @@ test.skipIf(!hasRuntime)(
 );
 
 test.skipIf(url === undefined)(
-  "a project's layout gives the schema (its directory), the tables (kasbah.schema.ts) and the API",
+  "a project's layout gives the tables (kasbah.schema.ts) and the API; start needs a schema",
   async () => {
     const project = join(dir, "layout-app");
     mkdirSync(join(project, "src"), { recursive: true });
@@ -286,9 +297,14 @@ app.on("C:Counted", async ({ event, context }) => {
 });
 `,
     );
+    const unnamed = cli("start", join(project, "kasbah.config.ts"), "--to", String(BLOCKS - 1));
+    expect(await unnamed.exited).toBe(1);
+    expect(unnamed.out.join("")).toMatch(/no schema: pass --schema or set DATABASE_SCHEMA/);
     const run = cli(
       "start",
       join(project, "kasbah.config.ts"),
+      "--schema",
+      "layout_app",
       "--to",
       String(BLOCKS - 1),
       "--reset",

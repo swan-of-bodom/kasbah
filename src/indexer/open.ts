@@ -24,6 +24,7 @@ import { Position } from "./commit.ts";
 import type { Child } from "./events.ts";
 import { compileFilters } from "./filters.ts";
 import { Finality } from "./finality.ts";
+import { SchemaLock } from "./lock.ts";
 import { metricsOf } from "./metrics.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
@@ -108,7 +109,7 @@ export async function open(
   if (configured.network !== undefined) checkNetwork(configured.network, chainId!);
   const config = await deployments(configured, rpc, status);
   const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
-  const pool = await openSchema(config, options, status, buildId, closers);
+  const { pool, lock } = await openSchema(config, options, status, buildId, signal, closers);
   const stored = await startup(pool, schema, tables, buildId);
   if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
 
@@ -152,6 +153,7 @@ export async function open(
       sources,
       status,
       schema,
+      lock,
       final: (): number => partial.final,
       start: plan.start,
     },
@@ -205,38 +207,30 @@ async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<st
   return ids[0];
 }
 
-/** The pool on the app's schema, after dropping it for `reset`, or for a changed build with `onBuildChange: "reset"`. */
+/** The pool on the app's schema, once this indexer holds it (dropped first for `reset`, a dev build change, or dev data). */
 async function openSchema(
   config: Resolved,
   options: RunOptions,
   status: Status,
   buildId: string,
+  signal: AbortSignal,
   closers: (() => unknown)[],
-): Promise<pg.Pool> {
-  const schema = quote(config.schema);
+): Promise<{ pool: pg.Pool; lock: SchemaLock }> {
   const pool = new pg.Pool({
     connectionString: config.database,
     max: POOL_SIZE,
-    options: `-c search_path=${schema}`,
+    options: `-c search_path=${quote(config.schema)}`,
   });
   closers.push(() => pool.end());
-  let reset = options.reset === true;
-  if (!reset && options.onBuildChange === "reset") {
-    const exists =
-      (await pool.query(`SELECT to_regclass($1) AS r`, [`${schema}._kasbah_meta`])).rows[0].r !==
-      null;
-    const build = exists
-      ? (await pool.query(`SELECT value FROM ${schema}._kasbah_meta WHERE key = 'build'`)).rows[0]
-          ?.value
-      : undefined;
-    if (build !== undefined && build !== buildId) {
-      status.note({ kind: "rebuild" });
-      reset = true;
-    }
-  }
-  if (reset) await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
-  await pool.query(`CREATE SCHEMA IF NOT EXISTS ${schema}`);
-  return pool;
+  const lock = await SchemaLock.acquire(
+    pool,
+    config.schema,
+    { dev: options.onBuildChange === "reset", reset: options.reset === true, buildId },
+    status,
+    signal,
+  );
+  closers.push(() => lock.release());
+  return { pool, lock };
 }
 
 async function startApi(

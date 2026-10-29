@@ -20,10 +20,9 @@ git clone https://github.com/you/my-indexer && cd my-indexer
 ```bash [.env]
 KASBAH_RPC_URL=https://…
 POSTGRES_PASSWORD=a-long-random-password
-DATABASE_SCHEMA=my_indexer
 ```
 
-Set `DATABASE_SCHEMA`: inside the container the directory is `/app`, so the default would be `app`.
+The compose file sets `DATABASE_SCHEMA` to your project's name; set it in `.env` to choose another.
 
 ### Start it
 

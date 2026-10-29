@@ -11,7 +11,7 @@ export async function start(
   const screen = status === undefined ? undefined : new Screen(status);
   screen?.start();
   try {
-    const app = await load(file);
+    const app = await load(file, { schemaRequired: !o.dev });
     const stop = new AbortController();
     // Ctrl-C reaches this process twice under `kasbah dev` (from the terminal, then from the parent), so a repeat
     // must not kill it before the last commit; a third one does.

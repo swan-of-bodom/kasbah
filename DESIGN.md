@@ -567,7 +567,23 @@ Project defaults (`src/cli/project.ts`, `useProject`): loading a project's `kasb
 CLI fills in what the config leaves out before the handlers load: the schema is the directory's name, the tables
 `kasbah.schema.ts`, the API on. Like Ponder, where these come from the layout and flags, not the config.
 Environment variables (`DATABASE_SCHEMA`, `PORT`, `API_HOST`, which the flags set) win over the config, so a deploy
-picks its schema and port without editing code. `kasbah()` from code implies nothing, so a library user or a
+picks its schema and port without editing code. `start` and `serve` take no schema from the directory (as Ponder's `start` requires `DATABASE_SCHEMA`): in a container the directory is `/app`, and a renamed
+checkout would silently index into a new schema. `init`'s compose file sets `DATABASE_SCHEMA` to the project's name.
+
+Schema lock (`src/indexer/lock.ts`), as Ponder's (`database/index.ts`): `_kasbah_meta` key
+`lock` = `{ owner, heartbeat, dev }`, the heartbeat refreshed every 10 s; one held with a heartbeat younger than 25 s
+belongs to a live indexer. A second indexer waits once until it would expire, retries, then refuses; a clean stop
+clears the owner so the next starts at once; after a crash it expires and the next takes over (crash recovery as
+before). The claim runs in one transaction with the build rules and any drop, so no drop races another process.
+`dev` is `onBuildChange: "reset"`: it refuses a schema `start` made (it would drop it on the next change), and
+`start` drops one `dev` made; schemas from before the lock (`dev: null`) keep the old behavior. Two changes from
+Ponder: the lock row is read `FOR UPDATE` (Ponder reads it plainly, so two processes starting at once could both
+claim it), and every commit checks `FOR SHARE` that this process still owns it, so one that lost the database for
+longer than the timeout and was taken over writes nothing more (Ponder only logs a failed heartbeat). An advisory
+lock would be simpler and free on a crash, but poolers (PgBouncer, Supabase, Neon pooled URLs) break session locks
+and a dropped connection releases it at once. `clean` refuses a schema a live indexer holds.
+
+`kasbah()` from code implies nothing, so a library user or a
 test never opens a port by surprise. `network` is checked against `starknet_chainId` before the schema opens: an
 RPC on the wrong chain must not drop or write anything.
 

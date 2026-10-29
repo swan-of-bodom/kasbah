@@ -13,8 +13,9 @@ DATABASE_URL=postgres://user:password@localhost:5432/postgres
 
 ## Schemas
 
-Your tables live in a Postgres schema, named after the project directory: `my-indexer` → `my_indexer`. Change it
-with `DATABASE_SCHEMA` or `--schema`:
+Your tables live in a Postgres schema. `dev` names it after the project directory (`my-indexer` → `my_indexer`).
+`start` and `serve` need you to name it, with `--schema` or `DATABASE_SCHEMA` (or `schema` in the config), so
+production never guesses:
 
 ```bash
 pnpm start --schema my_indexer_v2
@@ -22,6 +23,18 @@ pnpm start --schema my_indexer_v2
 
 kasbah also keeps its progress in that schema (table `_kasbah_meta`), so one database can hold many
 apps, or many versions of one app, side by side.
+
+## One indexer per schema
+
+An indexer holds its schema while it runs, as in Ponder: it marks it in `_kasbah_meta` and refreshes that
+mark every 10 seconds. A second indexer on the same schema waits once for the mark to expire, then stops:
+
+```text
+schema "my_indexer" is in use by another indexer: stop it, or use another --schema (DATABASE_SCHEMA)
+```
+
+A clean stop (Ctrl-C, `SIGTERM`) releases it at once. After a crash, the mark expires in 25 seconds and the next
+indexer takes over where the crashed one stopped. `clean` refuses a schema a running indexer holds.
 
 ## Builds
 
@@ -37,10 +50,8 @@ schema "my_indexer" holds another build of this app (config, tables or handlers 
 Run the new build in a new schema (see [Self-hosting](/docs/production/self-hosting#one-schema-per-deploy)), or pass
 `--reset` to drop the old data first.
 
-:::danger
-Never point `pnpm dev` at your production database with the production schema: the first code change drops it.
-Use another `--schema`, or no `DATABASE_URL` at all.
-:::
+`dev` and `start` keep apart: `dev` refuses a schema `start` made (it would drop it on the next change), and `start`
+drops a schema `dev` made and indexes from scratch.
 
 ## Direct SQL
 

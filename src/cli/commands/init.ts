@@ -7,6 +7,7 @@ import { abiEvents } from "../../abi/events.ts";
 import { deployedAt } from "../../abi/history.ts";
 import { ConfigError } from "../../config/errors.ts";
 import { NETWORKS, type Network, networkName } from "../../config/network.ts";
+import { schemaName } from "../../config/resolve.ts";
 import { RpcClient } from "../../rpc/client.ts";
 import { blockNumber } from "../../rpc/methods.ts";
 import { probe } from "../../rpc/probe.ts";
@@ -207,7 +208,7 @@ export function generate(p: Project): Record<string, string> {
     ".gitignore": "node_modules\n.env\n",
     ".dockerignore": "node_modules\n.env\n.git\n",
     Dockerfile: DOCKERFILE,
-    "docker-compose.yml": COMPOSE,
+    "docker-compose.yml": compose(schemaName(basename(p.dir))),
     "README.md": lines(
       `# ${basename(p.dir)}`,
       "",
@@ -220,8 +221,8 @@ export function generate(p: Project): Record<string, string> {
       "",
       "```",
       "pnpm dev               # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql",
-      "pnpm start             # the same, without watching",
-      "pnpm serve             # the API alone, over what was indexed",
+      `pnpm start --schema ${schemaName(basename(p.dir))}   # the same for production, without watching (a new schema per deploy)`,
+      `pnpm serve --schema ${schemaName(basename(p.dir))}   # the API alone, over what start indexed`,
       "docker compose up -d   # Postgres and the indexer, the API on 127.0.0.1:42069",
       "```",
       "",
@@ -247,7 +248,7 @@ EXPOSE 42069
 CMD ["node", "node_modules/kasbah/dist/cli/main.js", "start"]
 `;
 
-const COMPOSE = `services:
+const compose = (schema: string) => `services:
   postgres:
     image: docker.io/library/postgres:17
     environment:
@@ -264,6 +265,8 @@ const COMPOSE = `services:
     env_file: .env
     environment:
       DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-kasbah}@postgres:5432/postgres
+      # start needs one: a new one when the build changes (config, tables or handlers).
+      DATABASE_SCHEMA: \${DATABASE_SCHEMA:-${schema}}
     # Localhost only: put a proxy (Caddy, nginx) in front for the outside, with TLS and rate limits.
     ports:
       - "127.0.0.1:42069:42069"

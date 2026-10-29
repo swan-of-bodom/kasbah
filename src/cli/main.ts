@@ -25,7 +25,8 @@ const USAGE = `usage:
   kasbah clean [app.ts] [--yes]  deletes what the app stored: the dev container and its volume, or with
                                         DATABASE_URL only the app's schema (asks first; the cache stays)
   --schema <name>                       Postgres schema for start, dev, clean and serve (DATABASE_SCHEMA); default:
-                                        the config's, else the project directory's name
+                                        the config's; dev and clean: else the project directory's name. start and
+                                        serve need one (a new one per deploy); one indexer per schema at a time
   --port <n> / --hostname <host>        where the API listens (PORT / API_HOST; default 42069 on localhost)
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
   --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay

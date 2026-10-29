@@ -46,8 +46,10 @@ export type Pace = {
 
 /** Something a run reports once, when it happens. The rest of `Status` is its current state. */
 export type Note =
-  /** `onBuildChange: "reset"` and the schema held another build. */
-  | { kind: "rebuild" }
+  /** The schema was dropped: `onBuildChange: "reset"` and it held another build, or a `start` found dev data. */
+  | { kind: "rebuild"; reason: "build" | "dev" }
+  /** Another indexer holds the schema: waiting `seconds` for its heartbeat to expire. */
+  | { kind: "locked"; schema: string; seconds: number }
   | { kind: "api"; url: string }
   /** `to` was inside the reorg window: indexing stops at `through`, the last final block. */
   | { kind: "clamped"; to: number; through: number; tip: number; rule: string }
@@ -364,7 +366,11 @@ const seconds = (s: number) => `${s.toFixed(1)}s`;
 function describe(n: Note): string {
   switch (n.kind) {
     case "rebuild":
-      return "build changed (config, tables or handlers): indexing from scratch";
+      return n.reason === "dev"
+        ? "the schema holds what kasbah dev indexed: indexing from scratch"
+        : "build changed (config, tables or handlers): indexing from scratch";
+    case "locked":
+      return `schema "${n.schema}" is held by another indexer: waiting ${n.seconds} s for it to stop or expire`;
     case "api":
       return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
     case "clamped":
