@@ -12,12 +12,12 @@ GraphQL and your own routes. If you've used [Ponder](https://ponder.sh), you alr
 - **Ready to deploy**: one indexer per schema, `/ready` for zero-downtime deploys, Prometheus metrics.
 
 > [!NOTE]
-> kasbah is early (0.x) and not on npm yet. See [From source](#from-source).
+> kasbah is early (0.x): a minor version may still change the config or the API.
 
 ## Quickstart
 
 ```bash
-kasbah init my-indexer        # asks for an RPC and a contract address, writes the project
+pnpm create kasbah my-indexer # asks for an RPC and a contract address, writes the project
 cd my-indexer
 pnpm install
 pnpm dev                      # backfills, follows the head, restarts on every change
@@ -88,7 +88,7 @@ configuration, handlers, the API, and deploying to Railway, Render or a VPS. The
 
 ## From source
 
-Node 22.18+ and pnpm.
+Node 22.18+ and pnpm. To use a local checkout instead of the npm package:
 
 ```bash
 git clone https://github.com/swan-of-bodom/kasbah

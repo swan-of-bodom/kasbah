@@ -1,19 +1,29 @@
 {
   "name": "kasbah",
   "version": "0.1.0",
-  "description": "Minimal, fast Starknet indexer",
+  "description": "A minimal, fast Starknet indexer in TypeScript: event handlers, Postgres, SQL and GraphQL",
   "license": "Apache-2.0",
+  "author": "swan-of-bodom",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/swan-of-bodom/kasbah.git"
   },
   "homepage": "https://github.com/swan-of-bodom/kasbah",
+  "bugs": {
+    "url": "https://github.com/swan-of-bodom/kasbah/issues"
+  },
   "keywords": [
     "starknet",
+    "cairo",
     "indexer",
+    "indexing",
+    "blockchain",
+    "events",
     "postgres",
     "graphql",
-    "drizzle"
+    "drizzle",
+    "typescript",
+    "ekubo"
   ],
   "type": "module",
   "engines": {
