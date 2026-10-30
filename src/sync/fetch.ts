@@ -25,6 +25,8 @@ export type EventStreamOptions = {
 const MIN_SPLIT = 64;
 /** The memory budget's floor, for small `concurrency` or sparse windows. */
 const MIN_BUFFERED = 10_000;
+/** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
+const DENSITY_DECAY = 0.9;
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
@@ -267,8 +269,8 @@ class EventFetcher {
         token === undefined
           ? w.end
           : Math.min(w.end, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
-      this.#recentEvents = this.#recentEvents * 0.9 + kept;
-      this.#recentBlocks = this.#recentBlocks * 0.9 + Math.max(0, at - w.fetchedUntil);
+      this.#recentEvents = this.#recentEvents * DENSITY_DECAY + kept;
+      this.#recentBlocks = this.#recentBlocks * DENSITY_DECAY + Math.max(0, at - w.fetchedUntil);
       if (at >= w.end) {
         w.fetchedUntil = w.end;
         w.state = "done";

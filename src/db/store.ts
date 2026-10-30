@@ -10,6 +10,8 @@ import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } f
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
+/** Share of `maxCachedRows` a table's cache keeps after it overflows, so it doesn't evict again on the next flush. */
+const CACHE_KEPT = 0.8;
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
@@ -256,7 +258,7 @@ export class Store {
       }
       s.pending.clear();
       if (s.cache.size > this.#maxCachedRows) {
-        let drop = s.cache.size - Math.floor(this.#maxCachedRows * 0.8);
+        let drop = s.cache.size - Math.floor(this.#maxCachedRows * CACHE_KEPT);
         for (const key of s.cache.keys()) {
           if (drop-- <= 0) break;
           s.cache.delete(key);

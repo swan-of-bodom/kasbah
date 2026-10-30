@@ -11,20 +11,21 @@ import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
 import { quote } from "./table.ts";
 
-const hexBytes = (felt: string): Buffer => {
+const feltBytes = (felt: string): Buffer => {
   let h = BigInt(felt).toString(16);
   if (h === "0") return Buffer.alloc(0);
   if (h.length % 2 === 1) h = `0${h}`;
   return Buffer.from(h, "hex");
 };
-const hexFelt = (h: string): string =>
+/** Back from `feltBytes`' hex: its bytes are minimal, so the only leading zero is the one an odd length added. */
+const feltOfBytesHex = (h: string): string =>
   h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
 
 /** Felts as one bytea: per felt, a length byte then its minimal big-endian bytes. */
 export function packFelts(felts: readonly string[]): Buffer {
   const parts: Buffer[] = [];
   for (const f of felts) {
-    const b = hexBytes(f);
+    const b = feltBytes(f);
     parts.push(Buffer.from([b.length]), b);
   }
   return Buffer.concat(parts);
@@ -39,7 +40,7 @@ export function unpackHex(h: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < h.length; ) {
     const n = Number.parseInt(h.slice(i, i + 2), 16) * 2;
-    out.push(hexFelt(h.slice(i + 2, i + 2 + n)));
+    out.push(feltOfBytesHex(h.slice(i + 2, i + 2 + n)));
     i += 2 + n;
   }
   return out;
@@ -47,6 +48,8 @@ export function unpackHex(h: string): string[] {
 
 /** Transactions per INSERT: one statement's array parameters are built as one string. */
 const ROWS_PER_INSERT = 1_000;
+/** Share of `maxCalls` left after pruning, so the next inserts don't prune again at once. */
+const CALLS_KEPT = 0.9;
 
 const SCHEMA_SQL = (s: string) => [
   `CREATE SCHEMA IF NOT EXISTS ${s}`,
@@ -117,7 +120,7 @@ export class EventCache {
 
   async #pruneCalls(q: pg.Pool | pg.PoolClient) {
     if (this.#callRows <= this.#maxCalls) return;
-    const drop = this.#callRows - Math.floor(this.#maxCalls * 0.9);
+    const drop = this.#callRows - Math.floor(this.#maxCalls * CALLS_KEPT);
     const r = await q.query(
       `DELETE FROM ${this.#schema}.calls WHERE seq IN (SELECT seq FROM ${this.#schema}.calls ORDER BY seq LIMIT $1)`,
       [drop],
@@ -193,8 +196,8 @@ export class EventCache {
     const s: Buffer[] = [];
     for (const x of addresses)
       for (const y of selectors) {
-        a.push(hexBytes(x));
-        s.push(hexBytes(y));
+        a.push(feltBytes(x));
+        s.push(feltBytes(y));
       }
     const { rows } = await this.#pool.query<{ end: string }>(
       `SELECT min(coalesce(x.up, $1::int8))::text AS end FROM unnest($2::bytea[], $3::bytea[]) AS p(address, selector)
@@ -216,8 +219,8 @@ export class EventCache {
     to: number,
     limit = 50_000,
   ): AsyncGenerator<Batch> {
-    const a = addresses.map(hexBytes);
-    const s = selectors.map(hexBytes);
+    const a = addresses.map(feltBytes);
+    const s = selectors.map(feltBytes);
     type Row = {
       block: number;
       tx: number;
@@ -249,12 +252,12 @@ export class EventCache {
       const { rows, through } = await next;
       if (through < to) next = page(through + 1);
       const events: EmittedEvent[] = rows.map((r) => ({
-        from_address: hexFelt(r.address),
+        from_address: feltOfBytesHex(r.address),
         keys: unpackHex(r.keys),
         data: unpackHex(r.data),
         block_number: r.block,
-        block_hash: hexFelt(r.block_hash),
-        transaction_hash: hexFelt(r.tx_hash),
+        block_hash: feltOfBytesHex(r.block_hash),
+        transaction_hash: feltOfBytesHex(r.tx_hash),
         transaction_index: r.tx,
         event_index: r.idx,
       }));
@@ -286,7 +289,7 @@ export class EventCache {
   ): Promise<string[] | undefined> {
     const { rows } = await this.#pool.query<{ result: string }>(
       `SELECT encode(result, 'hex') AS result FROM ${this.#schema}.calls WHERE address = $1 AND entrypoint = $2 AND calldata = $3 AND block = $4`,
-      [hexBytes(address), hexBytes(entrypoint), packFelts(calldata), block],
+      [feltBytes(address), feltBytes(entrypoint), packFelts(calldata), block],
     );
     return rows[0] === undefined ? undefined : unpackHex(rows[0].result);
   }
@@ -300,8 +303,8 @@ export class EventCache {
     result: string[],
   ) {
     this.#calls.push({
-      address: hexBytes(address),
-      entrypoint: hexBytes(entrypoint),
+      address: feltBytes(address),
+      entrypoint: feltBytes(entrypoint),
       calldata: packFelts(calldata),
       block,
       result: packFelts(result),
@@ -321,11 +324,11 @@ export class EventCache {
       receipt: RawReceipt | null;
     }>(
       `SELECT encode(hash, 'hex') AS hash, transaction, receipt FROM ${this.#schema}.transactions WHERE hash = ANY($1)`,
-      [hashes.map(hexBytes)],
+      [hashes.map(feltBytes)],
     );
     return new Map(
       rows.map((r) => [
-        hexFelt(r.hash),
+        feltOfBytesHex(r.hash),
         {
           ...(r.transaction === null ? {} : { transaction: r.transaction }),
           ...(r.receipt === null ? {} : { receipt: r.receipt }),
@@ -340,7 +343,7 @@ export class EventCache {
     const receipt = x.receipt === undefined ? null : JSON.stringify(x.receipt);
     this.#pendingBytes += (transaction?.length ?? 0) + (receipt?.length ?? 0);
     this.#transactions.push({
-      hash: hexBytes(hash),
+      hash: feltBytes(hash),
       block,
       transaction,
       receipt,
@@ -391,7 +394,7 @@ export class EventCache {
       const lines = (function* (events: EmittedEvent[]) {
         let chunk = "";
         for (const e of events) {
-          chunk += `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(hexBytes(e.from_address))}\t${bytea(hexBytes(e.keys[0] ?? "0x0"))}\t${bytea(hexBytes(e.block_hash ?? "0x0"))}\t${bytea(hexBytes(e.transaction_hash))}\t${bytea(packFelts(e.keys))}\t${bytea(packFelts(e.data))}\n`;
+          chunk += `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltBytes(e.from_address))}\t${bytea(feltBytes(e.keys[0] ?? "0x0"))}\t${bytea(feltBytes(e.block_hash ?? "0x0"))}\t${bytea(feltBytes(e.transaction_hash))}\t${bytea(packFelts(e.keys))}\t${bytea(packFelts(e.data))}\n`;
           if (chunk.length > 1 << 16) {
             yield chunk;
             chunk = "";
@@ -408,8 +411,8 @@ export class EventCache {
     const s: Buffer[] = [];
     for (const x of pairs.addresses)
       for (const y of pairs.selectors) {
-        a.push(hexBytes(x));
-        s.push(hexBytes(y));
+        a.push(feltBytes(x));
+        s.push(feltBytes(y));
       }
     await tx.query(
       `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
@@ -444,8 +447,8 @@ export class EventCache {
        ON CONFLICT (block) DO UPDATE SET header = EXCLUDED.header WHERE headers.header IS NULL`,
       [
         headers.map((h) => h.block_number),
-        headers.map((h) => hexBytes(h.block_hash)),
-        headers.map((h) => hexBytes(h.parent_hash)),
+        headers.map((h) => feltBytes(h.block_hash)),
+        headers.map((h) => feltBytes(h.parent_hash)),
         headers.map((h) => h.timestamp),
         headers.map((h) => JSON.stringify(h)),
       ],
