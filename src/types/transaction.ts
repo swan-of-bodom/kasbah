@@ -155,7 +155,6 @@ const bounds = (b: RawBounds): ResourceBounds => ({
   maxPricePerUnit: BigInt(b.max_price_per_unit),
 });
 
-/** Spec name to ours: `contract_address_salt` → `contractAddressSalt`. */
 const camel = (k: string) => k.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
 
 /** Fields that are numbers in the spec (`FELT`/`u64`/`u128`/`NUM_AS_HEX` amounts), as bigints. */

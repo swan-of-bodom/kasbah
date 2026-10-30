@@ -62,7 +62,6 @@ export class SchemaLock {
     return lock;
   }
 
-  /** Claims the schema, or returns when the live holder's lock expires. */
   async #try(claim: Claim, status: Status): Promise<number | undefined> {
     const s = quote(this.#schema);
     return transaction(this.#pool, async (tx) => {

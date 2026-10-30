@@ -199,12 +199,10 @@ export type RunOptions = {
   status?: Status;
 };
 
-/** A filter value: the argument's type (a number for an integer too), or a list of them. */
 type FilterValue<V> = V extends bigint
   ? bigint | number | readonly (bigint | number)[]
   : V | readonly V[];
 
-/** `filter` as written, with each event and argument checked against the ABI: a misspelled name is `never`. */
 type FilterOf<A extends Abi, F> = {
   [E in keyof F]: E extends EventName<A>
     ? {
@@ -215,7 +213,6 @@ type FilterOf<A extends Abi, F> = {
     : never;
 };
 
-/** `upgradeEvents` and `filter` are events of each contract's ABI. */
 type Checked<C extends Config> = {
   contracts: {
     [K in keyof Contracts<C>]: {
@@ -242,7 +239,6 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
     handlers.set(name, handler as never);
   };
 
-  /** An endpoint of the API (`/pools/:key`), read-only on the app's tables; needs the API on. */
   const route = (method: Route["method"]) => (path: string, handler: RouteHandler<TablesOf<C>>) => {
     if (config.api === undefined || config.api === false)
       throw new ConfigError(`${method} ${path}: routes need the API, which \`api\` turns off`);

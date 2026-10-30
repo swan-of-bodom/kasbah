@@ -47,7 +47,6 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
     },
   };
   const lines = render(s, { width: 100, now: t0 + 10_000 });
-  // Every line is the box's width.
   for (const l of lines) expect(l.length).toBe(100);
   expect(lines[0]).toMatch(/^╭─ kasbah · app ─+ \[BACKFILL\] ─╮$/);
   const text = inside(lines).join("\n");
@@ -57,7 +56,6 @@ test("backfill: progress, recent pace, where the time goes, the slowest handlers
   expect(text).toMatch(/40\.1%/);
   expect(text).toMatch(/events 89% {2}■ handlers 0% {2}■ commits 11%/);
   expect(text).toContain("bound by fetching");
-  // Calls per method, the most first: what the provider bills.
   expect(text).toMatch(/getEvents 400 · blockNumber 300 · getClassHashAt 100 · \+2 more/);
   const rows = inside(lines).filter((l) => l.startsWith("Pool:"));
   expect(rows[0]).toMatch(/^Pool:Created\s+1\s+5\.0 ms\s+63%/);
@@ -117,20 +115,16 @@ test("the screen redraws in place, with notices and console output above it", as
   const screen = new Screen(s, out);
   screen.start();
   const drawn = (written.match(/\n/g) ?? []).length;
-  // Many lines in one tick: one redraw, the lines above the box in order.
   s.note({ kind: "following", block: 5 });
-  // The box shows progress: no line for it.
   s.note({ kind: "progress", phase: "live", block: 6, events: 1, children: 0, behind: 1 });
   console.log("from a handler %d", 7);
   await new Promise((r) => setImmediate(r));
   const frames = written.split(/\x1b\[(\d+)F\x1b\[J/);
   expect(frames.length).toBe(3);
-  // Each redraw moves up exactly the lines drawn before it.
   expect(Number(frames[1])).toBe(drawn);
   expect(
     plain(frames[2]!).startsWith("[kasbah] following the head from block 5\nfrom a handler 7\n"),
   ).toBe(true);
-  // Printed after stop: below the last box, which isn't drawn again.
   console.log("late");
   screen.stop();
   const before = written;

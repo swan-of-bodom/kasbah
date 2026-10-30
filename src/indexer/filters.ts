@@ -34,7 +34,6 @@ const WIDTH: Record<string, number> = {
   ),
 };
 
-/** A value in one comparable form: numbers and hex felts as their integer, the rest as themselves. */
 function normal(v: unknown): string {
   if (typeof v === "bigint" || typeof v === "number") return `n${BigInt(v)}`;
   if (typeof v === "string" && /^0x[0-9a-f]+$/i.test(v)) return `n${BigInt(v)}`;
@@ -82,7 +81,6 @@ export function compileFilters(
   return out;
 }
 
-/** The positional `keys` filter, or undefined when no filtered argument is a key it can reach. */
 function keysOf(
   codec: Codec,
   selectors: string[],

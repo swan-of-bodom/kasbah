@@ -341,7 +341,6 @@ function app(
     ...extra,
   });
   a.on("Pool:Counted", async ({ event, context }) => {
-    // include.block: the node's header, in backfill and live (a run fails on a wrong one).
     const header = node.blocks[event.block.number]!;
     if (
       event.block.timestamp !== 1_000 + event.block.number * 2 ||
@@ -511,7 +510,6 @@ test.skipIf(url === undefined)(
         // The tip's number is unchanged: wait for the revert, then for the new blocks.
         await until(async () => first.live.reorgs > reorgs);
         await caughtUp();
-        // A revert forgets the children it undid: the counts follow the watched sources.
         expect([first.children, first.contracts]).toEqual([
           node.children().length,
           node.children().length,
@@ -527,7 +525,6 @@ test.skipIf(url === undefined)(
     for (let i = 0; i < 40; i++) node.add();
     node.reorg(44);
     stop = new AbortController();
-    // The screen's view of a restart: every stored child counted, the last block committed when it stops.
     const status = watched();
     run = app(schema).run({ signal: stop.signal, status });
     await caughtUp();
@@ -551,7 +548,6 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)("a run that fails ends in the failed phase, not done", async () => {
-  // A node that refuses everything: the run stops at its first call.
   const refusing = createServer((_, res) =>
     res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32601, message: "refused" } })),
   );
@@ -597,7 +593,6 @@ test.skipIf(url === undefined)(
     ).toBe(extrasBefore);
     expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
 
-    // Past the cached range, only the new blocks are fetched (up to the last final one).
     const final = node.blocks.length - 1 - 16;
     await app(schema, true).run({ to: final, status: new Status() });
     expect(await actual(schema)).toEqual(expected(final));
@@ -654,7 +649,6 @@ test.skipIf(url === undefined)(
   60_000,
 );
 
-// Compile-time only: transaction fields and the receipt exist only with `include`.
 function _types() {
   const plain = kasbah({
     rpc: "",

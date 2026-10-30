@@ -72,6 +72,11 @@ in core, the `ponder dev` drop-everything mode.
 One process, three stages connected by bounded queues: fetch → decode → index. Fetching runs ahead of indexing up
 to a memory cap (not unbounded into the database, as Ponder does).
 
+The cap (`src/sync/fetch.ts`): windows behind the front pause at `perWindow` events each. Under `maxBuffered`
+events held, any window may fetch; under twice that, only a window holding fewer than `maxBuffered` together with
+the windows before it (including itself), so the front never waits on the back; past that, only the front, while
+it holds fewer than `maxBuffered`, and the consumer drains it. So memory stays under three times `maxBuffered`.
+
 **On a first run, events go straight from fetch to handlers in memory.** The raw events are written to the cache
 on the side (COPY, not awaited by indexing). Ponder instead writes everything to its sync store and reads it back
 before indexing; we skip that round trip.

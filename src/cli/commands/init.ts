@@ -79,7 +79,6 @@ const camel = (s: string) => snake(s).replace(/_([a-z0-9])/g, (_, c: string) => 
 
 const isNetwork = (name: string): name is Network => name in NETWORKS;
 
-/** The column for an argument: plain values get their type, anything else (structs, enums, arrays) jsonb. */
 function columnOf(m: AbiMember): string {
   if (SMALL.has(m.type)) return "integer().notNull()";
   if (BIG.has(m.type)) return "bignum().notNull()";
@@ -292,7 +291,6 @@ function indexerSpec(): string {
   return `file:${tarball}`;
 }
 
-/** A name for the contract from its largest interface (`ekubo::interfaces::core::ICore` → `Core`). */
 function nameOf(abi: Abi): string {
   const interfaces = abi.filter((x) => x.type === "interface") as {
     name?: string;
@@ -306,7 +304,6 @@ function nameOf(abi: Abi): string {
   return last !== undefined && /^[A-Za-z]\w*$/.test(last) ? last : "Contract";
 }
 
-/** How `init` gets an answer: asked in the terminal, or taken from a flag (an error when the flag is missing). */
 type Asking = { ui: Prompt; ask: boolean; need: (flag: string) => never };
 
 export async function init(o: InitOptions): Promise<void> {
@@ -379,7 +376,6 @@ export async function init(o: InitOptions): Promise<void> {
   await nextSteps(a, dir, target, startBlock);
 }
 
-/** The RPC URL, asked again until the endpoint answers. */
 async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
   let rpc = o.rpc ?? (ask ? undefined : (process.env.KASBAH_RPC_URL ?? need("rpc")));
   for (;;) {
@@ -408,7 +404,6 @@ async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
   }
 }
 
-/** The contract's address (canonical) and ABI, asked again until its class declares events. */
 async function askContract({ ui, ask, need }: Asking, o: InitOptions, client: RpcClient) {
   let address = o.address ?? (ask ? undefined : need("address"));
   for (;;) {
@@ -460,7 +455,6 @@ async function askEvents({ ui, ask }: Asking, o: InitOptions, abi: Abi): Promise
   return events;
 }
 
-/** The start block: the contract's deployment block unless told otherwise. */
 async function askStart(
   { ui, ask }: Asking,
   o: InitOptions,
@@ -488,7 +482,6 @@ async function askStart(
   );
 }
 
-/** A Postgres URL, tried once; none means `dev` runs Postgres in a container. */
 async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string | undefined> {
   let database =
     o.database === "" ? undefined : (o.database ?? (ask ? undefined : process.env.DATABASE_URL));
@@ -518,7 +511,6 @@ async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string 
       );
       break;
     } catch {
-      // Not up yet is fine (docker compose brings its own): only `kasbah dev` needs it.
       if (!ask || (await ui.confirm("Keep this URL anyway?", false))) break;
       database = undefined;
     } finally {
@@ -528,7 +520,6 @@ async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string 
   return database;
 }
 
-/** Installs the dependencies if asked to, and says how to start. */
 async function nextSteps({ ui, ask }: Asking, dir: string, target: string, startBlock: number) {
   const pm = process.env.npm_config_user_agent?.startsWith("npm") ? "npm" : "pnpm";
   if (ask && (await ui.confirm(`Install the dependencies now (${pm} install)?`))) {

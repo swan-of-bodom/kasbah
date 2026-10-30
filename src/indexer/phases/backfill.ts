@@ -22,7 +22,6 @@ export async function backfill(run: Run): Promise<void> {
   let through = first - 1;
   let since = 0;
   const batches = watchedEvents(run, first, to, true);
-  // Headers, transactions and receipts of the next batch are fetched while this one is handled.
   const waited = (what: "events" | "extras", ms: number) =>
     what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);
   for await (const [batch, pre] of ahead(
@@ -40,7 +39,6 @@ export async function backfill(run: Run): Promise<void> {
     }
   }
   if (!signal.aborted) through = to;
-  // What was handled since the last commit: nothing when the last batch (through `to`) just committed.
   if (through !== (position.checkpoint ?? first - 1))
     await position.commit({ kind: "batch", through });
   cache?.untrack();
@@ -62,7 +60,6 @@ export async function backfill(run: Run): Promise<void> {
   });
 }
 
-/** Handles one batch: events and the block handlers due in `[from, batch.through]`, in block order. Returns how many. */
 async function handleBatch(
   run: Run,
   from: number,
@@ -86,7 +83,6 @@ async function handleBatch(
   return batch.events.length + fires.length;
 }
 
-/** Block handlers due in `[from, to]`, in block order. */
 function firesIn(
   blockSources: BlockSource[],
   from: number,

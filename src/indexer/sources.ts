@@ -13,7 +13,6 @@ import { chunks } from "../utils/chunks.ts";
 import type { CompiledFilter } from "./filters.ts";
 import type { Note } from "./status.ts";
 
-/** What `Sources` reports: class replacements and skipped ABI events. */
 export type SourceNote = Extract<Note, { kind: "class" | "skipped" }>;
 
 /** One address being indexed: a configured contract, or a child its factory created. */
@@ -22,7 +21,6 @@ export type Watched = {
   address: string;
   /** First block indexed: the contract's start block, or the block a child was created in. */
   from: number;
-  /** Set for factory children. */
   child: boolean;
   spans: (ClassSpan & { abi: Abi })[];
   decode: ReturnType<typeof createHistoricalDecoder>;
@@ -34,7 +32,6 @@ export type ContractSource = {
   name: string;
   abi: Abi;
   startBlock: number;
-  /** Events with a handler. */
   handled: Set<string>;
   /** Events announcing a class replacement (see `upgradeEventsOf`): undefined, none known. */
   upgrades: Set<string> | undefined;
@@ -108,13 +105,10 @@ export class Sources {
   readonly #decoders = new WeakMap<Abi, Decode>();
   readonly #reported = new Set<string>();
   readonly #note: (n: SourceNote) => void;
-  /** Contracts with an `endBlock`, by name: their own stream. */
   readonly #bounded = new Map<string, Stream>();
-  /** Per contract with upgrade events, their selectors. */
   readonly #upgradeSelectors = new Map<string, Set<string>>();
   #children = 0;
 
-  /** Per contract, the configured ABI's decoder: for events the class at the address doesn't declare. */
   readonly #fallback = new Map<string, Decode>();
 
   constructor(rpc: RpcClient, contracts: ContractSource[], note: (n: SourceNote) => void) {
@@ -151,20 +145,14 @@ export class Sources {
     return this.#contracts.get(contract)?.filters.get(event);
   }
 
-  /** Factory children watched. */
   get children(): number {
     return this.#children;
   }
 
-  /** Watched addresses: every contract's, in one stream or another. */
   get watched(): number {
     return this.byAddress.size;
   }
 
-  /**
-   * Handled and upgrade events of `abi` join the `keys` filter of the contract's stream (its own with an `endBlock`,
-   * else the shared one), except those a filter's stream fetches.
-   */
   #join(c: ContractSource, abi: Abi) {
     const keys = (this.#bounded.get(c.name)?.keys ?? this.keys)[0]!;
     for (const e of abiEvents(abi)) {
@@ -218,7 +206,6 @@ export class Sources {
     return Promise.all(spans.map(async (s) => ({ ...s, abi: await this.abiOf(s.classHash) })));
   }
 
-  /** Adds class spans to an address (a watched one's handled selectors join the filter); unknown event names are reported. */
   async #extend(w: Watched, spans: ClassSpan[]) {
     const c = this.#contracts.get(w.contract)!;
     const configured = new Set(abiEvents(c.abi).map((e) => e.name));
@@ -226,7 +213,6 @@ export class Sources {
       const missing = abiEvents(s.abi)
         .filter((e) => !configured.has(e.name))
         .map((e) => e.name);
-      // Once per contract and event name: a contract upgraded 20 times reports the same event once.
       const unreported = missing.filter((m) => !this.#reported.has(`${c.name}:${m}`));
       if (unreported.length > 0) {
         for (const m of unreported) this.#reported.add(`${c.name}:${m}`);
@@ -291,7 +277,6 @@ export class Sources {
     return true;
   }
 
-  /** `resolve`, then `watch`. */
   async add(
     contract: string,
     address: string,
@@ -418,7 +403,6 @@ export class Sources {
   }
 }
 
-/** A factory: children are the `parameter` of its `event`. */
 export type FactorySource = {
   contract: string;
   address: string;

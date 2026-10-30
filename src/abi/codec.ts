@@ -1,9 +1,7 @@
 import type { Abi, AbiEnum, AbiMember, AbiStruct } from "./abi.ts";
 
-/** Reads felts from one array (`keys` or `data`) with a moving index. */
 export type Cursor = { felts: readonly string[]; i: number };
 
-/** Decodes one value from a cursor. Built once per ABI type, run per event. */
 export type Reader = (c: Cursor) => unknown;
 
 const P = 2n ** 251n + 17n * 2n ** 192n + 1n;
@@ -113,7 +111,6 @@ const PRIMITIVES: Record<string, Reader> = {
   "()": unit,
 };
 
-/** Encodes one value as felts (calldata). The inverse of `Reader`. */
 export type Writer = (value: unknown, out: string[]) => void;
 
 const toFelt = (v: unknown): bigint => {
@@ -204,7 +201,6 @@ const record = (v: unknown, type: string): Record<string, unknown> => {
   return v as Record<string, unknown>;
 };
 
-/** Splits `A, B<C, D>, (E, F)` on top-level commas. */
 export function splitTopLevel(s: string): string[] {
   const parts: string[] = [];
   let depth = 0;

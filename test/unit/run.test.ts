@@ -120,7 +120,6 @@ test("Status: commits move the gauges and note progress when due; a throwing lis
   expect([status.checkpoint, status.live.block, status.live.reorgs, status.time.commit]).toEqual([
     5, 8, 1, 8,
   ]);
-  // An empty live block is no line.
   expect(notices.map((n) => n.text)).toEqual([
     expect.stringMatching(/^block 8: 2 events, 1 new children, \d+\.\ds after its timestamp$/),
   ]);

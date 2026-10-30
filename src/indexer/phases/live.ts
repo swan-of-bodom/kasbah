@@ -38,7 +38,6 @@ export async function live(run: Run): Promise<void> {
     closers.push(() => heads.close());
     status.head = () => heads.last;
   }
-  /** Children created in the blocks of the current tick, by block: committed with their block. */
   let children = new Map<number, Watched[]>();
   await follow({
     rpc,
@@ -50,7 +49,6 @@ export async function live(run: Run): Promise<void> {
     known: position.known,
     signal,
     pollMs,
-    // With a socket up, a missed head costs at most 15 s; without, poll as usual.
     wait:
       heads === undefined
         ? undefined
@@ -73,7 +71,6 @@ export async function resume(run: Run, children: Child[]): Promise<void> {
     const ancestor = await findAncestor(run.rpc, c, position.known);
     if (ancestor.number < c) await reorg(run, ancestor, { number: c, hash }, true);
   }
-  // Children found by earlier runs, minus those whose creation that reorg undid.
   await Promise.all(
     children
       .filter((ch) => ch.block <= position.watermark)

@@ -64,7 +64,6 @@ async function rows(ctx: GraphqlContext, text: string, params: unknown[]): Promi
   }
 }
 
-/** Collects keys asked for in one tick and fetches them with one statement (per 1,000 keys). */
 type Loader = (key: unknown[]) => Promise<unknown>;
 
 function createLoader(
@@ -306,7 +305,6 @@ type ListArgs = {
 
 type ListArgDefs = Record<string, { type: GraphQLInputType; defaultValue?: unknown }>;
 
-/** One table's types and reads: what relations on other tables point at. */
 type Built = ReturnType<typeof tableType> & { reader: ReturnType<typeof tableReader> };
 
 /**
@@ -352,7 +350,6 @@ export function createGraphqlSchema(
   return new GraphQLSchema({ query: new GraphQLObjectType({ name: "Query", fields: query }) });
 }
 
-/** A table's object type (its `fields` filled in later with relations), filter, order and page types. */
 function tableType(typeName: string, info: TableInfo) {
   const scalars = new Map(info.columns.map((c) => [c.key, scalarOf(c.column.getSQLType())]));
   const notNull = (c: TableInfo["columns"][number]) =>
@@ -431,12 +428,10 @@ function toPage(found: Row[], args: ListArgs, keys: string[]) {
   };
 }
 
-/** A table's reads: one row by primary key, a page, a page per parent key, and rows by column values. */
 function tableReader(info: TableInfo) {
   const select = info.columns.map((c) => `${quote(c.column.name)} AS ${quote(c.key)}`).join(", ");
   const table = quote(info.name);
   const columnName = (k: string) => quote(info.columns.find((c) => c.key === k)!.column.name);
-  /** The page query's parts: `extra` adds conditions (a relation's match) before the cursor. */
   const pageParts = (args: ListArgs, params: unknown[], extra?: string) => {
     if (args.limit < 1 || args.limit > MAX_LIMIT)
       throw new QueryError(`limit must be between 1 and ${MAX_LIMIT}`);
@@ -489,7 +484,6 @@ function tableReader(info: TableInfo) {
       const { keys, sql } = pageParts(args, params);
       return toPage(await rows(ctx, sql, params), args, keys);
     },
-    /** One page per parent key, in one statement: the page query runs per key in a LATERAL subquery. */
     pagesFor: async (
       ctx: GraphqlContext,
       args: ListArgs,
@@ -532,7 +526,6 @@ function tableReader(info: TableInfo) {
   };
 }
 
-/** The request's loader under `id`, made on first use. */
 function loaderFor(ctx: GraphqlContext, id: string, make: () => Loader): Loader {
   const { loaders } = budgetOf(ctx);
   let load = loaders.get(id);
@@ -543,7 +536,6 @@ function loaderFor(ctx: GraphqlContext, id: string, make: () => Loader): Loader 
   return load;
 }
 
-/** A to-one relation is the related row (null when a key column is), a to-many a page of rows. */
 function relationField(
   r: RelationInfo,
   from: TableInfo,
@@ -583,7 +575,6 @@ function relationField(
     resolve: (parent, args: ListArgs, ctx) => {
       const values = keyOf(parent);
       if (values === undefined) return emptyPage();
-      // Parents asking with the same arguments share one statement.
       const load = loaderFor(ctx, `${r.from}.${r.name}:${JSON.stringify(args)}`, () =>
         createLoader((keys) => to.reader.pagesFor(ctx, args, r.references, keys), emptyPage),
       );

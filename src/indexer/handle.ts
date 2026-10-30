@@ -5,7 +5,6 @@ import { type Block, blockOf } from "../types/block.ts";
 import { canonical, felt } from "../types/felt.ts";
 import type { Run } from "./open.ts";
 
-/** What a batch's handlers need besides its events. */
 export type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Block> };
 
 function watchedOf(run: Run, e: EmittedEvent) {
@@ -82,7 +81,6 @@ export async function handle(
           hash: e.block_hash === undefined ? undefined : felt(e.block_hash),
         },
     transaction: { ...x?.transaction, hash: felt(e.transaction_hash), index: e.transaction_index },
-    // Padded only if a handler reads it.
     get log() {
       return { keys: e.keys.map(felt), data: e.data.map(felt) };
     },
@@ -102,7 +100,6 @@ export async function handle(
   run.status.record(name, performance.now() - t);
 }
 
-/** Runs `source`'s block handler, if any, for `block`. */
 /** The `setup` handler, if any, when nothing is committed yet: its writes commit with the first blocks. */
 export async function setup(run: Run): Promise<void> {
   const handler = run.handlers.get("setup");

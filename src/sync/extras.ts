@@ -78,7 +78,6 @@ export async function fetchExtras(
     const block = wanted.get(hash)!.block;
     if (o.isFinal(block)) o.cache?.rememberTransaction(hash, block, x);
   }
-  // Converted once per transaction, however many of its events are handled.
   return new Map(
     [...out].map(([hash, x]) => [
       hash,

@@ -65,13 +65,10 @@ export type Run = {
   final: number;
   client: CallClient;
   context: { db: Db; client: Client };
-  /** Some contract includes transactions or receipts. */
   anyInclude: boolean;
-  /** Some contract includes the block header. */
   anyBlock: boolean;
 };
 
-/** What the startup transaction read. */
 type Stored = {
   checkpoint: number | undefined;
   discovered: Map<string, number>;
@@ -194,7 +191,6 @@ export async function open(
   return run;
 }
 
-/** The chain every endpoint is on, when the network or the cache needs it: endpoints on different chains are refused. */
 async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<string | undefined> {
   if (config.network === undefined && config.cache === undefined && config.rpc.length === 1)
     return undefined;
@@ -207,7 +203,6 @@ async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<st
   return ids[0];
 }
 
-/** The pool on the app's schema, once this indexer holds it (dropped first for `reset`, a dev build change, or dev data). */
 async function openSchema(
   config: Resolved,
   options: RunOptions,
@@ -253,7 +248,6 @@ async function startApi(
   status.note({ kind: "api", url: status.api });
 }
 
-/** `startBlock: "deployment"` as a number: the block the contract (or its factory) was deployed in. */
 async function deployments(
   config: Resolved<StartBlock>,
   rpc: RpcClient,
@@ -263,7 +257,6 @@ async function deployments(
   const contracts = await Promise.all(
     Object.entries(config.contracts).map(async ([name, c]) => {
       if (c.startBlock !== "deployment") return [name, c] as const;
-      // With several addresses, the first one deployed.
       const blocks = await Promise.all(
         [c.address ?? c.factory.address].flat().map(async (a) => {
           const from = await deployedAt(rpc, a, tip);
@@ -282,7 +275,6 @@ async function deployments(
   return { ...config, contracts: Object.fromEntries(contracts) as Resolved["contracts"] };
 }
 
-/** Each configured contract with the events it has handlers for and the events that upgrade it. */
 function contractsOf(config: Resolved, handlers: ReadonlyMap<string, AnyHandler>) {
   return Object.entries(config.contracts).map(([name, c]) => ({
     name,
@@ -340,7 +332,6 @@ const META_SQL = [
   `CREATE TABLE IF NOT EXISTS _kasbah_children (address text PRIMARY KEY, contract text NOT NULL, block integer NOT NULL)`,
 ];
 
-/** The block sources, after checking every source and handler name. */
 function validate(
   config: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,
@@ -385,7 +376,6 @@ function buildIdOf(
           ]),
           blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
           tables: tables.map((t) => createTableSql(tableInfo(t))),
-          // Their code too: a changed handler means the stored results are stale.
           handlers: [...handlers].map(([name, h]) => [name, h.toString()]).sort(),
           source: salt ?? null,
         },
@@ -398,7 +388,6 @@ function buildIdOf(
 
 const numberOf = (v: unknown) => (typeof v === "number" ? v : undefined);
 
-/** The startup transaction: `_kasbah_*` tables, the build check, app tables without keys, and what earlier runs stored. */
 function startup(
   pool: pg.Pool,
   schema: string,

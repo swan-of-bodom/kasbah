@@ -84,7 +84,6 @@ test.skipIf(url === undefined)(
         expect(e.block_number).toBeGreaterThan(through);
         expect(e.block_number).toBeLessThanOrEqual(batch.through);
       }
-      // Nothing of a block in this batch is left for the next one.
       const next = events.find((e) => e.block_number! > batch.through);
       if (next !== undefined)
         expect(batch.events.some((e) => e.block_number === next.block_number)).toBe(false);
@@ -131,7 +130,6 @@ test.skipIf(url === undefined)(
     expect(await cache.getCall("0xe", "0x5e1", ["0x4"], 4)).toEqual(["0x44"]);
     expect(await cache.getCall("0xe", "0x5e1", ["0x0"], 0)).toBeUndefined();
 
-    // A smaller cap at the next open prunes at once.
     cache = await EventCache.open(pool, CHAIN, { maxCalls: 4 });
     expect(
       Number((await pool.query(`SELECT count(*) AS n FROM kasbah_cache_${CHAIN}.calls`)).rows[0].n),

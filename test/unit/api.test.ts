@@ -178,7 +178,6 @@ test.skipIf(url === undefined).each([
 });
 
 test.skipIf(url === undefined)("SQL: settings made by one query don't reach the next", async () => {
-  // Every pooled connection gets the attempt.
   for (let i = 0; i < 10; i++)
     expect(
       (await post("/sql", { sql: "select set_config('statement_timeout', '0', false)" })).status,
@@ -385,7 +384,6 @@ test.skipIf(url === undefined)(
       data: {
         positions: {
           items: [
-            // Swaps as the live-query tests above left them.
             { owner: "0xa", liquidity: "5", poolInfo: { id: "p01", swaps: 100 } },
             { owner: "0xa", liquidity: "6", poolInfo: { id: "p02", swaps: 7 } },
             { owner: "0xb", liquidity: "7", poolInfo: { id: "p01", swaps: 100 } },

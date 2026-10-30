@@ -34,7 +34,6 @@ export async function run(
       ? status.subscribe((n) => console.log(`[kasbah] ${n.text}`))
       : undefined;
   const signal = options.signal ?? new AbortController().signal;
-  /** Opened resources, closed in reverse whatever happens. */
   const closers: (() => unknown)[] = [];
   let failure: { error: unknown } | undefined;
   try {

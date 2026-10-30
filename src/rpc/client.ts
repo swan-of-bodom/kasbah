@@ -92,35 +92,25 @@ type Response = {
   error?: { code: number; message: string; data?: unknown };
 };
 
-/** Errors worth retrying: transport failures, timeouts, throttling, node-side internal errors. */
 function retryable(status: number | undefined, code?: number): boolean {
   if (status !== undefined && (status === 429 || status >= 500)) return true;
   return code === -32603 || code === -32005 || code === 429;
 }
 
-/**
- * One endpoint's pace in calls per second, after Ponder's limiter. The rate doubles until the first throttle, which
- * halves it; after that it grows 5% per 5 s worth of successes while sends are waiting on it, and drops 5% on each
- * throttle or timeout, which also pauses sending (100 ms, then ×1.5 per throttle in a row, up to 5 s).
- */
 class Endpoint {
   readonly url: string;
   readonly host: string;
   readonly maxRate: number;
   rate: number;
   slowStart = true;
-  /** Calls answered since the rate last changed, and whether any send waited on it meanwhile. */
   succeeded = 0;
   bound = false;
-  /** Calls that may go out now: refills at the rate, up to a second's worth. */
   tokens: number;
   refilled = Date.now();
-  /** Sends take tokens one at a time, in order. */
   gate: Promise<void> = Promise.resolve();
   pausedUntil = 0;
   pauseMs = INITIAL_PAUSE_MS;
   active = 0;
-  /** Calls picked for this endpoint and not yet paced: the tokens they will take. */
   claimed = 0;
   latencyMs = 0;
   calls = 0;
@@ -135,7 +125,6 @@ class Endpoint {
     this.tokens = this.rate;
   }
 
-  /** Milliseconds until `n` calls may go out here, at the rate as it is now. */
   waitMs(n: number, now: number): number {
     if (now < this.pausedUntil) return this.pausedUntil - now;
     const tokens =
@@ -144,7 +133,6 @@ class Endpoint {
     return tokens >= need ? 0 : ((need - tokens) * 1000) / this.rate;
   }
 
-  /** Waits for `n` calls' worth of tokens, at the rate as it is while waiting. */
   pace(n: number): Promise<void> {
     const turn = this.gate.then(async () => {
       for (;;) {
@@ -209,7 +197,6 @@ const hostOf = (url: string) => {
   }
 };
 
-/** A `getEvents` call's continuation token, if it has one. */
 const tokenOf = (c: Call): string | undefined =>
   c.method === "starknet_getEvents"
     ? (c.params as { filter?: { continuation_token?: string } })?.filter?.continuation_token
@@ -297,10 +284,6 @@ export class RpcClient {
     return parts.flat() as T;
   }
 
-  /**
-   * The endpoint for `n` calls: the one that can send soonest, then the fastest (one never tried counts as fastest,
-   * so it gets measured), then the least busy. `avoid` is the one a retry just failed on.
-   */
   #pick(n: number, avoid: Endpoint | undefined): Endpoint {
     const all = this.#endpoints;
     if (all.length === 1) return all[0]!;
@@ -381,7 +364,6 @@ export class RpcClient {
       }
       avoid = endpoint;
       const code = failure instanceof RpcError ? failure.code : undefined;
-      // Throttling only slows us down: it never uses up attempts, other failures do.
       const throttled = status === 429 || code === 429 || code === -32005;
       const timeout = (failure as Error).name === "TimeoutError";
       if (throttled) {
@@ -394,7 +376,6 @@ export class RpcClient {
       }
       if (throttled || timeout) endpoint.slowDown(timeout);
       this.stats.retries++;
-      // A throttle waits out the pause and never uses up attempts; other failures back off and do.
       if (throttled) attempt--;
       else if (attempt >= this.#maxAttempts) throw failure;
       else
@@ -404,7 +385,6 @@ export class RpcClient {
     }
   }
 
-  /** One HTTP request: per call its result or its `RpcError`. Throws for transport and HTTP errors. */
   async #send(
     endpoint: Endpoint,
     calls: Call[],

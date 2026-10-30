@@ -5,7 +5,6 @@ export default defineConfig({
   titleTemplate: "%s – kasbah",
   description: "A minimal, fast Starknet indexer in TypeScript.",
   twoslash: false,
-  // Plain HTML files: any static host serves it, no server needed.
   renderStrategy: "full-static",
   // GitHub Pages serves the site under /kasbah/; locally and elsewhere it's at the root.
   basePath: process.env.DOCS_BASE_PATH ?? "/",

@@ -260,7 +260,6 @@ test("readContracts without allowFailure: plain results, and a failure rejects",
   ).toBe("failure");
 });
 
-// Compile-time only: arguments are checked against the ABI.
 async function _typed(client: CallClient) {
   await client.readContract({
     abi: ekubo,

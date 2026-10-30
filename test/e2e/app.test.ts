@@ -278,14 +278,12 @@ test.skipIf(url === undefined)(
   "backfill, live, reorgs, a class upgrade and a restart end on the canonical state",
   async () => {
     const logs: string[] = [];
-    /** A status whose notices' lines go to `logs`. */
     const watched = () => {
       const status = new Status();
       status.subscribe((n) => logs.push(n.text));
       return status;
     };
 
-    // First run: backfill to the window, follow, grow past the upgrade with reorgs, then stop.
     let stop = new AbortController();
     let run = app().run({ reset: true, signal: stop.signal, status: watched() });
     await until(async () => (await checkpoint()) === node.blocks.length - 1);
@@ -293,7 +291,6 @@ test.skipIf(url === undefined)(
     for (let i = 0; i < 150; i++) {
       node.add();
       if (i % 10 === 0) await new Promise((r) => setTimeout(r, 15));
-      // Reorgs of blocks already indexed, the last one of the head block alone.
       if (i % 40 === 39) {
         await caughtUp();
         node.reorg(1 + (i % 7));
@@ -304,8 +301,6 @@ test.skipIf(url === undefined)(
     stop.abort();
     await run;
 
-    // Down for a while: the chain moves on and reorgs 4 blocks below the last indexed one. The log table lost its
-    // key, as when a backfill stops before the end: the restart finds out and builds it again.
     const admin = new pg.Pool({ connectionString: url, max: 1 });
     await admin.query(`ALTER TABLE ${schema}.log DROP CONSTRAINT log_pkey`);
     await admin.end();
@@ -338,7 +333,6 @@ test.skipIf(url === undefined)(
     expect(logged).toEqual({ n: events, ids: events });
     expect(keys).toEqual(expect.arrayContaining([`${schema}.log`, `${schema}.totals`]));
     expect(indexes).toEqual(["log_block_index", "log_pkey"]);
-    // Both tables keyed after the first backfill, then only the log table, whose key was dropped.
     expect(logs.filter((l) => / primary keys? built/.test(l)).map((l) => l.split(" ")[0])).toEqual([
       "2",
       "1",
@@ -370,7 +364,6 @@ test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", 
     expect(progress).toHaveLength(1);
     expect(progress[0]).toMatch(/^block 150\/150 \(100\.0%\)/);
     expect([status.phase, status.checkpoint]).toEqual(["done", 150]);
-    // Stored too: `serve` over the finished run answers /ready.
     const meta = await listener.query(`SELECT value FROM ${s}._kasbah_meta WHERE key = 'phase'`);
     expect(meta.rows[0].value).toBe("done");
   } finally {
@@ -387,7 +380,6 @@ test.skipIf(url === undefined)(
     const s = "kasbah_test_app_faults";
     const proxy = await faultyProxy(rpcUrl, { share: 0.2 });
     const status = new Status();
-    // Through the edge of the reorg window: the chain is past the upgrade once the first test has run.
     const to = node.blocks.length - 1 - 16;
     try {
       await app(s, proxy.url).run({ reset: true, to, status });

@@ -5,7 +5,6 @@ const MASK_250 = (1n << 250n) - 1n;
 const encoder = new TextEncoder();
 
 /** `sn_keccak(name)`: keccak256 truncated to 250 bits, as a minimal lowercase hex felt. */
-/** As the node writes it (no leading zeros): what event keys and `starknet_call` are matched against. */
 export function rawSelector(name: string): string {
   const hash = keccak_256(encoder.encode(name));
   let value = 0n;

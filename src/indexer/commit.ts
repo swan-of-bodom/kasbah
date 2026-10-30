@@ -60,9 +60,7 @@ type Writers = {
   sources: Sources;
   status: Status;
   schema: string;
-  /** Checked in every commit: nothing is written once another indexer took the schema over. */
   lock: SchemaLock;
-  /** The newest final block: journal and hashes below it are dropped. */
   final: () => number;
   start: number;
 };

@@ -17,7 +17,6 @@ const hexBytes = (felt: string): Buffer => {
   if (h.length % 2 === 1) h = `0${h}`;
   return Buffer.from(h, "hex");
 };
-/** Minimal big-endian bytes, as hex, to a felt: only the first nibble can be a zero to drop. */
 const hexFelt = (h: string): string =>
   h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
 
@@ -60,7 +59,6 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE INDEX IF NOT EXISTS calls_seq ON ${s}.calls (seq)`,
   `CREATE TABLE IF NOT EXISTS ${s}.transactions (hash bytea PRIMARY KEY, block integer NOT NULL, transaction jsonb, receipt jsonb)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
-  // The whole header; rows cached before it have none and are fetched again.
   `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
 ];
 
@@ -74,11 +72,9 @@ const bytea = (b: Buffer) => `\\\\x${b.toString("hex")}`;
 export class EventCache {
   readonly #pool: pg.Pool;
   readonly #schema: string;
-  /** Events fetched from RPC since the last `persist`, and the first block they cover. */
   #pending: EmittedEvent[] = [];
   #pendingFrom: number | undefined;
   #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
-  /** As JSON text: far smaller than the parsed objects while they wait for the commit. */
   #transactions: {
     hash: Buffer;
     block: number;
@@ -95,7 +91,6 @@ export class EventCache {
   stats = { cachedEvents: 0, fetchedEvents: 0 };
   #pendingBytes = 0;
   readonly #maxCalls: number;
-  /** Rows in `calls`, counted at open and kept up to date by this process (other apps add to it too). */
   #callRows = 0;
 
   private constructor(pool: pg.Pool, schema: string, maxCalls: number) {
@@ -152,7 +147,6 @@ export class EventCache {
     for (const r of rows) {
       if (chainId !== undefined && r.schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
       const s = quote(r.schema);
-      // A cache made by an older version may lack a table.
       const n = async (t: string) => {
         const exists =
           (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.${t}`])).rows[0].r !== null;
@@ -224,7 +218,6 @@ export class EventCache {
   ): AsyncGenerator<Batch> {
     const a = addresses.map(hexBytes);
     const s = selectors.map(hexBytes);
-    // Hex text straight from Postgres: no Buffer round trip.
     type Row = {
       block: number;
       tx: number;
@@ -244,12 +237,10 @@ export class EventCache {
           [lo, hi, a, s, n],
         )
       ).rows;
-    /** The events from `lo` up to a block boundary, and the last complete block. */
     const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
       const rows = await query(lo, to, limit);
       if (rows.length < limit) return { rows, through: to };
       const last = rows.at(-1)!.block;
-      // One block with more than `limit` events: take it whole.
       if (rows[0]!.block === last) return { rows: await query(last, last, null), through: last };
       return { rows: rows.filter((r) => r.block < last), through: last - 1 };
     };

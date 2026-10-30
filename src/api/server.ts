@@ -184,7 +184,6 @@ export class Api {
         res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
         return res.end(this.#metrics?.() ?? (await this.#storedMetrics()));
       }
-      // For a load balancer or orchestrator: up (and its database reachable), and caught up with the head.
       if (path === "/health" && req.method === "GET") {
         await this.#reader.sql("SELECT 1");
         return send(res, 200, { ok: true });
@@ -254,7 +253,6 @@ export class Api {
     }
   }
 
-  /** Without the indexer in this process: what its last commit stored. */
   async #storedMetrics(): Promise<string> {
     const s = await this.#status();
     return prometheus([
@@ -345,10 +343,6 @@ export class Api {
     return errors === undefined ? { data: result.data } : { data: result.data, errors };
   }
 
-  /**
-   * `GET /live`: `event: checkpoint` after each commit; with `?sql=…&params=[…]` or `?query=…&variables={…}`, the
-   * query runs at once and again after each commit, and `event: result` is sent when its result changed.
-   */
   async #stream(req: IncomingMessage, res: ServerResponse) {
     if (this.#live.size >= this.#maxLive) throw new QueryError("too many live queries", 503);
     const q = new URL(req.url ?? "/", "http://x").searchParams;

@@ -96,12 +96,10 @@ function sparkline(values: readonly number[], width: number): string {
 
 export type RenderOptions = { width?: number; color?: boolean; now?: number };
 
-/** What each section writes through: lines inside the box, `inner` columns wide. */
 type Box = {
   p: Paint;
   inner: number;
   line: (s?: string) => void;
-  /** `left` and `right` on one line, `right` flush right. */
   split: (left: string, right: string) => void;
   label: (name: string, text: string) => void;
 };
@@ -237,7 +235,6 @@ function live({ p, split, label }: Box, status: Status) {
         )
       : "",
   );
-  // Where the delay comes from: the node announcing the head after its timestamp, then us handling it.
   const head = status.head?.();
   if (head !== undefined && head.number === l.block && l.at > 0) {
     const node = head.at / 1000 - head.timestamp;
@@ -249,7 +246,6 @@ function live({ p, split, label }: Box, status: Status) {
   label("reorgs", l.reorgs === 0 ? p.dim("none") : p.yellow(thousands(l.reorgs)));
 }
 
-/** During backfill, where the time went: fetching events, headers and transactions, handlers, commits. */
 function timeShares({ p, line, label }: Box, status: Status) {
   const t = status.time;
   const total = t.fetch + t.extras + t.handlers + t.commit;
@@ -287,7 +283,6 @@ function timeShares({ p, line, label }: Box, status: Status) {
   label("", p.dim(`${bound}${commit}`));
 }
 
-/** The six handlers that took the most time. */
 function handlerTable({ p, line }: Box, status: Status) {
   const handlers = [...status.handlers].sort((a, b) => b[1].ms - a[1].ms);
   if (handlers.length === 0) return;
@@ -372,7 +367,6 @@ function rpc({ p, label }: Box, status: Status, recent: Recent) {
   }
 }
 
-/** Events served from the cache, and contract reads. */
 function reads({ label }: Box, status: Status) {
   if (status.cache !== undefined && status.cache.cachedEvents + status.cache.fetchedEvents > 0) {
     label(
@@ -388,7 +382,6 @@ function reads({ label }: Box, status: Status) {
   }
 }
 
-/** `--debug`: the fetcher's memory and windows, what the indexer waits on, and the event loop. */
 function debug({ p, line, label }: Box, status: Status, recent: Recent) {
   line();
   line(p.dim("DEBUG"));
@@ -413,7 +406,6 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
   }
 }
 
-/** The border around `body`, with the title and the phase's badge on top. */
 function frame(p: Paint, inner: number, status: Status, body: string[]): string[] {
   const title = ` ${p.bold("kasbah")}${status.schema === "" ? "" : ` ${p.dim("·")} ${status.schema}`} `;
   const badge = ` ${p.badge(status.phase)} `;
@@ -436,7 +428,6 @@ export class Screen {
   readonly #color: boolean;
   #drawn = 0;
   #timer: NodeJS.Timeout | undefined;
-  /** Lines printed since the last draw: drawn above the box together, at most once per tick. */
   #above = "";
   #scheduled = false;
   #stopped = false;
@@ -461,7 +452,6 @@ export class Screen {
         n.kind !== "progress" &&
         this.#print(`${this.#color ? "\x1b[2m[kasbah]\x1b[22m" : "[kasbah]"} ${n.text}`),
     );
-    // Handlers' own console output goes above the screen too, instead of through it.
     for (const k of ["log", "info", "warn", "error"] as const)
       console[k] = (...args: unknown[]) => this.#print(format(...args));
     this.#timer = setInterval(() => this.#draw(), 250);
@@ -488,7 +478,6 @@ export class Screen {
     this.#scheduled = false;
     const above = this.#above;
     this.#above = "";
-    // After stop the last box stays; anything printed later goes under it.
     if (this.#stopped) return void (above !== "" && this.#write(above));
     const width = Math.min(110, Math.max(44, (this.#out.columns ?? 100) - 1));
     const lines = render(this.#status, { width, color: this.#color });

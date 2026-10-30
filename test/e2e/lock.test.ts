@@ -90,7 +90,6 @@ test.skipIf(url === undefined)(
       `schema "${schema}" is in use by another indexer: stop it, or use another --schema`,
     );
     expect(second.notices.some((n) => n.kind === "locked")).toBe(true);
-    // The heartbeat kept the first one's lock alive through the second one's wait.
     expect(first.status.phase).toBe("live");
     first.stop();
     await first.done;

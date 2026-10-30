@@ -64,7 +64,6 @@ test("the packed package installs and works outside the repo: library, types and
   );
   expect(imported.trim()).toBe("function function function");
   expect(readdirSync(join(dir, "node_modules/kasbah/dist"))).toContain("index.d.ts");
-  // Source maps and declaration maps point at the shipped sources: stack traces and go-to-definition land in .ts.
   const map = JSON.parse(
     readFileSync(join(dir, "node_modules/kasbah/dist/indexer/run.js.map"), "utf8"),
   ) as { sources: string[] };
@@ -152,7 +151,6 @@ export default app;
       { cwd: dir, env, encoding: "utf8" },
     );
     expect(stdout).toMatch(/backfill done: 16 handled/);
-    // Node's type-stripping warning is expected and hidden.
     expect(stderr).toBe("");
     const p = new pg.Pool({ connectionString: url, max: 1 });
     const total = (await p.query(`SELECT total::text FROM kasbah_test_pkg.totals`)).rows[0].total;
@@ -168,7 +166,6 @@ test.skipIf(url === undefined)(
     const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"))!;
     const bin = join(dir, "node_modules/.bin/kasbah");
     const run = promisify(execFile);
-    // Without a terminal every answer is a flag; the deployment block is found on the chain.
     const { stdout } = await run(
       bin,
       [
@@ -210,7 +207,6 @@ test.skipIf(url === undefined)(
     pnpm(["typecheck"]);
     // Only the project's .env: variables already set would win over it.
     const { DATABASE_URL: _, KASBAH_RPC_URL: __, ...env } = process.env;
-    // No app file: the project's kasbah.config.ts, src/index.ts and src/api/index.ts.
     const started = await run(
       join(project, "node_modules/.bin/kasbah"),
       ["start", "--schema", "kasbah_test_init", "--to", "15", "--reset"],

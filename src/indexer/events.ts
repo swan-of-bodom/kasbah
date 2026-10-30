@@ -119,7 +119,6 @@ export async function* merge(streams: AsyncGenerator<Batch>[]): AsyncGenerator<B
     for (;;) {
       const open = state.filter((x) => !x.done);
       if (open.length === 0) break;
-      // The stream furthest behind is the one holding the merged `through` back.
       const s = open.reduce((a, b) => (b.through < a.through ? b : a));
       const r = await streams[state.indexOf(s)]!.next();
       if (r.done) s.done = true;

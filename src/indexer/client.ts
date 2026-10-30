@@ -176,7 +176,6 @@ export class CallClient implements Client {
     return r!.map(felt);
   };
 
-  /** Where a call goes: the block it reads, as the node is told it, and its cache key when the block is final. */
   #target(
     address: string,
     entrypoint: string,
@@ -197,10 +196,6 @@ export class CallClient implements Client {
     return { contract, entrypoint, calldata, block, blockId, key, label };
   }
 
-  /**
-   * Each call's result felts, in order: from memory or the cache when final, the rest in one batch. A call the node
-   * refuses is its `Error` in place; a request that keeps failing rejects.
-   */
   async #calls(targets: Target[]): Promise<(string[] | Error)[]> {
     const out: (string[] | Error | undefined)[] = await Promise.all(
       targets.map((t) => this.#cached(t)),

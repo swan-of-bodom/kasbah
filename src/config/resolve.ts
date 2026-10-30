@@ -7,7 +7,6 @@ import { endpointsOf } from "./rpc.ts";
 export const DEFAULTS = {
   /** Postgres schema for the app's tables and progress, from code; the CLI defaults to the project's name. */
   schema: "kasbah",
-  /** The API's port. */
   port: 42069,
   /** Parallel `getEvents` windows, and the RPC client's cap on requests in flight. */
   concurrency: 32,

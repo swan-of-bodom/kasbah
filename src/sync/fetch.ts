@@ -52,9 +52,7 @@ type Window = {
   from: number;
   /** `to_block` of the filter, fixed for the window's lifetime so its continuation token stays valid. */
   to: number;
-  /** Exclusive end; lowered when the window hands the rest of its range to a new window. */
   stop: number;
-  /** Blocks before `at` are fully fetched. */
   at: number;
   token: string | undefined;
   events: EmittedEvent[];
@@ -79,20 +77,17 @@ export function eventStream(
   return new EventFetcher(o, stats).stream();
 }
 
-/** One `eventStream`: its windows, the workers paginating them, and the memory they hold. Workers start at once. */
 class EventFetcher {
   readonly #o: EventStreamOptions;
   readonly #stats: FetchStats;
   readonly #minSplit: number;
   readonly #windowEvents: number;
   readonly #maxBuffered: number;
-  /** What a window other than the front may hold before it pauses, so one dense window can't take the budget. */
   readonly #perWindow: number;
   readonly #windows: Window[];
   readonly #workers: Promise<void>[];
   #buffered = 0;
   #waiting = 0;
-  // Recent events and blocks fetched, decayed per page: the density that places cuts.
   #recentEvents = 0;
   #recentBlocks = 0;
   #failure: { error: unknown } | undefined;
@@ -126,7 +121,6 @@ class EventFetcher {
     o.gauges?.(() => this.#gauges());
   }
 
-  /** The batches, front window first. Ending it early (`return`, a throw) stops the workers. */
   async *stream(): AsyncGenerator<Batch> {
     const windows = this.#windows;
     try {
@@ -171,12 +165,6 @@ class EventFetcher {
     return new Promise<void>((r) => this.#wakers.push(r));
   }
 
-  /**
-   * A window other than the front pauses at `perWindow` events. Under `maxBuffered` events held, any window may
-   * fetch; under twice that, only windows that hold fewer together with the windows before them, so the front never
-   * waits for the back. Past that, only the front, which the consumer drains. Memory stays under three times the
-   * budget.
-   */
   #mayFetch(w: Window): boolean {
     const front = this.#windows[0];
     if (w !== front && w.events.length >= this.#perWindow) return false;
@@ -200,14 +188,12 @@ class EventFetcher {
     return undefined;
   }
 
-  /** Blocks that hold about `windowEvents` at the density seen lately. */
   #span(): number {
     return this.#recentBlocks === 0
       ? Number.POSITIVE_INFINITY
       : this.#windowEvents / (Math.max(this.#recentEvents, 0.5) / this.#recentBlocks);
   }
 
-  /** Cuts `w` about `windowEvents` past where it is, and hands the rest of its range to a new idle window. */
   #split(w: Window): Window | undefined {
     const left = w.stop - w.at;
     if (left < 2 * this.#minSplit) return undefined;
@@ -228,7 +214,6 @@ class EventFetcher {
     return rest;
   }
 
-  /** For waiting workers: walks from the front, cutting every window much longer than `span()` into one that size. */
   #feed() {
     const windows = this.#windows;
     let idle = windows.filter((x) => x.state === "idle").length;
@@ -239,7 +224,6 @@ class EventFetcher {
     }
   }
 
-  /** Paginates `w` until it's done, the stream stops, or the memory budget pauses it. */
   async #paginate(w: Window) {
     const o = this.#o;
     const stats = this.#stats;

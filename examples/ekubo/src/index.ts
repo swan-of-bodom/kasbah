@@ -27,7 +27,6 @@ async function count(db: Db, field: "pools" | "swaps" | "positionUpdates") {
 }
 
 type Swap = { volume0: bigint; volume1: bigint; fees0: bigint; fees1: bigint };
-/** Adds to the pool's candles at `timestamp`: a swap moves the price, anything else only the balances. */
 async function candle(db: Db, pool: typeof pools.$inferSelect, timestamp: number, swap?: Swap) {
   const price = priceOf(pool);
   for (const interval of INTERVALS) {

@@ -155,8 +155,6 @@ export type MembersOf<TAbi extends Abi, M extends readonly AbiMember[]> = Simpli
     : K["name"]]: K["type"] extends `${infer I}*` ? TypeOf<TAbi, I>[] : TypeOf<TAbi, K["type"]>;
 }>;
 
-// Event leaves: [name, members] pairs, mirroring `abiEvents`.
-
 type EventItem<TAbi extends Abi, N extends string> = Extract<
   TAbi[number],
   { type: "event"; name: N }
@@ -238,8 +236,6 @@ export type DecodedEvent<TAbi extends Abi> =
       ? { name: N; args: EventArgs<TAbi, N> }
       : never
     : never;
-
-// Functions, mirroring functions.ts.
 
 type FunctionItem<TAbi extends Abi> =
   | Extract<TAbi[number], { type: "function" }>

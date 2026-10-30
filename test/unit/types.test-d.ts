@@ -70,7 +70,6 @@ assert<
 >();
 assert<Equal<EventArgs<typeof cairo0Pair, "Sync">, { reserve0: bigint; reserve1: bigint }>>();
 
-// Type strings, against the same rules codec.ts implements.
 type None = readonly [];
 assert<Equal<TypeOf<None, "core::option::Option::<core::integer::u256>">, bigint | null>>();
 assert<Equal<TypeOf<None, "@core::array::Array::<core::felt252>">, bigint[]>>();
@@ -94,7 +93,6 @@ if (decoded?.name === "Swapped") {
   void token;
 }
 
-// Functions.
 import type { FunctionArgs, FunctionName, FunctionResult } from "../../src/index.ts";
 
 assert<Equal<"get_pool_liquidity" extends FunctionName<typeof ekubo> ? true : false, true>>();
@@ -108,7 +106,6 @@ assert<
 >();
 assert<Equal<FunctionArgs<typeof cairo0Pair, "getReserves">, {}>>();
 
-// include.block adds the whole header, and its hash is then always known.
 const config = {
   rpc: "",
   database: "",
@@ -131,7 +128,6 @@ kasbah(config).on("Timed:Swapped", ({ event }) => void event.block.timestamp);
 // @ts-expect-error: no timestamp without include.block
 kasbah(config).on("Plain:Swapped", ({ event }) => void event.block.timestamp);
 
-// upgradeEvents are events of the contract's ABI.
 kasbah({
   ...config,
   contracts: {
@@ -144,7 +140,6 @@ kasbah({
   contracts: { Core: { abi: ekubo, address: "0x1", startBlock: 0, upgradeEvents: ["Upgraded"] } },
 });
 
-// filter names events of the ABI and their arguments, with the arguments' types (numbers for integers too).
 kasbah({
   ...config,
   contracts: {
@@ -171,12 +166,10 @@ kasbah({
   },
 });
 
-// setup: a context, no event.
 kasbah(config).on("setup", async ({ context }) => void context.db);
 // @ts-expect-error: setup has no event
 kasbah(config).on("setup", ({ event }) => void event);
 
-// Routes: `db` knows the app's tables, relational queries included.
 const swapsTable = pgTable("swaps", { id: text().primaryKey(), amount: integer().notNull() });
 const routed = kasbah({ ...config, tables: { swapsTable }, api: { port: 0 } });
 routed.get("/swaps/:id", async ({ db, params }) => {
@@ -187,7 +180,6 @@ routed.get("/swaps/:id", async ({ db, params }) => {
   return amount;
 });
 
-// include.transaction: the spec's union, narrowed by type and version.
 const withTx = kasbah({
   rpc: "",
   database: "",

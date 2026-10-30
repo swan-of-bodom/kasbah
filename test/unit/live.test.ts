@@ -116,7 +116,6 @@ test.each([1, 2, 3, 4, 5])(
       else chain.add();
       await new Promise((r) => setTimeout(r, 3));
     }
-    // A reorg of the head block itself, at the same height.
     chain.reorg(1);
     const deadline = Date.now() + 5_000;
     while (applied.at(-1)!.hash !== chain.blocks.at(-1)!.hash && Date.now() < deadline)

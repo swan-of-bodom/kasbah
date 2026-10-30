@@ -258,7 +258,6 @@ export class Status {
   note(note: Note): void {
     const notice: Notice = { ...note, at: Date.now(), text: describe(note) };
     for (const l of this.#listeners) {
-      // A broken printer must not stop the indexing, nor leave a commit half applied.
       try {
         l(notice);
       } catch (err) {
@@ -362,7 +361,6 @@ export class Status {
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 const seconds = (s: number) => `${s.toFixed(1)}s`;
 
-/** Every note's line. */
 function describe(n: Note): string {
   switch (n.kind) {
     case "rebuild":

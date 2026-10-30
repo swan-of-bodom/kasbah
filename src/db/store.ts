@@ -11,18 +11,14 @@ import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } f
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
 
-/** How a buffered row reaches the database at flush. */
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
 type State = {
   info: TableInfo;
   cache: Map<string, Row | null>;
-  /** Every row is in `cache`: a miss means the row doesn't exist. True on a fresh run until the cache is evicted. */
   complete: boolean;
   pending: Map<string, Pending>;
-  /** In live mode: each row touched since the last flush, as it was before (null: it didn't exist). */
   before: Map<string, Row | null>;
-  /** The table has its primary key (see `StoreOptions.unkeyed`). */
   keyed: boolean;
 };
 
@@ -66,7 +62,6 @@ export type InsertQuery<T extends PgTable> = PromiseLike<Selected<T>> & {
   ): Promise<Selected<T>>;
 };
 
-/** A row's values for `columns`, as the driver would send them, keyed by column name. */
 function driverValues(row: Row, columns: TableInfo["columns"]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const { key, column } of columns) {
@@ -130,7 +125,6 @@ export class Store {
     const k = s.info.keyOf(row);
     this.#remember(s, k, before);
     const prior = s.pending.get(k)?.op;
-    // A row inserted this batch never reached the database; one deleted or upserted this batch may be there.
     const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
     s.pending.set(k, { op, row });
     s.cache.delete(k);
@@ -143,8 +137,6 @@ export class Store {
       const k = s.info.keyOf(values);
       const row = { ...values };
       const plain = async () => {
-        // Without every row in memory, checking would cost a query per insert (append-only tables, the common
-        // case): a duplicate is then caught by the primary key when the batch is written.
         const known = s.cache.get(k);
         if (known === undefined && !s.complete && !this.journal) {
           this.#write(s, row, null);
@@ -264,7 +256,6 @@ export class Store {
       }
       s.pending.clear();
       if (s.cache.size > this.#maxCachedRows) {
-        // Oldest written first (a write re-inserts its key at the end): the rows handlers keep touching stay.
         let drop = s.cache.size - Math.floor(this.#maxCachedRows * 0.8);
         for (const key of s.cache.keys()) {
           if (drop-- <= 0) break;

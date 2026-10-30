@@ -134,7 +134,6 @@ test.skipIf(url === undefined)(
     const run = cli("dev", appFile, "--reset", "--no-ui");
     try {
       await until(async () => /backfill done: (\d+) handled/.test(run.out.join("")));
-      // From scratch: every block through the final one again, not just the few since the last run.
       expect(Number(/backfill done: (\d+) handled/.exec(run.out.join(""))![1])).toBeGreaterThan(30);
     } finally {
       run.p.kill("SIGINT");
@@ -244,7 +243,6 @@ test.skipIf(!hasRuntime)(
         }).stdout.trim(),
       ).toBe("false");
 
-      // The second run starts the same container and resumes: nothing re-indexed.
       const second = start();
       await until(async () => second.out.join("").includes("following the head"), 90_000);
       expect(second.out.join("")).toContain(`starting ${name}`);
@@ -252,7 +250,6 @@ test.skipIf(!hasRuntime)(
       second.p.kill("SIGINT");
       expect(await second.exited).toBe(0);
 
-      // clean deletes the container and its data.
       const { DATABASE_URL: _, ...env } = process.env;
       const cleaned = spawnSync(
         process.execPath,
