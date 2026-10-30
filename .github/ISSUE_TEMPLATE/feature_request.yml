@@ -1,0 +1,22 @@
+name: Feature request
+description: Something kasbah should do, or do better.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the idea. Please check the [open issues](https://github.com/swan-of-bodom/kasbah/issues) first, in case it's already there.
+
+  - type: textarea
+    attributes:
+      label: What you're trying to do
+      description: The problem, with a real example (the contract, the data you need, how you'd query it).
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: How it could work
+      description: Optional. A config or API sketch is welcome.
+    validations:
+      required: false

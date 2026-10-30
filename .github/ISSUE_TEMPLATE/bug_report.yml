@@ -1,0 +1,53 @@
+name: Bug report
+description: Something doesn't work as the docs say it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting it. Please check the [open issues](https://github.com/swan-of-bodom/kasbah/issues) first, in case someone already did.
+
+  - type: input
+    attributes:
+      label: kasbah version
+      description: From your `package.json` or `pnpm list kasbah`.
+      placeholder: 0.1.1
+    validations:
+      required: true
+
+  - type: input
+    attributes:
+      label: Node.js version and RPC provider
+      placeholder: Node 24.2, Alchemy
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: What happened
+      description: What you saw, with the error message if there was one.
+    validations:
+      required: true
+
+  - type: textarea
+    attributes:
+      label: What you expected
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: How to reproduce it
+      description: |
+        The smallest config, schema and handler that show it, plus the contract address and block range if it's about a chain.
+      render: ts
+    validations:
+      required: false
+
+  - type: textarea
+    attributes:
+      label: Logs and anything else
+      description: |
+        Run with `--no-ui` for plain logs, or `--debug` for more. Remove API keys from RPC URLs before you paste.
+    validations:
+      required: false
