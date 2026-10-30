@@ -193,11 +193,15 @@ function fakeNode() {
 const node = fakeNode();
 let rpcUrl: string;
 
+async function listen(server: Server): Promise<string> {
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const a = server.address();
+  return `http://127.0.0.1:${typeof a === "object" && a !== null ? a.port : 0}`;
+}
+
 beforeAll(async () => {
   for (let i = 0; i < 200; i++) node.add();
-  await new Promise<void>((r) => node.server.listen(0, "127.0.0.1", r));
-  const a = node.server.address();
-  rpcUrl = `http://127.0.0.1:${typeof a === "object" && a !== null ? a.port : 0}`;
+  rpcUrl = await listen(node.server);
 });
 
 afterAll(async () => {
@@ -240,10 +244,10 @@ function app(s = schema, rpc = rpcUrl) {
 }
 
 /** The app's totals over the chain as it is now, through block `to`. */
-function expectedTotals(to: number) {
+function expectedTotals(to: number, chain = node) {
   let total = 0n;
   let events = 0;
-  for (const b of node.blocks.slice(0, to + 1)) {
+  for (const b of chain.blocks.slice(0, to + 1)) {
     for (const e of b.events) {
       if (e.keys[0] === selector("Upgraded")) continue;
       if (e.keys[0] === selector("Counted")) total += BigInt(e.data[0]!);
@@ -378,20 +382,23 @@ test.skipIf(url === undefined)(
   "through a flaky endpoint (throttles, 503s, dropped connections, cut-off and partial answers) the state is the chain's",
   async () => {
     const s = "kasbah_test_app_faults";
-    const proxy = await faultyProxy(rpcUrl, { share: 0.2 });
+    const chain = fakeNode();
+    for (let i = 0; i < 400; i++) chain.add();
+    const proxy = await faultyProxy(await listen(chain.server), { share: 0.2 });
     const status = new Status();
-    const to = node.blocks.length - 1 - 16;
+    const to = chain.blocks.length - 1 - 16;
     try {
       await app(s, proxy.url).run({ reset: true, to, status });
       const p = new pg.Pool({ connectionString: url, max: 1 });
       const { rows } = await p.query(`SELECT total::text, events FROM ${s}.totals`);
       await p.end();
-      expect(rows).toEqual([expectedTotals(to)]);
+      expect(rows).toEqual([expectedTotals(to, chain)]);
       expect([status.phase, status.checkpoint]).toEqual(["done", to]);
       for (const n of Object.values(proxy.injected)) expect(n).toBeGreaterThan(0);
       expect(status.rpc!.retries).toBeGreaterThan(0);
     } finally {
       proxy.close();
+      chain.server.close();
       const p = new pg.Pool({ connectionString: url, max: 1 });
       await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
       await p.end();
