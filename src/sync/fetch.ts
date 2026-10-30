@@ -27,6 +27,8 @@ const MIN_SPLIT = 64;
 const MIN_BUFFERED = 10_000;
 /** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
 const DENSITY_DECAY = 0.9;
+/** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
+const FRONT_ONLY_PAST = 2;
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
@@ -54,8 +56,7 @@ type Window = {
   from: number;
   /** `to_block` of the filter, fixed for the window's lifetime so its continuation token stays valid. */
   to: number;
-  /** Exclusive bounds; `end` drops when a split hands the rest of the range to a new window. */
-  end: number;
+  until: number;
   fetchedUntil: number;
   token: string | undefined;
   events: EmittedEvent[];
@@ -112,7 +113,7 @@ class EventFetcher {
       {
         from: o.from,
         to: o.to,
-        end: o.to + 1,
+        until: o.to + 1,
         fetchedUntil: o.from,
         token: undefined,
         events: [],
@@ -135,7 +136,7 @@ class EventFetcher {
         if (w.state === "done") {
           events = w.events;
           windows.shift();
-          through = w.end - 1;
+          through = w.until - 1;
         } else {
           // The last fetched block of a running window may be partial: hold its events back.
           let n = w.events.length;
@@ -168,16 +169,14 @@ class EventFetcher {
     return new Promise<void>((r) => this.#wakers.push(r));
   }
 
-  /** The memory cap, in DESIGN.md §3: it keeps what the stream holds under three times `maxBuffered`. */
   #mayFetch(w: Window): boolean {
     const front = w === this.#windows[0];
     if (!front && w.events.length >= this.#perWindow) return false;
     if (this.#buffered < this.#maxBuffered) return true;
-    if (!front && this.#buffered >= 2 * this.#maxBuffered) return false;
+    if (!front && this.#buffered >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
     return this.#heldThrough(w) < this.#maxBuffered;
   }
 
-  /** Events held by `w` and every window before it. */
   #heldThrough(w: Window): number {
     let n = 0;
     for (const x of this.#windows) {
@@ -204,21 +203,21 @@ class EventFetcher {
   }
 
   #split(w: Window): Window | undefined {
-    const left = w.end - w.fetchedUntil;
+    const left = w.until - w.fetchedUntil;
     if (left < 2 * this.#minSplit) return undefined;
     const cut =
       w.fetchedUntil + Math.round(Math.max(this.#minSplit, Math.min(left / 2, this.#span())));
     const rest: Window = {
       from: cut,
-      to: w.end - 1,
-      end: w.end,
+      to: w.until - 1,
+      until: w.until,
       fetchedUntil: cut,
       token: undefined,
       events: [],
       state: "idle",
     };
     this.#windows.splice(this.#windows.indexOf(w) + 1, 0, rest);
-    w.end = cut;
+    w.until = cut;
     this.#stats.windows++;
     this.#stats.splits++;
     return rest;
@@ -231,7 +230,7 @@ class EventFetcher {
       const w = windows[i]!;
       if (
         w.state !== "done" &&
-        w.end - w.fetchedUntil > 2 * this.#span() &&
+        w.until - w.fetchedUntil > 2 * this.#span() &&
         this.#split(w) !== undefined
       )
         idle++;
@@ -257,7 +256,7 @@ class EventFetcher {
       stats.pages++;
       let kept = 0;
       for (const e of page.events) {
-        if (e.block_number! >= w.end) break;
+        if (e.block_number! >= w.until) break;
         w.events.push(e);
         kept++;
       }
@@ -267,12 +266,12 @@ class EventFetcher {
       const token = page.continuation_token;
       const at =
         token === undefined
-          ? w.end
-          : Math.min(w.end, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
+          ? w.until
+          : Math.min(w.until, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
       this.#recentEvents = this.#recentEvents * DENSITY_DECAY + kept;
       this.#recentBlocks = this.#recentBlocks * DENSITY_DECAY + Math.max(0, at - w.fetchedUntil);
-      if (at >= w.end) {
-        w.fetchedUntil = w.end;
+      if (at >= w.until) {
+        w.fetchedUntil = w.until;
         w.state = "done";
         this.#notify();
         return;

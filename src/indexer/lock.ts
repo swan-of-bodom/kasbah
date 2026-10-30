@@ -18,8 +18,7 @@ type LockRow = { owner: string | null; heartbeat: number; dev: boolean | null };
 /** `dev`: `onBuildChange: "reset"`, what `kasbah dev` runs with; a changed build drops the schema. */
 type Claim = { dev: boolean; reset: boolean; buildId: string };
 
-/** What one claim attempt ends with: the schema is this indexer's, or another holds it until `until` (ms). */
-type Attempt = { claimed: true } | { claimed: false; until: number };
+type Attempt = { claimed: true } | { claimed: false; untilMs: number };
 
 const META = `CREATE TABLE IF NOT EXISTS _kasbah_meta (key text PRIMARY KEY, value jsonb NOT NULL)`;
 
@@ -55,9 +54,9 @@ export class SchemaLock {
       status.note({
         kind: "locked",
         schema,
-        seconds: Math.ceil((first.until - Date.now()) / 1000),
+        seconds: Math.ceil((first.untilMs - Date.now()) / 1000),
       });
-      await sleep(Math.max(0, first.until - Date.now()), signal);
+      await sleep(Math.max(0, first.untilMs - Date.now()), signal);
       if (!(await lock.#try(claim, status)).claimed)
         throw new ConfigError(
           `schema "${schema}" is in use by another indexer: stop it, or use another --schema (DATABASE_SCHEMA)`,
@@ -83,9 +82,9 @@ export class SchemaLock {
         )
       ).rows[0]?.value;
       // Gone: another process dropped the schema while this one waited for the row.
-      if (row === undefined) return { claimed: false, until: Date.now() };
+      if (row === undefined) return { claimed: false, untilMs: Date.now() };
       const expiry = row.heartbeat + LOCK.timeoutMs;
-      if (row.owner !== null && expiry > Date.now()) return { claimed: false, until: expiry };
+      if (row.owner !== null && expiry > Date.now()) return { claimed: false, untilMs: expiry };
       const build = (
         await tx.query<{ value: string }>(`SELECT value FROM _kasbah_meta WHERE key = 'build'`)
       ).rows[0]?.value;

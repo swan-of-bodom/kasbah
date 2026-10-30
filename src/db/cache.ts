@@ -17,8 +17,7 @@ const feltBytes = (felt: string): Buffer => {
   if (h.length % 2 === 1) h = `0${h}`;
   return Buffer.from(h, "hex");
 };
-/** Back from `feltBytes`' hex: its bytes are minimal, so the only leading zero is the one an odd length added. */
-const feltOfBytesHex = (h: string): string =>
+const feltFromMinimalBytes = (h: string): string =>
   h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
 
 /** Felts as one bytea: per felt, a length byte then its minimal big-endian bytes. */
@@ -40,7 +39,7 @@ export function unpackHex(h: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < h.length; ) {
     const n = Number.parseInt(h.slice(i, i + 2), 16) * 2;
-    out.push(feltOfBytesHex(h.slice(i + 2, i + 2 + n)));
+    out.push(feltFromMinimalBytes(h.slice(i + 2, i + 2 + n)));
     i += 2 + n;
   }
   return out;
@@ -252,12 +251,12 @@ export class EventCache {
       const { rows, through } = await next;
       if (through < to) next = page(through + 1);
       const events: EmittedEvent[] = rows.map((r) => ({
-        from_address: feltOfBytesHex(r.address),
+        from_address: feltFromMinimalBytes(r.address),
         keys: unpackHex(r.keys),
         data: unpackHex(r.data),
         block_number: r.block,
-        block_hash: feltOfBytesHex(r.block_hash),
-        transaction_hash: feltOfBytesHex(r.tx_hash),
+        block_hash: feltFromMinimalBytes(r.block_hash),
+        transaction_hash: feltFromMinimalBytes(r.tx_hash),
         transaction_index: r.tx,
         event_index: r.idx,
       }));
@@ -328,7 +327,7 @@ export class EventCache {
     );
     return new Map(
       rows.map((r) => [
-        feltOfBytesHex(r.hash),
+        feltFromMinimalBytes(r.hash),
         {
           ...(r.transaction === null ? {} : { transaction: r.transaction }),
           ...(r.receipt === null ? {} : { receipt: r.receipt }),
