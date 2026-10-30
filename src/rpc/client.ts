@@ -75,9 +75,19 @@ const MAX_ATTEMPTS = 8;
 /** First retry backoff; it doubles per attempt up to `MAX_BACKOFF_MS`, then gets ±50% jitter. */
 const BACKOFF_MS = 200;
 const MAX_BACKOFF_MS = 10_000;
-/** Pause of all requests after a throttle, growing 1.5× per throttle in a row up to `MAX_PAUSE_MS`. */
+/** Pause of all requests after a throttle, growing `PAUSE_GROWTH` per throttle in a row up to `MAX_PAUSE_MS`. */
 const INITIAL_PAUSE_MS = 100;
 const MAX_PAUSE_MS = 5_000;
+const PAUSE_GROWTH = 1.5;
+/** Rate growth per step before the first throttle (slow start), and after it, as in Ponder's limiter. */
+const SLOW_START_GROWTH = 2;
+const GROWTH = 1.05;
+/** Successes needed for a step, in seconds' worth at the current rate: before the first throttle, and after. */
+const SLOW_START_STEP_S = 1;
+const STEP_S = 5;
+/** Rate cut on the first throttle or timeout, which ends the slow start, and on each one after. */
+const SLOW_START_CUT = 0.5;
+const CUT = 0.95;
 /** Share of requests sent to a random ready endpoint instead of the fastest, so a slow one that recovers is noticed. */
 const EXPLORE = 0.05;
 /** Weight of the newest answer in an endpoint's mean latency. */
@@ -92,9 +102,18 @@ type Response = {
   error?: { code: number; message: string; data?: unknown };
 };
 
+/** JSON-RPC's internal error, which nodes also send for a failure on their side worth retrying. */
+const INTERNAL_ERROR = -32603;
+/** "Limit exceeded": how some providers throttle, instead of HTTP 429 (which others also send as a code). */
+const LIMIT_EXCEEDED = -32005;
+const TOO_MANY_REQUESTS = 429;
+
+const throttles = (status: number | undefined, code: number | undefined) =>
+  status === TOO_MANY_REQUESTS || code === TOO_MANY_REQUESTS || code === LIMIT_EXCEEDED;
+
 function retryable(status: number | undefined, code?: number): boolean {
-  if (status !== undefined && (status === 429 || status >= 500)) return true;
-  return code === -32603 || code === -32005 || code === 429;
+  if (throttles(status, code)) return true;
+  return (status !== undefined && status >= 500) || code === INTERNAL_ERROR;
 }
 
 class Endpoint {
@@ -104,7 +123,7 @@ class Endpoint {
   rate: number;
   slowStart = true;
   succeeded = 0;
-  bound = false;
+  waitedForRate = false;
   tokens: number;
   refilled = Date.now();
   gate: Promise<void> = Promise.resolve();
@@ -148,7 +167,7 @@ class Endpoint {
           this.tokens -= n;
           return;
         }
-        this.bound = true;
+        this.waitedForRate = true;
         await sleep(Math.max(1, ((need - this.tokens) * 1000) / this.rate));
       }
     });
@@ -162,10 +181,11 @@ class Endpoint {
     if (n === 0) return;
     this.pauseMs = INITIAL_PAUSE_MS;
     this.succeeded += n;
-    if (!this.bound || this.succeeded < (this.slowStart ? 1 : 5) * this.rate) return;
-    this.rate = Math.min(this.maxRate, this.rate * (this.slowStart ? 2 : 1.05));
+    const step = this.slowStart ? SLOW_START_STEP_S : STEP_S;
+    if (!this.waitedForRate || this.succeeded < step * this.rate) return;
+    this.rate = Math.min(this.maxRate, this.rate * (this.slowStart ? SLOW_START_GROWTH : GROWTH));
     this.succeeded = 0;
-    this.bound = false;
+    this.waitedForRate = false;
   }
 
   /** One throttle per pause counts: requests already in flight when it began were sent at the old rate. */
@@ -174,18 +194,18 @@ class Endpoint {
     if (now < this.pausedUntil) return;
     this.rate = Math.max(
       Math.min(MIN_RATE, this.maxRate),
-      this.rate * (this.slowStart ? 0.5 : 0.95),
+      this.rate * (this.slowStart ? SLOW_START_CUT : CUT),
     );
     this.slowStart = false;
     this.succeeded = 0;
-    this.bound = false;
+    this.waitedForRate = false;
     this.pausedUntil = now + this.pauseMs;
     this.tokens = 0;
     this.refilled = this.pausedUntil;
     // Whole milliseconds: a pause ending mid-millisecond would wake on it again, since Date.now() can't pass it.
     this.pauseMs = timeout
       ? INITIAL_PAUSE_MS
-      : Math.min(MAX_PAUSE_MS, Math.round(this.pauseMs * 1.5));
+      : Math.min(MAX_PAUSE_MS, Math.round(this.pauseMs * PAUSE_GROWTH));
   }
 }
 
@@ -364,7 +384,7 @@ export class RpcClient {
       }
       avoid = endpoint;
       const code = failure instanceof RpcError ? failure.code : undefined;
-      const throttled = status === 429 || code === 429 || code === -32005;
+      const throttled = throttles(status, code);
       const timeout = (failure as Error).name === "TimeoutError";
       if (throttled) {
         this.stats.throttled++;
@@ -426,7 +446,8 @@ export class RpcClient {
     const byId = new Map(responses.map((r) => [r.id, r]));
     return calls.map((c, i) => {
       const r = byId.get(first + i);
-      if (r === undefined) return new RpcError(c.method, -32603, "missing response in batch");
+      if (r === undefined)
+        return new RpcError(c.method, INTERNAL_ERROR, "missing response in batch");
       if (r.error !== undefined)
         return new RpcError(c.method, r.error.code, r.error.message, r.error.data);
       return r.result;
