@@ -45,12 +45,10 @@
   },
   "dependencies": {
     "@noble/hashes": "^2.0.0",
+    "drizzle-orm": "0.45.4",
     "graphql": "^17.0.2",
     "pg": "^8.23.1",
     "pg-copy-streams": "^7.0.0"
-  },
-  "peerDependencies": {
-    "drizzle-orm": "^0.45.4"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
@@ -58,7 +56,6 @@
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/ws": "^8.18.2",
-    "drizzle-orm": "^0.45.4",
     "starknet": "^10.8.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",

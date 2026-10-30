@@ -1,8 +1,7 @@
 # API routes [Your own endpoints next to SQL and GraphQL]
 
 ```ts [src/api/index.ts]
-import { eq, inArray } from "drizzle-orm";
-import { HttpError } from "kasbah";
+import { eq, HttpError, inArray } from "kasbah";
 import app from "../../kasbah.config.ts";
 import { pools } from "../../kasbah.schema.ts";
 

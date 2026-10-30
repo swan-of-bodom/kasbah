@@ -1,6 +1,4 @@
-import { relations } from "drizzle-orm";
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
-import { bignum, hex } from "../../src/index.ts";
+import { bignum, hex, integer, pgTable, relations, text } from "../../src/index.ts";
 
 export const pairs = pgTable("pairs", {
   address: hex().primaryKey(),

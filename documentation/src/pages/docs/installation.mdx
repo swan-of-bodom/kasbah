@@ -36,20 +36,20 @@ yarn create kasbah my-indexer
 :::code-group
 
 ```bash [pnpm]
-pnpm add kasbah drizzle-orm
+pnpm add kasbah
 ```
 
 ```bash [npm]
-npm install kasbah drizzle-orm
+npm install kasbah
 ```
 
 ```bash [yarn]
-yarn add kasbah drizzle-orm
+yarn add kasbah
 ```
 
 :::
 
-`drizzle-orm` is a peer dependency: your tables and kasbah share one copy.
+Drizzle comes with it: tables and queries are imported from `kasbah` too.
 
 ## CLI only
 
@@ -72,5 +72,5 @@ This one works today: build the package and install the tarball.
 ```bash
 git clone https://github.com/swan-of-bodom/kasbah
 cd kasbah && pnpm install && pnpm pack
-cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz drizzle-orm
+cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz
 ```

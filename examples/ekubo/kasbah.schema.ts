@@ -1,5 +1,12 @@
-import { doublePrecision, integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
-import { bignum, hex } from "../../src/index.ts";
+import {
+  bignum,
+  doublePrecision,
+  hex,
+  integer,
+  pgTable,
+  primaryKey,
+  text,
+} from "../../src/index.ts";
 
 export const pools = pgTable("pools", {
   id: text().primaryKey(),

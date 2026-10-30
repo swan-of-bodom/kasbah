@@ -5,8 +5,7 @@ Keep one row per pool per period, and fold every event into it. This is how the
 candles.
 
 ```ts [kasbah.schema.ts]
-import { doublePrecision, integer, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
-import { bignum } from "kasbah";
+import { bignum, doublePrecision, integer, pgTable, primaryKey, text } from "kasbah";
 
 export const candles = pgTable(
   "candles",
@@ -54,6 +53,8 @@ The first event of a period inserts the row (its price is the open). Every later
 Serve them from a route:
 
 ```ts [src/api/index.ts]
+import { and, desc, eq } from "kasbah";
+
 app.get("/pools/:id/candles", async ({ db, params, query }) => {
   const interval = Number(query.get("interval") ?? 3_600);
   return db

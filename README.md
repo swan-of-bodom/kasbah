@@ -160,12 +160,13 @@ run with Node's type stripping; kasbah itself is compiled to `dist/`).
 
 ```
 cd ~/Desktop/kasbah && pnpm pack                          # builds dist/ and writes kasbah-0.1.0.tgz
-cd my-indexer && pnpm add ~/Desktop/kasbah/kasbah-0.1.0.tgz drizzle-orm
+cd my-indexer && pnpm add ~/Desktop/kasbah/kasbah-0.1.0.tgz
 pnpm kasbah dev app.ts                                    # reads .env (KASBAH_RPC_URL, DATABASE_URL)
 ```
 
-`drizzle-orm` is a peer dependency: the app's tables and kasbah's store use the same copy. After a change in
-kasbah, pack and `pnpm add` the tarball again. `test/package.test.ts` does all of this outside the repo.
+Drizzle comes with kasbah, which re-exports it as Ponder does (`import { pgTable, text, eq } from
+"kasbah"`), so the app's tables and the store use one copy. After a change in kasbah, pack and
+`pnpm add` the tarball again. `test/package.test.ts` does all of this outside the repo.
 
 ## Commands
 

@@ -92,8 +92,7 @@ function columnOf(m: AbiMember): string {
 /** The files of a new project, by path. */
 export function generate(p: Project): Record<string, string> {
   const defs = abiEvents(p.abi).filter((e) => p.events.includes(e.name));
-  const pgImports = new Set(["integer", "pgTable", "text"]);
-  const indexerImports = new Set<string>();
+  const imports = new Set(["integer", "pgTable", "text"]);
   const tables: string[] = [];
   const handlers: string[] = [];
   for (const e of defs) {
@@ -109,8 +108,8 @@ export function generate(p: Project): Record<string, string> {
       const column = columnOf(m);
       const key = FIXED.has(m.name) ? `${m.name}_` : m.name;
       for (const t of ["integer", "boolean", "jsonb", "text"])
-        if (column.startsWith(`${t}(`)) pgImports.add(t);
-      for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) indexerImports.add(t);
+        if (column.startsWith(`${t}(`)) imports.add(t);
+      for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) imports.add(t);
       columns.push(`  ${key}: ${column},`);
       values.push(`${key}: event.args.${m.name}`);
     }
@@ -137,10 +136,7 @@ export function generate(p: Project): Record<string, string> {
     "});",
   );
   const schemaTs = lines(
-    `import { ${[...pgImports].sort().join(", ")} } from "drizzle-orm/pg-core";`,
-    ...(indexerImports.size > 0
-      ? [`import { ${[...indexerImports].sort().join(", ")} } from "kasbah";`]
-      : []),
+    `import { ${[...imports].sort().join(", ")} } from "kasbah";`,
     "",
     tables.join("\n\n"),
   );
@@ -151,7 +147,7 @@ export function generate(p: Project): Record<string, string> {
     handlers.join("\n\n"),
   );
   const api = lines(
-    `import { desc } from "drizzle-orm";`,
+    `import { desc } from "kasbah";`,
     `import app from "../../kasbah.config.ts";`,
     `import * as schema from "../../kasbah.schema.ts";`,
     "",
@@ -170,7 +166,7 @@ export function generate(p: Project): Record<string, string> {
       serve: "kasbah serve",
       typecheck: "tsc",
     },
-    dependencies: { "drizzle-orm": "^0.45.4", kasbah: p.dependency },
+    dependencies: { kasbah: p.dependency },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };
   const tsconfig = {
@@ -284,7 +280,7 @@ volumes:
   pgdata:
 `;
 
-/** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own drizzle-orm), else its version. */
+/** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own node_modules), else its version. */
 function indexerSpec(): string {
   const root = resolve(import.meta.dirname, "../../..");
   const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {

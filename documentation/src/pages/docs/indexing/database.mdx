@@ -1,11 +1,11 @@
 # Tables and writes [Define your tables and write to them from handlers]
 
-Tables are [Drizzle](https://orm.drizzle.team) tables. `bignum` stores `u128`/`u256` values exactly, `hex` stores
-addresses and class hashes.
+Tables are [Drizzle](https://orm.drizzle.team) tables, imported from `kasbah`, which re-exports Drizzle's
+column types and query helpers. `bignum` stores `u128`/`u256` values exactly, `hex` stores addresses and class
+hashes.
 
 ```ts [kasbah.schema.ts]
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
-import { bignum, hex } from "kasbah";
+import { bignum, hex, integer, pgTable, text } from "kasbah";
 
 export const pools = pgTable("pools", {
   id: text().primaryKey(),

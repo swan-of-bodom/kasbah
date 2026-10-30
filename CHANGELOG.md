@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Drizzle comes with kasbah (pinned, 0.45.4) and is re-exported from it, as Ponder does: `import { pgTable,
+  text, eq, desc } from "kasbah"`. `drizzle-orm` is no longer a peer dependency to install next to it.
+
 - One indexer per schema, as in Ponder: a running indexer holds its schema with a heartbeat; a second one waits once
   for it to expire (25 s), then refuses. A clean stop releases it at once; after a crash the next one takes over.
   An indexer whose schema was taken over stops at its next commit. `clean` refuses a schema in use.
