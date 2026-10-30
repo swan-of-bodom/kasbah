@@ -82,9 +82,9 @@ app.on("Core:Swapped", async ({ event, context }) => {
 
 ## Docs
 
-The docs site is in [`documentation/`](documentation) (`cd documentation && pnpm install && pnpm dev`). It covers
-configuration, handlers, the API, and deploying to Railway, Render or a VPS. The design and its reasoning are in
-[DESIGN.md](DESIGN.md).
+**[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**: configuration, handlers, the API,
+and deploying to Railway, Render or a VPS. The source is in [`documentation/`](documentation); the design and its
+reasoning are in [DESIGN.md](DESIGN.md).
 
 ## From source
 
