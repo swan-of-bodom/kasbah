@@ -376,17 +376,23 @@ test.skipIf(url === undefined)("a reader can't notify live clients itself", asyn
 test.skipIf(url === undefined)(
   "GraphQL relations: to-one in a list, to-many with filters and paging",
   async () => {
+    const owner = new pg.Pool({ connectionString: url, max: 1 });
+    const { rows } = await owner.query<{ id: string; swaps: number }>(
+      `SELECT id, swaps FROM ${schema}.pools WHERE id IN ('p01', 'p02')`,
+    );
+    await owner.end();
+    const swaps = Object.fromEntries(rows.map((r) => [r.id, r.swaps]));
     expect(
       await gql(
-        `{ positions(orderBy: liquidity) { items { owner liquidity poolInfo { id swaps } } } }`,
+        `{ positions(orderBy: liquidity, where: { owner_in: ["0xa", "0xb"] }) { items { owner liquidity poolInfo { id swaps } } } }`,
       ),
     ).toEqual({
       data: {
         positions: {
           items: [
-            { owner: "0xa", liquidity: "5", poolInfo: { id: "p01", swaps: 100 } },
-            { owner: "0xa", liquidity: "6", poolInfo: { id: "p02", swaps: 7 } },
-            { owner: "0xb", liquidity: "7", poolInfo: { id: "p01", swaps: 100 } },
+            { owner: "0xa", liquidity: "5", poolInfo: { id: "p01", swaps: swaps.p01 } },
+            { owner: "0xa", liquidity: "6", poolInfo: { id: "p02", swaps: swaps.p02 } },
+            { owner: "0xb", liquidity: "7", poolInfo: { id: "p01", swaps: swaps.p01 } },
           ],
         },
       },
