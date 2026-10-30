@@ -121,7 +121,7 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
   expect(out).toContain("kasbah init");
   expect(
     JSON.parse(readFileSync(join(create, "proj/package.json"), "utf8")).dependencies.kasbah,
-  ).toBe("^0.1.0");
+  ).toBe(`^${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}`);
   expect(readFileSync(join(create, "proj/src/index.ts"), "utf8")).toContain(`app.on("C:Counted"`);
   expect(readdirSync(join(create, "node_modules/create-kasbah"))).toContain("LICENSE");
 }, 120_000);

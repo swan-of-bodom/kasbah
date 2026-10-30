@@ -4,6 +4,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+## 0.1.1
+
+- The npm page links to the docs site, https://swan-of-bodom.github.io/kasbah/.
+- `init` from a kasbah checkout says plainly why its project's Docker image won't build until kasbah comes from npm.
+
 ## 0.1.0
 
 The first release on npm (`kasbah`, `create-kasbah`).

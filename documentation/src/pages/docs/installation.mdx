@@ -59,7 +59,7 @@ To try a change to kasbah itself, build the package and install the tarball:
 ```bash
 git clone https://github.com/swan-of-bodom/kasbah
 cd kasbah && pnpm install && pnpm pack
-cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz
+cd ../my-indexer && pnpm add ../kasbah/kasbah-*.tgz
 ```
 
 A project made by `init` from a checkout uses that tarball, so its Docker image can't build until you switch it

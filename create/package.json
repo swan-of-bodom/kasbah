@@ -1,6 +1,6 @@
 {
   "name": "create-kasbah",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Create a kasbah project: a Starknet indexer from a contract address",
   "license": "Apache-2.0",
   "author": "swan-of-bodom",
@@ -33,6 +33,6 @@
     "LICENSE"
   ],
   "dependencies": {
-    "kasbah": "^0.1.0"
+    "kasbah": "^0.1.1"
   }
 }

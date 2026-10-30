@@ -93,8 +93,8 @@ Node 22.18+ and pnpm. To use a local checkout instead of the npm package:
 ```bash
 git clone https://github.com/swan-of-bodom/kasbah
 cd kasbah && pnpm install
-pnpm pack                                     # writes kasbah-0.1.0.tgz
-cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz
+pnpm pack                                     # writes kasbah-<version>.tgz
+cd ../my-indexer && pnpm add ../kasbah/kasbah-*.tgz
 ```
 
 ## Development
