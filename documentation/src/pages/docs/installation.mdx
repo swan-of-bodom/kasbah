@@ -1,10 +1,5 @@
 # Installation [Install kasbah and its requirements]
 
-:::warning
-**THIS IS STILL TODO.** kasbah isn't published yet: the commands below are placeholders for the methods it
-will have. Only [from source](#from-source) works today.
-:::
-
 ## Requirements
 
 - **Node.js 22.18 or later.** Your `.ts` files run with Node's type stripping, so imports need the `.ts`
@@ -31,6 +26,8 @@ yarn create kasbah my-indexer
 
 :::
 
+It asks for your RPC and a contract address, then writes the project. See the [quickstart](/docs/quickstart).
+
 ## Into an existing project
 
 :::code-group
@@ -51,26 +48,19 @@ yarn add kasbah
 
 Drizzle comes with it: tables and queries are imported from `kasbah` too.
 
-## CLI only
-
-```bash
-curl -fsSL https://kasbah.dev/install.sh | sh
-```
-
 ## Docker
 
-```bash
-docker pull ghcr.io/swan-of-bodom/kasbah:latest
-```
-
-Every project also gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [VPS](/docs/production/vps).
+Every project gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [VPS](/docs/production/vps).
 
 ## From source
 
-This one works today: build the package and install the tarball.
+To try a change to kasbah itself, build the package and install the tarball:
 
 ```bash
 git clone https://github.com/swan-of-bodom/kasbah
 cd kasbah && pnpm install && pnpm pack
 cd ../my-indexer && pnpm add ../kasbah/kasbah-0.1.0.tgz
 ```
+
+A project made by `init` from a checkout uses that tarball, so its Docker image can't build until you switch it
+to the npm version (`pnpm add kasbah`).

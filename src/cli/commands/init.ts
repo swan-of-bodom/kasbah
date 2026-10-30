@@ -226,7 +226,7 @@ export function generate(p: Project): Record<string, string> {
       ...(p.dependency.startsWith("file:")
         ? [
             "",
-            "kasbah comes from a local tarball until it's published: `docker compose` can build only after that.",
+            "kasbah comes from a local tarball (a checkout's): `docker compose` builds once it's `pnpm add kasbah` from npm.",
           ]
         : []),
     ),
