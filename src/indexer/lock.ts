@@ -18,6 +18,9 @@ type LockRow = { owner: string | null; heartbeat: number; dev: boolean | null };
 /** `dev`: `onBuildChange: "reset"`, what `kasbah dev` runs with; a changed build drops the schema. */
 type Claim = { dev: boolean; reset: boolean; buildId: string };
 
+/** What one claim attempt ends with: the schema is this indexer's, or another holds it until `until` (ms). */
+type Attempt = { claimed: true } | { claimed: false; until: number };
+
 const META = `CREATE TABLE IF NOT EXISTS _kasbah_meta (key text PRIMARY KEY, value jsonb NOT NULL)`;
 
 /**
@@ -47,12 +50,15 @@ export class SchemaLock {
     signal: AbortSignal,
   ): Promise<SchemaLock> {
     const lock = new SchemaLock(pool, schema);
-    let held = await lock.#try(claim, status);
-    if (held !== undefined) {
-      status.note({ kind: "locked", schema, seconds: Math.ceil((held - Date.now()) / 1000) });
-      await sleep(Math.max(0, held - Date.now()), signal);
-      held = await lock.#try(claim, status);
-      if (held !== undefined)
+    const first = await lock.#try(claim, status);
+    if (!first.claimed) {
+      status.note({
+        kind: "locked",
+        schema,
+        seconds: Math.ceil((first.until - Date.now()) / 1000),
+      });
+      await sleep(Math.max(0, first.until - Date.now()), signal);
+      if (!(await lock.#try(claim, status)).claimed)
         throw new ConfigError(
           `schema "${schema}" is in use by another indexer: stop it, or use another --schema (DATABASE_SCHEMA)`,
         );
@@ -62,7 +68,7 @@ export class SchemaLock {
     return lock;
   }
 
-  async #try(claim: Claim, status: Status): Promise<number | undefined> {
+  async #try(claim: Claim, status: Status): Promise<Attempt> {
     const s = quote(this.#schema);
     return transaction(this.#pool, async (tx) => {
       await tx.query(`CREATE SCHEMA IF NOT EXISTS ${s}`);
@@ -77,9 +83,9 @@ export class SchemaLock {
         )
       ).rows[0]?.value;
       // Gone: another process dropped the schema while this one waited for the row.
-      if (row === undefined) return Date.now();
+      if (row === undefined) return { claimed: false, until: Date.now() };
       const expiry = row.heartbeat + LOCK.timeoutMs;
-      if (row.owner !== null && expiry > Date.now()) return expiry;
+      if (row.owner !== null && expiry > Date.now()) return { claimed: false, until: expiry };
       const build = (
         await tx.query<{ value: string }>(`SELECT value FROM _kasbah_meta WHERE key = 'build'`)
       ).rows[0]?.value;
@@ -100,7 +106,7 @@ export class SchemaLock {
         `INSERT INTO _kasbah_meta VALUES ('lock', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
         [{ owner: this.owner, heartbeat: Date.now(), dev: claim.dev } satisfies LockRow],
       );
-      return undefined;
+      return { claimed: true };
     });
   }
 
