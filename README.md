@@ -191,6 +191,13 @@ docker run -d --name kasbah-pg -e POSTGRES_PASSWORD=kasbah -e POSTGRES_DB=kasbah
 Node 24+. Fixtures: Ekubo Core (Cairo 1, flat and nested variants), STRK (OpenZeppelin ERC20, key members), two
 Cairo 0 contracts (a pair and an ERC20).
 
+## Acknowledgments
+
+kasbah's design comes from [Ponder](https://ponder.sh) ([GitHub](https://github.com/ponder-sh/ponder)), the
+open-source TypeScript indexer for EVM chains by the Ponder team (MIT). The code here is written for Starknet, but
+the project layout, the API and many production choices follow Ponder's, and DESIGN.md notes where. Thank you to
+its authors for building it in the open. For EVM chains, use Ponder.
+
 ## License and versions
 
 Apache-2.0 (`LICENSE`). Versions follow semver; while at 0.x, a minor version (0.1 → 0.2) may break the config,
