@@ -540,7 +540,7 @@ Target size: under 10k lines for v1.
        tables it wrote (the store knows them), and each stream learns the tables its query reads once, from
        Postgres' `EXPLAIN` when it opens. Today every open stream re-runs after every commit.
      - An API cache: a route's or query's result kept in memory until the next commit, so N visitors in one block
-       cost one query (ARCHITECTURE §15 stage 1 in the camel repo).
+       cost one query.
    - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables`
      takes both, so `import * as schema` works, as in Ponder). A to-one field is the related row, batched: all
      lookups of one level go out as one `WHERE (cols) IN (…)`. A to-many field is a page with the top-level
@@ -646,7 +646,7 @@ Headers: Alchemy 835/s unbatched, 7,840/s in batches of 100. PublicNode ~20/s at
 
 ## 12. Decisions
 
-1. Name: **kasbah**. Repo at `~/Desktop/kasbah`, not public yet.
+1. Name: **kasbah**.
 2. One chain per process.
 3. API: SQL over HTTP and GraphQL.
 4. Schema: Drizzle.
