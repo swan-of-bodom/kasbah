@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import { endpointsOf, loadBalance } from "../../src/config/rpc.ts";
 import { RpcClient } from "../../src/rpc/client.ts";
 
@@ -43,7 +43,13 @@ test("load balancing: a failing endpoint's call is retried on another", async ()
     return "0x1";
   });
   const rpc = new RpcClient(loadBalance(["http://a", "http://b"]) as string[], { fetch: n.fetch });
-  expect(await rpc.request("starknet_blockNumber", [])).toBe("0x1");
+  // Off the random pick (EXPLORE), so the first call goes to a, the first in order.
+  const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
+  try {
+    expect(await rpc.request("starknet_blockNumber", [])).toBe("0x1");
+  } finally {
+    random.mockRestore();
+  }
   const [a, b] = rpc.endpoints;
   expect(a!.failed).toBe(1);
   expect(b!.calls).toBe(1);
