@@ -7,6 +7,8 @@ export default defineConfig({
   twoslash: false,
   // Plain HTML files: any static host serves it, no server needed.
   renderStrategy: "full-static",
+  // GitHub Pages serves the site under /kasbah/; locally and elsewhere it's at the root.
+  basePath: process.env.DOCS_BASE_PATH ?? "/",
   sidebar: [
     {
       text: "Introduction",
