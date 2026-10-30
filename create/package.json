@@ -1,9 +1,14 @@
 {
   "name": "create-kasbah",
   "version": "0.1.0",
-  "private": true,
   "description": "pnpm create kasbah: a new Starknet indexer from a contract address",
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/swan-of-bodom/kasbah.git",
+    "directory": "create"
+  },
+  "homepage": "https://github.com/swan-of-bodom/kasbah",
   "type": "module",
   "engines": {
     "node": ">=22.18"
