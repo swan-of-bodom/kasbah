@@ -22,13 +22,15 @@ jobs:
           node-version: 24
           cache: pnpm
           registry-url: https://registry.npmjs.org
-      - name: The tag matches both versions
+      - name: The tag matches both versions and create-kasbah's dependency
         run: |
           tag="${GITHUB_REF_NAME#v}"
           for p in package.json create/package.json; do
             v=$(node -p "require('./$p').version")
             [ "$v" = "$tag" ] || { echo "$p is $v, the release is $tag"; exit 1; }
           done
+          d=$(node -p "require('./create/package.json').dependencies.kasbah")
+          [ "$d" = "^$tag" ] || { echo "create-kasbah depends on kasbah $d, not ^$tag"; exit 1; }
       - run: pnpm install --frozen-lockfile
       - run: pnpm lint
       - run: pnpm typecheck
