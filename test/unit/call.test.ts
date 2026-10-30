@@ -122,7 +122,7 @@ test("reads are pinned to the indexed block, final ones cached, recent ones pinn
             return {
               jsonrpc: "2.0",
               id: c.id,
-              result: ["0x" + (id.block_number ?? 99).toString(16)],
+              result: [`0x${(id.block_number ?? 99).toString(16)}`],
             };
           }),
         ),
