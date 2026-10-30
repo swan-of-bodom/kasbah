@@ -52,8 +52,9 @@ type Window = {
   from: number;
   /** `to_block` of the filter, fixed for the window's lifetime so its continuation token stays valid. */
   to: number;
-  stop: number;
-  at: number;
+  /** Exclusive bounds; `end` drops when a split hands the rest of the range to a new window. */
+  end: number;
+  fetchedUntil: number;
   token: string | undefined;
   events: EmittedEvent[];
   state: "idle" | "running" | "done";
@@ -109,8 +110,8 @@ class EventFetcher {
       {
         from: o.from,
         to: o.to,
-        stop: o.to + 1,
-        at: o.from,
+        end: o.to + 1,
+        fetchedUntil: o.from,
         token: undefined,
         events: [],
         state: "idle",
@@ -132,17 +133,17 @@ class EventFetcher {
         if (w.state === "done") {
           events = w.events;
           windows.shift();
-          through = w.stop - 1;
+          through = w.end - 1;
         } else {
           // The last fetched block of a running window may be partial: hold its events back.
           let n = w.events.length;
-          while (n > 0 && w.events[n - 1]!.block_number! >= w.at) n--;
+          while (n > 0 && w.events[n - 1]!.block_number! >= w.fetchedUntil) n--;
           if (n === 0) {
             await this.#wait();
             continue;
           }
           events = w.events.splice(0, n);
-          through = w.at - 1;
+          through = w.fetchedUntil - 1;
         }
         this.#buffered -= events.length;
         this.#notify();
@@ -165,17 +166,23 @@ class EventFetcher {
     return new Promise<void>((r) => this.#wakers.push(r));
   }
 
+  /** The memory cap, in DESIGN.md §3: it keeps what the stream holds under three times `maxBuffered`. */
   #mayFetch(w: Window): boolean {
-    const front = this.#windows[0];
-    if (w !== front && w.events.length >= this.#perWindow) return false;
+    const front = w === this.#windows[0];
+    if (!front && w.events.length >= this.#perWindow) return false;
     if (this.#buffered < this.#maxBuffered) return true;
-    if (this.#buffered >= 2 * this.#maxBuffered && w !== front) return false;
+    if (!front && this.#buffered >= 2 * this.#maxBuffered) return false;
+    return this.#heldThrough(w) < this.#maxBuffered;
+  }
+
+  /** Events held by `w` and every window before it. */
+  #heldThrough(w: Window): number {
     let n = 0;
     for (const x of this.#windows) {
       n += x.events.length;
-      if (x === w) return n < this.#maxBuffered;
+      if (x === w) return n;
     }
-    return false;
+    return Number.POSITIVE_INFINITY;
   }
 
   #pick(): Window | undefined {
@@ -195,20 +202,21 @@ class EventFetcher {
   }
 
   #split(w: Window): Window | undefined {
-    const left = w.stop - w.at;
+    const left = w.end - w.fetchedUntil;
     if (left < 2 * this.#minSplit) return undefined;
-    const cut = w.at + Math.round(Math.max(this.#minSplit, Math.min(left / 2, this.#span())));
+    const cut =
+      w.fetchedUntil + Math.round(Math.max(this.#minSplit, Math.min(left / 2, this.#span())));
     const rest: Window = {
       from: cut,
-      to: w.stop - 1,
-      stop: w.stop,
-      at: cut,
+      to: w.end - 1,
+      end: w.end,
+      fetchedUntil: cut,
       token: undefined,
       events: [],
       state: "idle",
     };
     this.#windows.splice(this.#windows.indexOf(w) + 1, 0, rest);
-    w.stop = cut;
+    w.end = cut;
     this.#stats.windows++;
     this.#stats.splits++;
     return rest;
@@ -219,7 +227,11 @@ class EventFetcher {
     let idle = windows.filter((x) => x.state === "idle").length;
     for (let i = 0; i < windows.length && idle < this.#waiting; i++) {
       const w = windows[i]!;
-      if (w.state !== "done" && w.stop - w.at > 2 * this.#span() && this.#split(w) !== undefined)
+      if (
+        w.state !== "done" &&
+        w.end - w.fetchedUntil > 2 * this.#span() &&
+        this.#split(w) !== undefined
+      )
         idle++;
     }
   }
@@ -243,7 +255,7 @@ class EventFetcher {
       stats.pages++;
       let kept = 0;
       for (const e of page.events) {
-        if (e.block_number! >= w.stop) break;
+        if (e.block_number! >= w.end) break;
         w.events.push(e);
         kept++;
       }
@@ -253,17 +265,17 @@ class EventFetcher {
       const token = page.continuation_token;
       const at =
         token === undefined
-          ? w.stop
-          : Math.min(w.stop, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.at);
+          ? w.end
+          : Math.min(w.end, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
       this.#recentEvents = this.#recentEvents * 0.9 + kept;
-      this.#recentBlocks = this.#recentBlocks * 0.9 + Math.max(0, at - w.at);
-      if (at >= w.stop) {
-        w.at = w.stop;
+      this.#recentBlocks = this.#recentBlocks * 0.9 + Math.max(0, at - w.fetchedUntil);
+      if (at >= w.end) {
+        w.fetchedUntil = w.end;
         w.state = "done";
         this.#notify();
         return;
       }
-      w.at = Math.max(w.at, at);
+      w.fetchedUntil = Math.max(w.fetchedUntil, at);
       w.token = token;
       if (this.#waiting > 0) this.#feed();
       this.#notify();
