@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { eq, relations, sql } from "drizzle-orm";
 import { integer, jsonb, pgTable, primaryKey, text } from "drizzle-orm/pg-core";
 import { getIntrospectionQuery } from "graphql";
@@ -535,6 +536,32 @@ test.skipIf(url === undefined)(
     expect((await post("/sql", { sql: "select count(*)::int as n from pools" })).body.rows).toEqual(
       [[17]],
     );
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a port already in use is refused, and the connections opened for it are closed",
+  async () => {
+    const taken = createServer();
+    await new Promise<void>((r) => taken.listen(0, "127.0.0.1", r));
+    const port = (taken.address() as { port: number }).port;
+    const owner = new pg.Pool({ connectionString: url, max: 1 });
+    const readers = async () =>
+      (
+        await owner.query("SELECT count(*)::int AS n FROM pg_stat_activity WHERE usename = $1", [
+          `${schema}_reader`,
+        ])
+      ).rows[0].n as number;
+    try {
+      const before = await readers();
+      await expect(Api.start({ database: url!, schema, tables: { pools }, port })).rejects.toThrow(
+        `port ${port} is in use`,
+      );
+      await expect.poll(readers).toBe(before);
+    } finally {
+      taken.close();
+      await owner.end();
+    }
   },
 );
 

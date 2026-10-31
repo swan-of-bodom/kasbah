@@ -156,10 +156,20 @@ export class Api {
       } catch {}
       for (const l of api.#live) l(checkpoint);
     });
-    await new Promise<void>((resolve, reject) => {
-      api.#server.once("error", reject);
-      api.#server.listen(o.port, o.host ?? "127.0.0.1", resolve);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        api.#server.once("error", reject);
+        api.#server.listen(o.port, o.host ?? "127.0.0.1", resolve);
+      });
+    } catch (e) {
+      await api.#unlisten?.();
+      await reader.close();
+      if ((e as NodeJS.ErrnoException).code === "EADDRINUSE")
+        throw new ConfigError(
+          `port ${o.port} is in use: stop what runs there, or pick another with --port (or PORT)`,
+        );
+      throw e;
+    }
     return api;
   }
 
