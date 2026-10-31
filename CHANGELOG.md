@@ -12,6 +12,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   changing the cache so it disagrees with Postgres. Use `update` to change a row.
 - The backfill gives the event loop a turn every 25 ms, as Ponder does: the API answers during a backfill, and
   the next batch is read while handlers run (5% faster on the Ekubo template).
+- A first run with `cache: true` is about 20% faster: raw events are encoded for the cache from their hex text,
+  without a BigInt and Buffers per felt.
 - `/metrics` reports heap, GC time, event loop delay and utilization, and the fetch buffer.
 - The dashboard shows the fetch buffer in MB, and how many workers are idle out of how many.
 

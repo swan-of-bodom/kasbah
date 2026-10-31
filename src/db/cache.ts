@@ -11,23 +11,31 @@ import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
 import { quote } from "./table.ts";
 
-const feltBytes = (felt: string): Buffer => {
-  let h = BigInt(felt).toString(16);
-  if (h === "0") return Buffer.alloc(0);
-  if (h.length % 2 === 1) h = `0${h}`;
-  return Buffer.from(h, "hex");
-};
+/** A felt's minimal big-endian bytes as hex ("" for zero), straight from its hex text. */
+export function feltHex(felt: string): string {
+  if (!/^0x[0-9a-fA-F]{1,64}$/.test(felt)) throw new Error(`not a felt: ${felt}`);
+  let i = 2;
+  while (i < felt.length && felt.charCodeAt(i) === 48) i++;
+  const h = felt.slice(i).toLowerCase();
+  return h.length % 2 === 1 ? `0${h}` : h;
+}
+const feltBytes = (felt: string): Buffer => Buffer.from(feltHex(felt), "hex");
 const feltFromMinimalBytes = (h: string): string =>
   h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
 
 /** Felts as one bytea: per felt, a length byte then its minimal big-endian bytes. */
 export function packFelts(felts: readonly string[]): Buffer {
-  const parts: Buffer[] = [];
+  return Buffer.from(packFeltsHex(felts), "hex");
+}
+
+/** `packFelts` as hex, for COPY text. */
+export function packFeltsHex(felts: readonly string[]): string {
+  let out = "";
   for (const f of felts) {
-    const b = feltBytes(f);
-    parts.push(Buffer.from([b.length]), b);
+    const h = feltHex(f);
+    out += (h.length / 2).toString(16).padStart(2, "0") + h;
   }
-  return Buffer.concat(parts);
+  return out;
 }
 
 export function unpackFelts(b: Buffer): string[] {
@@ -64,7 +72,7 @@ const SCHEMA_SQL = (s: string) => [
   `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
 ];
 
-const bytea = (b: Buffer) => `\\\\x${b.toString("hex")}`;
+const bytea = (hex: string) => `\\\\x${hex}`;
 
 /**
  * Final events (below the reorg window) kept in Postgres, shared by every app on the same database and chain.
@@ -393,7 +401,7 @@ export class EventCache {
       const lines = (function* (events: EmittedEvent[]) {
         let chunk = "";
         for (const e of events) {
-          chunk += `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltBytes(e.from_address))}\t${bytea(feltBytes(e.keys[0] ?? "0x0"))}\t${bytea(feltBytes(e.block_hash ?? "0x0"))}\t${bytea(feltBytes(e.transaction_hash))}\t${bytea(packFelts(e.keys))}\t${bytea(packFelts(e.data))}\n`;
+          chunk += `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltHex(e.from_address))}\t${bytea(feltHex(e.keys[0] ?? "0x0"))}\t${bytea(feltHex(e.block_hash ?? "0x0"))}\t${bytea(feltHex(e.transaction_hash))}\t${bytea(packFeltsHex(e.keys))}\t${bytea(packFeltsHex(e.data))}\n`;
           if (chunk.length > 1 << 16) {
             yield chunk;
             chunk = "";

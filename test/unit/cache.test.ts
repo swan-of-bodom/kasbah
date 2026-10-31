@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, expect, test } from "vitest";
-import { EventCache, packFelts, unpackFelts } from "../../src/db/cache.ts";
+import { EventCache, feltHex, packFelts, packFeltsHex, unpackFelts } from "../../src/db/cache.ts";
 import type { BlockHeader, EmittedEvent } from "../../src/rpc/methods.ts";
 import { felt } from "../../src/types/felt.ts";
 import { header } from "../fixtures/header.ts";
@@ -35,6 +35,44 @@ test("felts pack to minimal bytes and back", () => {
     "0x1",
   ]);
   expect(packFelts(["0x0", "0x5"]).length).toBe(3);
+});
+
+/** The encoding before it worked on the hex text: through a BigInt and Buffers. */
+const viaBigInt = (felts: string[]) =>
+  Buffer.concat(
+    felts.flatMap((f) => {
+      let h = BigInt(f).toString(16);
+      if (h === "0") h = "";
+      else if (h.length % 2 === 1) h = `0${h}`;
+      const b = Buffer.from(h, "hex");
+      return [Buffer.from([b.length]), b];
+    }),
+  ).toString("hex");
+
+test("felts encode from their hex text as they did through BigInt", () => {
+  const edge = [
+    "0x0",
+    "0x00",
+    "0x1",
+    "0x01",
+    "0xA",
+    "0xabc",
+    "0x0abc",
+    `0x${"f".repeat(64)}`,
+    `0x0${"e".repeat(63)}`,
+  ];
+  let s = 7;
+  const rand = () => (s = (s * 1103515245 + 12345) % 2 ** 31);
+  const random = Array.from({ length: 2000 }, () => {
+    const n = 1 + (rand() % 64);
+    return `0x${Array.from({ length: n }, () => "0123456789abcdefABCDEF"[rand() % 22]).join("")}`;
+  });
+  for (const f of [...edge, ...random]) expect(packFeltsHex([f])).toBe(viaBigInt([f]));
+  expect(packFeltsHex(random)).toBe(viaBigInt(random));
+  expect(packFelts(edge).toString("hex")).toBe(viaBigInt(edge));
+  expect(feltHex("0x0")).toBe("");
+  expect(() => feltHex("12")).toThrow(/not a felt/);
+  expect(() => feltHex(`0x${"1".repeat(65)}`)).toThrow(/not a felt/);
 });
 
 test.skipIf(url === undefined)(
