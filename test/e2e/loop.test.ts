@@ -57,7 +57,7 @@ test.skipIf(url === undefined)(
     } finally {
       clearInterval(timer);
     }
-    // Without the turns: about 1 s. The commit still holds it ~250 ms.
+    // Without the turns: about 1 s. With them, ~220 ms once, early in the backfill.
     expect(worst).toBeLessThan(500);
   },
   120_000,
