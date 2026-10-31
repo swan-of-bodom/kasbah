@@ -472,8 +472,10 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 - Only data below the safety window is cached, so the cache never needs reorg handling.
 - A backfill reads the prefix of its range that every (address, selector) pair covers from the cache, then fetches
   the rest; fetched events and coverage are written in the same transaction as the app's checkpoint.
-- Reads page by position (`LIMIT` 50k, a batch never ends inside a block) and get hex text from Postgres
-  (`encode(.., 'hex')`), skipping the Buffer round trip.
+- Reads page by position (`LIMIT` 12k as Ponder reads, a batch never ends inside a block) and get hex text from
+  Postgres (`encode(.., 'hex')`), skipping the Buffer round trip. Fewer events alive while handled is less for the
+  GC to copy: 50k → 12k was 5% faster on Ekubo (5 of 5 interleaved pairs, median 88.8 s → 84.5 s). Reading the
+  bytea as Buffers and unpacking felts from them was 9% slower (5 of 5): node-postgres gets hex text either way.
 - Measured, Ekubo to block 700k (7.68M events): 3.3 GB (≈430 bytes per event; full history would be
   ≈24 GB). Indexing from RPC while writing the cache 232 s; re-index from the cache 132 s, zero `getEvents`.
   Possible later: block hashes and addresses as ids instead of 32 bytes per row.

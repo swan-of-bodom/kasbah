@@ -224,7 +224,7 @@ export class EventCache {
     selectors: string[],
     from: number,
     to: number,
-    limit = 50_000,
+    limit = 12_000,
   ): AsyncGenerator<Batch> {
     const a = addresses.map(feltBytes);
     const s = selectors.map(feltBytes);
