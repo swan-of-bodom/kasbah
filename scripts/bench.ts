@@ -96,7 +96,7 @@ const stats = await fetchEvents({
   chunkSize: endpoint.maxChunk,
   concurrency: a.sequential ? 1 : concurrency,
   windowEvents: a.window === undefined ? undefined : Number(a.window),
-  maxBuffered: a.buffer === undefined ? undefined : Number(a.buffer),
+  maxBufferedBytes: a.buffer === undefined ? undefined : Number(a.buffer) * 2 ** 20,
   minSplit: a.sequential ? Number.POSITIVE_INFINITY : 64,
   onEvents(events) {
     for (const e of events) {
@@ -130,7 +130,7 @@ const result: Record<string, unknown> = {
   blocksWithEvents: blocks.size,
   pages: stats.pages,
   windows: stats.windows,
-  peakBuffered: stats.peakBuffered,
+  peakBufferedMB: Math.round(stats.peakBufferedBytes / 2 ** 20),
   splits: stats.splits,
   seconds: +(fetchMs / 1000).toFixed(2),
   eventsPerSecond: Math.round(stats.events / (fetchMs / 1000)),

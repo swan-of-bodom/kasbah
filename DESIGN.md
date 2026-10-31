@@ -72,10 +72,13 @@ in core, the `ponder dev` drop-everything mode.
 One process, three stages connected by bounded queues: fetch → decode → index. Fetching runs ahead of indexing up
 to a memory cap (not unbounded into the database, as Ponder does).
 
-The cap (`src/sync/fetch.ts`): windows behind the front pause at `perWindow` events each. Under `maxBuffered`
-events held, any window may fetch; under twice that, only a window holding fewer than `maxBuffered` together with
-the windows before it (including itself), so the front never waits on the back; past that, only the front, while
-it holds fewer than `maxBuffered`, and the consumer drains it. So memory stays under three times `maxBuffered`.
+The cap (`src/sync/fetch.ts`) is in bytes, each event's size estimated as Ponder estimates its cached rows
+(`src/utils/memory.ts`), and follows the heap: `maxBufferedBytes` defaults to a fifteenth of it, split between
+streams that run at once. Windows behind the front pause at `perWindow` bytes each. Under `maxBuffered` held, any
+window may fetch; under twice that, only a window holding less than `maxBuffered` together with the windows before
+it (including itself), so the front never waits on the back; past that, only the front, while it holds less than
+`maxBuffered`, and the consumer drains it. So the buffer stays under three times `maxBuffered`: a fifth of the
+heap. Counting events instead crashed a 2 GB heap on Ekubo's events, about 1.2 kB each.
 
 **On a first run, events go straight from fetch to handlers in memory.** The raw events are written to the cache
 on the side (COPY, not awaited by indexing). Ponder instead writes everything to its sync store and reads it back
@@ -275,9 +278,13 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 
 - Handlers run sequentially in checkpoint order. Checkpoint = `(block_number, transaction_index, event_index)`;
   one chain means no timestamps or chain ids in it.
-- Past `maxCachedRows` (500k per table) the oldest-written rows are dropped and the table is no longer known in
-  full. Plain inserts then skip the existence check (a query per insert: JediSwap's 7M swaps went from 50k to
-  4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
+- The row cache is a fifth of the heap, all tables together, rows sized by estimate, as Ponder's indexing cache
+  (`indexingCacheMaxBytes`). At a flush past it, rows are dropped oldest first from the tables read least, down to
+  80%, and a table that lost rows is no longer known in full. A limit of 500k rows per table held 1 GB of Ekubo's
+  12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet committed count too: past a tenth of
+  the heap they force a backfill commit.
+- In a table no longer known in full, plain inserts skip the existence check (a query per insert: JediSwap's 7M
+  swaps went from 50k to 4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
   the error. `onConflictDo…`, `find` and `update` still read a missing row from Postgres.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.

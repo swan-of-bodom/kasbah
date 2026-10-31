@@ -5,12 +5,15 @@ import type { PoolClient } from "pg";
 import { ConfigError } from "../config/errors.ts";
 import { chunks } from "../utils/chunks.ts";
 import { errorCode } from "../utils/errors.ts";
+import { approxBytes, heapLimit } from "../utils/memory.ts";
 import { copyRows } from "./copy.ts";
 import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
-/** Share of `maxCachedRows` a table's cache keeps after it overflows, so it doesn't evict again on the next flush. */
+/** Share of the heap for cached rows, all tables together, as Ponder's indexing cache. */
+const HEAP_SHARE = 1 / 5;
+/** Share of `maxCachedBytes` left after an eviction, so the next flush doesn't evict again at once. */
 const CACHE_KEPT = 0.8;
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
@@ -18,15 +21,22 @@ type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row 
 type State = {
   info: TableInfo;
   cache: Map<string, Row | null>;
+  /** Estimated, of `cache`'s keys and rows. */
+  bytes: number;
+  /** Reads `cache` answered: tables read least are evicted first. */
+  hits: number;
   complete: boolean;
   pending: Map<string, Pending>;
+  /** Estimated, of `pending`'s rows. */
+  pendingBytes: number;
   before: Map<string, Row | null>;
   keyed: boolean;
 };
 
 export type StoreOptions = {
   complete: boolean;
-  maxCachedRows?: number;
+  /** Estimated bytes of cached rows, all tables together. Default: `heap / 5`. */
+  maxCachedBytes?: number;
   /**
    * Tables created without their primary key (backfill: a random key, like a transaction hash, made inserts four
    * times slower). Each gets it when first needed: an upsert, a delete or a read from Postgres, or `addKeys`.
@@ -77,20 +87,23 @@ export class Store {
   readonly db: Db;
   readonly #tables = new Map<PgTable, State>();
   readonly #orm: NodePgDatabase;
-  readonly #maxCachedRows: number;
+  readonly #maxCachedBytes: number;
   /** Record pre-images for the undo journal (blocks inside the reorg window). */
   journal = false;
 
   constructor(orm: NodePgDatabase, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
-    this.#maxCachedRows = options.maxCachedRows ?? 500_000;
+    this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * HEAP_SHARE);
     for (const t of tables) {
       const info = tableInfo(t);
       this.#tables.set(t, {
         info,
         cache: new Map(),
+        bytes: 0,
+        hits: 0,
         complete: options.complete,
         pending: new Map(),
+        pendingBytes: 0,
         before: new Map(),
         keyed: !options.unkeyed?.has(info.name),
       });
@@ -107,13 +120,34 @@ export class Store {
   async #get(s: State, key: Row): Promise<Row | null> {
     const k = s.info.keyOf(key);
     const cached = s.cache.get(k);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) {
+      s.hits++;
+      return cached;
+    }
     if (s.complete) return null;
     await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [row] = await this.#orm.select().from(s.info.table).where(where).limit(1);
-    s.cache.set(k, (row as Row | undefined) ?? null);
+    this.#cache(s, k, (row as Row | undefined) ?? null);
     return (row as Row | undefined) ?? null;
+  }
+
+  /** Sets `k` as the newest entry, for eviction oldest first. */
+  #cache(s: State, k: string, row: Row | null, bytes = approxBytes(row)) {
+    const old = s.cache.get(k);
+    if (old !== undefined) {
+      s.cache.delete(k);
+      s.bytes -= approxBytes(k) + approxBytes(old);
+    }
+    s.cache.set(k, row);
+    s.bytes += approxBytes(k) + bytes;
+  }
+
+  #pend(s: State, k: string, p: Pending, bytes: number) {
+    const old = s.pending.get(k);
+    if (old !== undefined) s.pendingBytes -= approxBytes(old.row);
+    s.pending.set(k, p);
+    s.pendingBytes += bytes;
   }
 
   #remember(s: State, k: string, before: Row | null) {
@@ -128,9 +162,9 @@ export class Store {
     this.#remember(s, k, before);
     const prior = s.pending.get(k)?.op;
     const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
-    s.pending.set(k, { op, row });
-    s.cache.delete(k);
-    s.cache.set(k, row);
+    const bytes = approxBytes(row);
+    this.#pend(s, k, { op, row }, bytes);
+    this.#cache(s, k, row, bytes);
   }
 
   #createDb(): Db {
@@ -194,9 +228,12 @@ export class Store {
         if (current === null) return false;
         const k = s.info.keyOf(current);
         this.#remember(s, k, current);
-        if (s.pending.get(k)?.op === "insert") s.pending.delete(k);
-        else s.pending.set(k, { op: "delete", row: current });
-        s.cache.set(k, null);
+        const prior = s.pending.get(k);
+        if (prior?.op === "insert") {
+          s.pending.delete(k);
+          s.pendingBytes -= approxBytes(prior.row);
+        } else this.#pend(s, k, { op: "delete", row: current }, approxBytes(current));
+        this.#cache(s, k, null);
         return true;
       },
     };
@@ -205,6 +242,13 @@ export class Store {
   get pendingRows(): number {
     let n = 0;
     for (const s of this.#tables.values()) n += s.pending.size;
+    return n;
+  }
+
+  /** Estimated bytes of the rows `flush` would write. */
+  get pendingBytes(): number {
+    let n = 0;
+    for (const s of this.#tables.values()) n += s.pendingBytes;
     return n;
   }
 
@@ -257,14 +301,27 @@ export class Store {
         );
       }
       s.pending.clear();
-      if (s.cache.size > this.#maxCachedRows) {
-        let drop = s.cache.size - Math.floor(this.#maxCachedRows * CACHE_KEPT);
-        for (const key of s.cache.keys()) {
-          if (drop-- <= 0) break;
-          s.cache.delete(key);
-        }
+      s.pendingBytes = 0;
+    }
+    this.#evict();
+  }
+
+  /** Past `maxCachedBytes`, drops rows oldest first from the tables read least, as Ponder evicts by reads. */
+  #evict() {
+    const tables = [...this.#tables.values()];
+    let total = tables.reduce((n, s) => n + s.bytes, 0);
+    if (total <= this.#maxCachedBytes) return;
+    const target = this.#maxCachedBytes * CACHE_KEPT;
+    for (const s of tables.sort((a, b) => a.hits - b.hits)) {
+      for (const [k, row] of s.cache) {
+        if (total <= target) break;
+        const n = approxBytes(k) + approxBytes(row);
+        s.cache.delete(k);
+        s.bytes -= n;
+        total -= n;
         s.complete = false;
       }
+      if (total <= target) return;
     }
   }
 
@@ -369,7 +426,9 @@ export class Store {
     }
     for (const s of this.#tables.values()) {
       s.cache.clear();
+      s.bytes = 0;
       s.pending.clear();
+      s.pendingBytes = 0;
       s.before.clear();
       s.complete = false;
     }

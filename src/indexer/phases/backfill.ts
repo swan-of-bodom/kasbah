@@ -1,4 +1,5 @@
 import type { Batch } from "../../sync/fetch.ts";
+import { heapLimit } from "../../utils/memory.ts";
 import { secondsSince } from "../../utils/time.ts";
 import { watchedEvents } from "../events.ts";
 import { blockHeaders, fire, handle, type Prefetched, prefetch } from "../handle.ts";
@@ -8,8 +9,13 @@ import type { BlockSource, Run } from "../open.ts";
 const FLUSH_EVENTS = 100_000;
 /** Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded. */
 const FLUSH_BYTES = 64 << 20;
+/** Share of the heap for rows written but not yet committed: the row cache evicts only at a commit. */
+const PENDING_SHARE = 1 / 10;
 
-/** Final blocks from the checkpoint to the backfill's end: a commit every `FLUSH_EVENTS` events or `FLUSH_BYTES` of extras. */
+/**
+ * Final blocks from the checkpoint to the backfill's end: a commit every `FLUSH_EVENTS` events, `FLUSH_BYTES` of
+ * extras, or a tenth of the heap in written rows.
+ */
 export async function backfill(run: Run): Promise<void> {
   const { status, cache, signal, position } = run;
   const first = position.next;
@@ -21,6 +27,7 @@ export async function backfill(run: Run): Promise<void> {
   const handledBefore = status.handled;
   let through = first - 1;
   let since = 0;
+  const maxPending = heapLimit() * PENDING_SHARE;
   const batches = watchedEvents(run, first, to, true);
   const waited = (what: "events" | "extras", ms: number) =>
     what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);
@@ -33,7 +40,12 @@ export async function backfill(run: Run): Promise<void> {
     through = batch.through;
     status.range.through = through;
     if (signal.aborted) break;
-    if (since >= FLUSH_EVENTS || through === to || (cache?.pendingBytes ?? 0) > FLUSH_BYTES) {
+    if (
+      since >= FLUSH_EVENTS ||
+      through === to ||
+      (cache?.pendingBytes ?? 0) > FLUSH_BYTES ||
+      run.store.pendingBytes > maxPending
+    ) {
       await position.commit({ kind: "batch", through });
       since = 0;
     }

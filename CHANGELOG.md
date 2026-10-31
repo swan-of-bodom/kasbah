@@ -4,6 +4,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Memory follows the heap Node is given, so a small machine no longer crashes: the row cache is a fifth of it,
+  shared by all tables, the fetch buffer at most another fifth, both counted in bytes. The Ekubo template that ran
+  out of a 2 GB heap at block 500k now indexes 1.2M blocks in it.
+- The dashboard shows the fetch buffer in MB, and how many workers are idle out of how many.
+
 ## 0.1.1
 
 - The npm page links to the docs site, https://swan-of-bodom.github.io/kasbah/.

@@ -1,5 +1,6 @@
 import type { RpcClient } from "../rpc/client.ts";
 import { type EmittedEvent, getEvents } from "../rpc/methods.ts";
+import { approxBytes, heapLimit } from "../utils/memory.ts";
 
 export type EventStreamOptions = {
   rpc: RpcClient;
@@ -15,16 +16,20 @@ export type EventStreamOptions = {
   windowEvents?: number;
   /** Smallest range worth splitting off. */
   minSplit?: number;
-  /** Events in memory before windows pause (see `mayFetch`). Default: enough for four windows per worker. */
-  maxBuffered?: number;
+  /** Bytes of events in memory before windows pause (see `mayFetch`), estimated. Default: `heap / 15`. */
+  maxBufferedBytes?: number;
+  /** Of the default budget, for streams that run at once: they share it. */
+  share?: number;
   /** Receives a reader of the stream's state, for `--debug`. */
   gauges?: (read: () => FetchGauges) => void;
 };
 
 /** Smallest range, in blocks, worth splitting off a window for an idle worker. */
 const MIN_SPLIT = 64;
-/** The memory budget's floor, for small `concurrency` or sparse windows. */
-const MIN_BUFFERED = 10_000;
+/** Share of the heap for buffered events: the stream holds at most 3× its budget (`mayFetch`), so a fifth in all. */
+const HEAP_SHARE = 1 / 15;
+/** The budget's floor, so a small heap still reads a few pages ahead. */
+const MIN_BUFFERED_BYTES = 8 * 2 ** 20;
 /** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
 const DENSITY_DECAY = 0.9;
 /** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
@@ -32,12 +37,15 @@ const FRONT_ONLY_PAST = 2;
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
+  /** Estimated bytes, like the budget. */
   buffered: number;
   maxBuffered: number;
+  bufferedEvents: number;
   windows: number;
   running: number;
   paused: number;
   done: number;
+  workers: number;
   idleWorkers: number;
 };
 
@@ -49,7 +57,7 @@ export type FetchStats = {
   pages: number;
   windows: number;
   splits: number;
-  peakBuffered: number;
+  peakBufferedBytes: number;
 };
 
 type Window = {
@@ -60,6 +68,7 @@ type Window = {
   fetchedUntil: number;
   token: string | undefined;
   events: EmittedEvent[];
+  bytes: number;
   state: "idle" | "running" | "done";
 };
 
@@ -76,7 +85,7 @@ const tokenBlock = (token: string): number | undefined => {
  */
 export function eventStream(
   o: EventStreamOptions,
-  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 },
+  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBufferedBytes: 0 },
 ): AsyncGenerator<Batch> {
   return new EventFetcher(o, stats).stream();
 }
@@ -104,11 +113,9 @@ class EventFetcher {
     this.#minSplit = o.minSplit ?? MIN_SPLIT;
     this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
     this.#maxBuffered =
-      o.maxBuffered ?? Math.max(MIN_BUFFERED, 4 * o.concurrency * this.#windowEvents);
-    this.#perWindow = Math.max(
-      4 * this.#windowEvents,
-      Math.floor(this.#maxBuffered / o.concurrency),
-    );
+      o.maxBufferedBytes ??
+      Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * HEAP_SHARE * (o.share ?? 1)));
+    this.#perWindow = Math.floor(this.#maxBuffered / o.concurrency);
     this.#windows = [
       {
         from: o.from,
@@ -117,6 +124,7 @@ class EventFetcher {
         fetchedUntil: o.from,
         token: undefined,
         events: [],
+        bytes: 0,
         state: "idle",
       },
     ];
@@ -133,8 +141,10 @@ class EventFetcher {
         const w = windows[0]!;
         let events: EmittedEvent[];
         let through: number;
+        let bytes: number;
         if (w.state === "done") {
           events = w.events;
+          bytes = w.bytes;
           windows.shift();
           through = w.until - 1;
         } else {
@@ -146,9 +156,12 @@ class EventFetcher {
             continue;
           }
           events = w.events.splice(0, n);
+          bytes = 0;
+          for (const e of events) bytes += approxBytes(e);
+          w.bytes -= bytes;
           through = w.fetchedUntil - 1;
         }
-        this.#buffered -= events.length;
+        this.#buffered -= bytes;
         this.#notify();
         yield { events, through };
       }
@@ -171,7 +184,7 @@ class EventFetcher {
 
   #mayFetch(w: Window): boolean {
     const front = w === this.#windows[0];
-    if (!front && w.events.length >= this.#perWindow) return false;
+    if (!front && w.bytes >= this.#perWindow) return false;
     if (this.#buffered < this.#maxBuffered) return true;
     if (!front && this.#buffered >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
     return this.#heldThrough(w) < this.#maxBuffered;
@@ -180,7 +193,7 @@ class EventFetcher {
   #heldThrough(w: Window): number {
     let n = 0;
     for (const x of this.#windows) {
-      n += x.events.length;
+      n += x.bytes;
       if (x === w) return n;
     }
     return Number.POSITIVE_INFINITY;
@@ -214,6 +227,7 @@ class EventFetcher {
       fetchedUntil: cut,
       token: undefined,
       events: [],
+      bytes: 0,
       state: "idle",
     };
     this.#windows.splice(this.#windows.indexOf(w) + 1, 0, rest);
@@ -255,14 +269,17 @@ class EventFetcher {
       const page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
       stats.pages++;
       let kept = 0;
+      let bytes = 0;
       for (const e of page.events) {
         if (e.block_number! >= w.until) break;
         w.events.push(e);
+        bytes += approxBytes(e);
         kept++;
       }
-      this.#buffered += kept;
+      w.bytes += bytes;
+      this.#buffered += bytes;
       stats.events += kept;
-      if (this.#buffered > stats.peakBuffered) stats.peakBuffered = this.#buffered;
+      if (this.#buffered > stats.peakBufferedBytes) stats.peakBufferedBytes = this.#buffered;
       const token = page.continuation_token;
       const at =
         token === undefined
@@ -312,10 +329,12 @@ class EventFetcher {
     return {
       buffered: this.#buffered,
       maxBuffered: this.#maxBuffered,
+      bufferedEvents: this.#windows.reduce((n, w) => n + w.events.length, 0),
       windows: this.#windows.length,
       running: count("running"),
       paused: count("idle"),
       done: count("done"),
+      workers: this.#workers.length,
       idleWorkers: this.#waiting,
     };
   }
@@ -325,7 +344,7 @@ class EventFetcher {
 export async function fetchEvents(
   o: EventStreamOptions & { onEvents: (events: EmittedEvent[], through: number) => void },
 ): Promise<FetchStats> {
-  const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBuffered: 0 };
+  const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBufferedBytes: 0 };
   for await (const batch of eventStream(o, stats)) o.onEvents(batch.events, batch.through);
   return stats;
 }

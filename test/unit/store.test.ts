@@ -5,6 +5,7 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum } from "../../src/config/schema.ts";
 import { Store } from "../../src/db/store.ts";
 import { createTableSql, jsonSafe, tableInfo } from "../../src/db/table.ts";
+import { approxBytes } from "../../src/utils/memory.ts";
 
 const url = process.env.DATABASE_URL;
 const schema = "kasbah_test_store";
@@ -15,6 +16,7 @@ const balances = pgTable("balances", {
   updates: integer().notNull(),
   note: text(),
 });
+const transfers = pgTable("transfers", { id: text().primaryKey(), amount: bignum().notNull() });
 
 let pool: pg.Pool;
 
@@ -120,11 +122,14 @@ test.skipIf(url === undefined)(
         return (pool.query as (...x: unknown[]) => unknown)(...a);
       },
     } as unknown as pg.Pool;
-    const store = new Store(drizzle(counting), [balances], { complete: true, maxCachedRows: 10 });
     const row = (i: number) => ({
       owner: `0x${i.toString(16).padStart(4, "0")}`,
       amount: BigInt(i),
       updates: 0,
+    });
+    const store = new Store(drizzle(counting), [balances], {
+      complete: true,
+      maxCachedBytes: 10 * (approxBytes(row(0)) + 64),
     });
 
     for (let i = 0; i < 30; i++) await store.db.insert(balances).values(row(i));
@@ -159,6 +164,71 @@ test.skipIf(url === undefined)(
     } finally {
       c.release();
     }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "the cache limit is in bytes for all tables together, and the tables read least go first",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances; DROP TABLE IF EXISTS transfers`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    await pool.query(createTableSql(tableInfo(transfers)));
+    const owner = (i: number) => `0x${i.toString(16).padStart(4, "0")}`;
+    const balance = (i: number) => ({ owner: owner(i), amount: 0n, updates: 0 });
+    const budget = 200 * (approxBytes(balance(0)) + 64);
+    let queries = 0;
+    const counting = {
+      ...pool,
+      query: (...a: unknown[]) => {
+        queries++;
+        return (pool.query as (...x: unknown[]) => unknown)(...a);
+      },
+    } as unknown as pg.Pool;
+    const store = new Store(drizzle(counting), [balances, transfers], {
+      complete: true,
+      maxCachedBytes: budget,
+    });
+    for (let i = 0; i < 50; i++) await store.db.insert(balances).values(balance(i));
+    for (let block = 0; block < 20; block++) {
+      for (let i = 0; i < 50; i++) {
+        await store.db
+          .update(balances, { owner: owner(i) })
+          .set((r) => ({ updates: r.updates + 1 }));
+        await store.db
+          .insert(transfers)
+          .values({ id: `${block}:${i}`, amount: BigInt(block * 50 + i) });
+      }
+      await inTransaction((c) => store.flush(c));
+    }
+    queries = 0;
+    for (let i = 0; i < 50; i++)
+      expect((await store.db.find(balances, { owner: owner(i) }))?.updates).toBe(20);
+    expect(queries).toBe(0);
+    expect(
+      (await pool.query(`SELECT count(*)::int AS n FROM transfers`)).rows[0].n +
+        (await pool.query(`SELECT sum(updates)::int AS u FROM balances`)).rows[0].u,
+    ).toBe(1000 + 1000);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "pendingBytes counts the rows a flush would write, once per key, and is zero after it",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    const store = new Store(drizzle(pool), [balances], { complete: true });
+    const row = (i: number, updates = 0) => ({ owner: `0x${i}`, amount: BigInt(i), updates });
+    for (let i = 0; i < 10; i++) await store.db.insert(balances).values(row(i));
+    const ten = store.pendingBytes;
+    expect(ten).toBe(
+      Array.from({ length: 10 }, (_, i) => approxBytes(row(i))).reduce((a, b) => a + b),
+    );
+    await store.db.update(balances, { owner: "0x3" }).set({ updates: 1 });
+    expect(store.pendingBytes).toBe(ten);
+    await store.db.delete(balances, { owner: "0x4" });
+    expect(store.pendingBytes).toBe(ten - approxBytes(row(4)));
+    await inTransaction((c) => store.flush(c));
+    expect(store.pendingBytes).toBe(0);
   },
 );
 

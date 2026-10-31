@@ -389,11 +389,11 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
   if (g !== undefined) {
     label(
       "buffer",
-      `${compact(g.buffered)} / ${compact(g.maxBuffered)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`,
+      `${bytes(g.buffered)} / ${bytes(g.maxBuffered)} · ${compact(g.bufferedEvents)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`,
     );
     label(
       "windows",
-      `${g.running} running · ${g.paused} paused · ${g.done} done, not read · ${g.idleWorkers} idle workers ${p.dim(`of ${g.windows}`)}`,
+      `${g.running} running · ${g.paused} paused · ${g.done} done, not read ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
     );
   }
   label(

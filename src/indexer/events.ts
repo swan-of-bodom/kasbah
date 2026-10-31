@@ -21,6 +21,7 @@ export async function* events(
   to: number,
   final: boolean,
   cached = true,
+  share = 1,
 ): AsyncGenerator<Batch> {
   const { rpc, endpoint, config, status } = run;
   const cache = final && cached ? run.cache : undefined;
@@ -48,6 +49,7 @@ export async function* events(
     to,
     chunkSize: endpoint.maxChunk,
     concurrency: config.concurrency,
+    share,
     gauges,
   })) {
     cache?.add(batch.events);
@@ -68,14 +70,16 @@ export function watchedEvents(
   final: boolean,
 ): AsyncGenerator<Batch> {
   const { sources } = run;
-  const main = shared(run, from, to, final);
-  if (sources.streams.length === 0) return main;
+  if (sources.streams.length === 0) return shared(run, from, to, final);
+  const share = 1 / (1 + sources.streams.length);
   return merge([
-    main,
+    shared(run, from, to, final, share),
     ...sources.streams.flatMap((s) => {
       const start = Math.max(from, s.from);
       const end = Math.min(to, s.to ?? to);
-      return end < start ? [] : [events(run, s.addresses, s.keys, start, end, final, s.cached)];
+      return end < start
+        ? []
+        : [events(run, s.addresses, s.keys, start, end, final, s.cached, share)];
     }),
   ]);
 }
@@ -85,7 +89,13 @@ export function watchedEvents(
  * for the addresses started by then, so a contract starting late isn't fetched (and dropped) from the earliest start.
  * Factory children join at once: nothing is emitted before their creation.
  */
-async function* shared(run: Run, from: number, to: number, final: boolean): AsyncGenerator<Batch> {
+async function* shared(
+  run: Run,
+  from: number,
+  to: number,
+  final: boolean,
+  share = 1,
+): AsyncGenerator<Batch> {
   const { sources } = run;
   const startOf = (a: string) => {
     const w = sources.byAddress.get(a)!;
@@ -95,14 +105,14 @@ async function* shared(run: Run, from: number, to: number, final: boolean): Asyn
     .filter((s) => s > from && s <= to)
     .sort((a, b) => a - b);
   if (cuts.length === 0) {
-    yield* events(run, sources.addresses, sources.keys, from, to, final);
+    yield* events(run, sources.addresses, sources.keys, from, to, final, true, share);
     return;
   }
   const edges = [from, ...cuts, to + 1];
   for (let i = 0; i < edges.length - 1; i++) {
     const [lo, hi] = [edges[i]!, edges[i + 1]! - 1];
     const started = sources.addresses.filter((a) => startOf(a) <= lo);
-    yield* events(run, started, sources.keys, lo, hi, final);
+    yield* events(run, started, sources.keys, lo, hi, final, true, share);
   }
 }
 

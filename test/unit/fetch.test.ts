@@ -1,7 +1,8 @@
 import { expect, test } from "vitest";
 import type { RpcClient } from "../../src/rpc/client.ts";
 import type { EmittedEvent, EventFilter } from "../../src/rpc/methods.ts";
-import { fetchEvents } from "../../src/sync/fetch.ts";
+import { eventStream, type FetchGauges, fetchEvents } from "../../src/sync/fetch.ts";
+import { approxBytes, heapLimit } from "../../src/utils/memory.ts";
 
 /** A Pathfinder-like node: pages of `chunk` events, at most `scanLimit` blocks per call, token `"<block>-<matched skipped>"`. */
 function fakeNode(events: EmittedEvent[], scanLimit: number) {
@@ -43,7 +44,7 @@ function fakeNode(events: EmittedEvent[], scanLimit: number) {
   return { rpc: rpc as unknown as RpcClient, calls: () => calls };
 }
 
-function syntheticEvents(blocks: number, seed: number): EmittedEvent[] {
+function syntheticEvents(blocks: number, seed: number, felts = 0): EmittedEvent[] {
   let s = seed;
   const rand = () => (s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31;
   const out: EmittedEvent[] = [];
@@ -55,7 +56,7 @@ function syntheticEvents(blocks: number, seed: number): EmittedEvent[] {
       out.push({
         from_address: "0x1",
         keys: [],
-        data: [],
+        data: Array.from({ length: felts }, (_, j) => `0x${(b * 64 + j).toString(16)}`),
         block_number: b,
         transaction_hash: "0x0",
         transaction_index: Math.floor(i / 4),
@@ -66,6 +67,8 @@ function syntheticEvents(blocks: number, seed: number): EmittedEvent[] {
   return out;
 }
 
+const maxBytes = (events: EmittedEvent[]) => Math.max(...events.map(approxBytes));
+
 test.each([
   { concurrency: 1, windowEvents: 256, maxBuffered: 100_000 },
   { concurrency: 4, windowEvents: 256, maxBuffered: 100_000 },
@@ -74,6 +77,7 @@ test.each([
   { concurrency: 16, windowEvents: 256, maxBuffered: 500 },
 ])("every event exactly once, in order: %o", async ({ concurrency, windowEvents, maxBuffered }) => {
   const events = syntheticEvents(20_000, concurrency);
+  const eventBytes = maxBytes(events);
   const node = fakeNode(events, 2_048);
   const seen: string[] = [];
   const stats = await fetchEvents({
@@ -84,7 +88,7 @@ test.each([
     chunkSize: 64,
     concurrency,
     windowEvents,
-    maxBuffered,
+    maxBufferedBytes: maxBuffered * eventBytes,
     onEvents(page) {
       for (const e of page) seen.push(`${e.block_number}:${e.transaction_index}:${e.event_index}`);
     },
@@ -95,6 +99,54 @@ test.each([
     events.map((e) => `${e.block_number}:${e.transaction_index}:${e.event_index}`),
   );
   // Three budgets (see `mayFetch`), plus one page from each request in flight.
-  expect(stats.peakBuffered).toBeLessThanOrEqual(3 * maxBuffered + concurrency * 64);
+  expect(stats.peakBufferedBytes).toBeLessThanOrEqual(
+    (3 * maxBuffered + concurrency * 64) * eventBytes,
+  );
   if (concurrency > 1) expect(stats.splits).toBeGreaterThan(0);
+});
+
+test("the budget is in bytes: larger events, fewer of them held at once", async () => {
+  const peaks = [];
+  for (const felts of [0, 40]) {
+    const events = syntheticEvents(20_000, 7, felts);
+    const budget = 2_000 * maxBytes(syntheticEvents(20_000, 7, 0));
+    let read: (() => FetchGauges) | undefined;
+    let peakEvents = 0;
+    const stats = await fetchEvents({
+      rpc: fakeNode(events, 2_048).rpc,
+      address: "0x1",
+      from: 0,
+      to: 19_999,
+      chunkSize: 64,
+      concurrency: 8,
+      windowEvents: 256,
+      maxBufferedBytes: budget,
+      gauges: (r) => (read = r),
+      onEvents() {
+        peakEvents = Math.max(peakEvents, read!().bufferedEvents);
+      },
+    });
+    expect(stats.events).toBe(events.length);
+    expect(stats.peakBufferedBytes).toBeLessThanOrEqual(3 * budget + 8 * 64 * maxBytes(events));
+    peaks.push(peakEvents);
+  }
+  expect(peaks[1]).toBeLessThan(peaks[0]! / 3);
+});
+
+test("without a budget, a fifteenth of the heap", async () => {
+  let gauges: (() => FetchGauges) | undefined;
+  const stream = eventStream({
+    rpc: fakeNode([], 2_048).rpc,
+    address: "0x1",
+    from: 0,
+    to: 10,
+    chunkSize: 64,
+    concurrency: 2,
+    share: 0.5,
+    gauges: (read) => (gauges = read),
+  });
+  for await (const _ of stream);
+  expect(gauges!().maxBuffered).toBe(
+    Math.max(8 * 2 ** 20, Math.floor(heapLimit() * (1 / 15) * 0.5)),
+  );
 });

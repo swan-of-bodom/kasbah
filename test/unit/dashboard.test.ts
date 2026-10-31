@@ -189,19 +189,21 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   Object.assign(s.time, { fetch: 1000, extras: 8000, handlers: 500, commit: 500 });
   s.debug = true;
   s.fetcher = () => ({
-    buffered: 5_000,
-    maxBuffered: 20_000,
+    buffered: 50 * 2 ** 20,
+    maxBuffered: 200 * 2 ** 20,
+    bufferedEvents: 41_000,
     windows: 40,
     running: 30,
     paused: 6,
     done: 4,
+    workers: 32,
     idleWorkers: 2,
   });
   const text = inside(render(s, { width: 110 })).join("\n");
   expect(text).toMatch(/events 10% {2}■ headers\/txs 80% {2}■ handlers 5%/);
   expect(text).toContain("bound by fetching headers and transactions");
-  expect(text).toMatch(/buffer +5,000 \/ 20.0k events \(25% of the memory budget\)/);
-  expect(text).toContain("30 running · 6 paused · 4 done, not read · 2 idle workers");
+  expect(text).toMatch(/buffer +50 MB \/ 200 MB · 41\.0k events \(25% of the memory budget\)/);
+  expect(text).toContain("30 running · 6 paused · 4 done, not read (40) · 2 of 32 workers idle");
 });
 
 test("live: the delay behind the chain, split between the node and us", () => {
