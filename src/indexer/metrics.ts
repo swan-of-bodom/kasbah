@@ -1,5 +1,61 @@
+import { monitorEventLoopDelay, PerformanceObserver, performance } from "node:perf_hooks";
+import { getHeapStatistics } from "node:v8";
 import { type Metric, prometheus, type Sample } from "../api/prometheus.ts";
 import type { Status } from "./status.ts";
+
+/** Since the last scrape: event loop delay and utilization. Since the first: time in garbage collection. */
+let loop:
+  | {
+      delay: ReturnType<typeof monitorEventLoopDelay>;
+      elu: ReturnType<typeof performance.eventLoopUtilization>;
+      gcMs: number;
+    }
+  | undefined;
+
+function processMetrics(): Metric[] {
+  if (loop === undefined) {
+    const delay = monitorEventLoopDelay({ resolution: 10 });
+    delay.enable();
+    loop = { delay, elu: performance.eventLoopUtilization(), gcMs: 0 };
+    const l = loop;
+    new PerformanceObserver((list) => {
+      for (const e of list.getEntries()) l.gcMs += e.duration;
+    }).observe({ entryTypes: ["gc"] });
+  }
+  const elu = performance.eventLoopUtilization(loop.elu);
+  loop.elu = performance.eventLoopUtilization();
+  const d = loop.delay;
+  // The histogram measures whole timer intervals: the delay is what goes past the resolution.
+  const past = (ns: number) => Math.max(0, ns / 1e9 - 0.01);
+  const delay: Metric = {
+    name: "event_loop_delay_seconds",
+    type: "gauge",
+    help: "Event loop delay since the last scrape, by quantile.",
+    samples:
+      d.count === 0
+        ? []
+        : [
+            [{ quantile: "0.5" }, past(d.percentile(50))],
+            [{ quantile: "0.99" }, past(d.percentile(99))],
+            [{ quantile: "1" }, past(d.max)],
+          ],
+  };
+  d.reset();
+  const heap = getHeapStatistics();
+  return [
+    one("heap_used_bytes", "gauge", "V8 heap in use.", heap.used_heap_size),
+    one("heap_limit_bytes", "gauge", "V8 heap limit.", heap.heap_size_limit),
+    one("rss_bytes", "gauge", "Resident memory of the process.", process.memoryUsage.rss()),
+    one("gc_seconds_total", "counter", "Time in garbage collection.", loop.gcMs / 1000),
+    one(
+      "event_loop_utilization",
+      "gauge",
+      "Share of the time since the last scrape the event loop was busy.",
+      elu.utilization,
+    ),
+    delay,
+  ];
+}
 
 const one = (name: string, type: Metric["type"], help: string, value: number): Metric => ({
   name,
@@ -13,7 +69,37 @@ export function metricsOf(status: Status): string {
   const rpc = status.rpc;
   const handlers = [...status.handlers];
   const head = status.head?.()?.number ?? status.tip;
+  const f = status.fetcher?.();
   return prometheus([
+    ...processMetrics(),
+    ...(f === undefined
+      ? []
+      : [
+          one(
+            "fetch_buffered_bytes",
+            "gauge",
+            "Events fetched, not yet handled (estimated).",
+            f.buffered,
+          ),
+          one("fetch_buffer_limit_bytes", "gauge", "The fetch buffer's budget.", f.maxBuffered),
+          one(
+            "fetch_buffered_events",
+            "gauge",
+            "Events fetched, not yet handled.",
+            f.bufferedEvents,
+          ),
+          {
+            name: "fetch_windows",
+            type: "gauge" as const,
+            help: "Fetch windows, by state.",
+            samples: [
+              [{ state: "running" }, f.running],
+              [{ state: "paused" }, f.paused],
+              [{ state: "done" }, f.done],
+            ] satisfies Sample[],
+          },
+          one("fetch_idle_workers", "gauge", "Fetch workers with nothing to do.", f.idleWorkers),
+        ]),
     {
       name: "phase",
       type: "gauge",

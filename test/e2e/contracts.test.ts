@@ -201,6 +201,10 @@ test.skipIf(url === undefined)(
     expect(live).toContain(`kasbah_handler_calls_total{handler="C:Counted"} ${BLOCKS}`);
     expect(live).toMatch(/kasbah_rpc_method_calls_total\{method="starknet_getEvents"\} \d+/);
     expect(live).toContain("# TYPE kasbah_events_handled_total counter");
+    expect(live).toMatch(/kasbah_heap_used_bytes \d+/);
+    expect(live).toMatch(/kasbah_heap_limit_bytes \d+/);
+    expect(live).toMatch(/kasbah_gc_seconds_total [\d.e-]+/);
+    expect(live).toMatch(/kasbah_event_loop_utilization [\d.e-]+/);
 
     const served = await a.serve();
     try {
