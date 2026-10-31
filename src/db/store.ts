@@ -18,6 +18,11 @@ const CACHE_KEPT = 0.8;
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
+type Taken = { s: State; pending: Map<string, Pending> };
+
+/** Rows taken out by `detach`, being written while handlers go on. */
+export type Flight = { tables: Taken[]; done: Promise<void>; settle: (ok: boolean) => void };
+
 type State = {
   info: TableInfo;
   cache: Map<string, Row | null>;
@@ -88,6 +93,7 @@ export class Store {
   readonly #tables = new Map<PgTable, State>();
   readonly #orm: NodePgDatabase;
   readonly #maxCachedBytes: number;
+  #flight: Flight | undefined;
   /** Record pre-images for the undo journal (blocks inside the reorg window). */
   journal = false;
 
@@ -125,6 +131,7 @@ export class Store {
       return cached;
     }
     if (s.complete) return null;
+    if (!s.keyed && this.#flight !== undefined) await this.#flight.done;
     await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
@@ -263,17 +270,59 @@ export class Store {
    * Writes every buffered change with `client`, inside the caller's transaction. In journal mode, `block` tags the
    * pre-images written to the undo journal.
    */
+  /** Writes every pending row inside the caller's transaction. Then, after COMMIT, `evict`. */
   async flush(client: PoolClient, block?: number): Promise<void> {
     if (this.journal) {
       if (block === undefined) throw new Error("journal mode needs the block being flushed");
       await this.#writeJournal(client, block);
     }
+    await this.#writeTables(client, this.#take());
+  }
+
+  /**
+   * Takes the pending rows out for a flush that runs while handlers go on writing: what `flushDetached` writes is
+   * exactly what was pending now. Until `landed`, a table's primary key waits for it (two connections would both
+   * build it).
+   */
+  detach(): Flight {
+    if (this.journal) throw new Error("detach is for final batches, without the journal");
+    let settle!: (ok: boolean) => void;
+    const done = new Promise<void>((resolve, reject) => {
+      settle = (ok) => (ok ? resolve() : reject(new Error("the commit in flight failed")));
+    });
+    done.catch(() => {});
+    const flight: Flight = { tables: this.#take(), done, settle };
+    this.#flight = flight;
+    return flight;
+  }
+
+  flushDetached(client: PoolClient, flight: Flight): Promise<void> {
+    return this.#writeTables(client, flight.tables);
+  }
+
+  /** After the flight's transaction: committed (`ok`), or the run fails. */
+  landed(flight: Flight, ok: boolean) {
+    if (this.#flight === flight) this.#flight = undefined;
+    flight.settle(ok);
+  }
+
+  #take(): Taken[] {
+    const out: Taken[] = [];
     for (const s of this.#tables.values()) {
       if (s.pending.size === 0) continue;
+      out.push({ s, pending: s.pending });
+      s.pending = new Map();
+      s.pendingBytes = 0;
+    }
+    return out;
+  }
+
+  async #writeTables(client: PoolClient, taken: Taken[]) {
+    for (const { s, pending } of taken) {
       const inserts: Row[] = [];
       const upserts: Row[] = [];
       const deletes: Row[] = [];
-      for (const p of s.pending.values())
+      for (const p of pending.values())
         (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
       const table = quote(s.info.name);
 
@@ -307,14 +356,14 @@ export class Store {
           `INSERT INTO ${table} SELECT * FROM ${temp} ON CONFLICT (${pk}) ${onConflict}`,
         );
       }
-      s.pending.clear();
-      s.pendingBytes = 0;
     }
-    this.#evict();
   }
 
-  /** Past `maxCachedBytes`, drops rows oldest first from the tables read least, as Ponder evicts by reads. */
-  #evict() {
+  /**
+   * Past `maxCachedBytes`, drops rows oldest first from the tables read least, as Ponder evicts by reads. Only after
+   * COMMIT, and never a pending row: a table no longer complete reads a missing row from Postgres, which must have it.
+   */
+  evict() {
     const tables = [...this.#tables.values()];
     let total = tables.reduce((n, s) => n + s.bytes, 0);
     if (total <= this.#maxCachedBytes) return;
@@ -322,6 +371,7 @@ export class Store {
     for (const s of tables.sort((a, b) => a.hits - b.hits)) {
       for (const [k, row] of s.cache) {
         if (total <= target) break;
+        if (s.pending.has(k)) continue;
         const n = approxBytes(k) + approxBytes(row);
         s.cache.delete(k);
         s.bytes -= n;

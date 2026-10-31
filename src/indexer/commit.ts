@@ -121,48 +121,57 @@ export class Position {
     };
     let undone = 0;
     const started = performance.now();
-    await transaction(pool, async (tx) => {
-      await lock.check(tx);
-      switch (c.kind) {
-        case "children":
-          await timed("cache", () => cache?.persist(tx, c.through));
-          await insertChildren(tx, c.children);
-          break;
-        case "batch":
-          await timed("tables", () => store.flush(tx));
-          await timed("cache", () => cache?.persist(tx, c.through));
-          break;
-        case "follow":
-          await saveHash(tx, c.head);
-          break;
-        case "block": {
-          const n = c.block.number;
-          await timed("tables", () => store.flush(tx, n));
-          await timed("cache", () => cache?.persist(tx, -1));
-          await insertChildren(tx, c.children);
-          await saveHash(tx, c.block);
-          await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [final()]);
-          await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [final()]);
-          break;
+    // Before any await: a batch writes what was pending when it was asked for, not rows handled since.
+    const flight = c.kind === "batch" ? store.detach() : undefined;
+    let ok = false;
+    try {
+      await transaction(pool, async (tx) => {
+        await lock.check(tx);
+        switch (c.kind) {
+          case "children":
+            await timed("cache", () => cache?.persist(tx, c.through));
+            await insertChildren(tx, c.children);
+            break;
+          case "batch":
+            await timed("tables", () => store.flushDetached(tx, flight!));
+            await timed("cache", () => cache?.persist(tx, c.through));
+            break;
+          case "follow":
+            await saveHash(tx, c.head);
+            break;
+          case "block": {
+            const n = c.block.number;
+            await timed("tables", () => store.flush(tx, n));
+            await timed("cache", () => cache?.persist(tx, -1));
+            await insertChildren(tx, c.children);
+            await saveHash(tx, c.block);
+            await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [final()]);
+            await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [final()]);
+            break;
+          }
+          case "revert":
+            await timed("tables", async () => (undone = await store.revert(tx, c.to.number)));
+            await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [c.to.number]);
+            await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [c.to.number]);
+            break;
         }
-        case "revert":
-          await timed("tables", async () => (undone = await store.revert(tx, c.to.number)));
-          await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [c.to.number]);
-          await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [c.to.number]);
-          break;
-      }
-      if (m.watermark !== undefined)
-        for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
-      if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
-      if (m.checkpoint !== undefined) {
-        await setMeta(tx, "checkpoint", m.checkpoint);
-        // Delivered at COMMIT: API servers re-run live queries.
-        await tx.query(`SELECT pg_notify($1, $2)`, [
-          liveChannel(schema),
-          JSON.stringify({ checkpoint: m.checkpoint }),
-        ]);
-      }
-    });
+        if (m.watermark !== undefined)
+          for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
+        if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
+        if (m.checkpoint !== undefined) {
+          await setMeta(tx, "checkpoint", m.checkpoint);
+          // Delivered at COMMIT: API servers re-run live queries.
+          await tx.query(`SELECT pg_notify($1, $2)`, [
+            liveChannel(schema),
+            JSON.stringify({ checkpoint: m.checkpoint }),
+          ]);
+        }
+      });
+      ok = true;
+    } finally {
+      if (flight !== undefined) store.landed(flight, ok);
+    }
+    store.evict();
     const ms = performance.now() - started;
     if (m.checkpoint !== undefined) this.#checkpoint = m.checkpoint;
     if (m.watermark !== undefined) this.#watermark = m.watermark;

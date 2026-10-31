@@ -43,6 +43,12 @@ async function inTransaction(body: (c: pg.PoolClient) => Promise<void>) {
   }
 }
 
+/** As `Position.commit` does: the flush in a transaction, then eviction after COMMIT. */
+async function commit(store: Store) {
+  await inTransaction((c) => store.flush(c));
+  store.evict();
+}
+
 const snapshot = async () =>
   (await pool.query(`SELECT owner, amount::text, updates, note FROM balances ORDER BY owner`))
     .rows as unknown[];
@@ -66,7 +72,7 @@ test.skipIf(url === undefined)(
       await store.db
         .insert(balances)
         .values({ owner, amount: 10n ** 30n, updates: 0, note: "a\tb\\c\n" });
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
 
     store.journal = true;
     const snapshots = new Map<number, unknown[]>([[100, await snapshot()]]);
@@ -133,12 +139,12 @@ test.skipIf(url === undefined)(
     });
 
     for (let i = 0; i < 30; i++) await store.db.insert(balances).values(row(i));
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     queries = 0;
     for (let i = 30; i < 60; i++) await store.db.insert(balances).values(row(i));
     expect(queries).toBe(0);
     await expect(store.db.insert(balances).values(row(59))).rejects.toThrow("already exists");
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
 
     expect(
       (
@@ -148,7 +154,7 @@ test.skipIf(url === undefined)(
       ).updates,
     ).toBe(1);
     expect(queries).toBeGreaterThan(0);
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect(
       (await pool.query(`SELECT count(*)::int AS n, sum(updates)::int AS u FROM balances`)).rows[0],
     ).toEqual({ n: 60, u: 1 });
@@ -198,7 +204,7 @@ test.skipIf(url === undefined)(
           .insert(transfers)
           .values({ id: `${block}:${i}`, amount: BigInt(block * 50 + i) });
       }
-      await inTransaction((c) => store.flush(c));
+      await commit(store);
     }
     queries = 0;
     for (let i = 0; i < 50; i++)
@@ -227,7 +233,7 @@ test.skipIf(url === undefined)(
     expect(store.pendingBytes).toBe(ten);
     await store.db.delete(balances, { owner: "0x4" });
     expect(store.pendingBytes).toBe(ten - approxBytes(row(4)));
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect(store.pendingBytes).toBe(0);
   },
 );
@@ -251,10 +257,10 @@ test.skipIf(url === undefined)(
       unkeyed: new Set(["balances"]),
     });
     for (let i = 0; i < 5; i++) await store.db.insert(balances).values(row(i));
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect(await hasKey()).toBe(false);
     await store.db.update(balances, { owner: "0x1" }).set({ updates: 1 });
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect(await hasKey()).toBe(true);
 
     await pool.query(`DROP TABLE balances`);
@@ -275,7 +281,7 @@ test.skipIf(url === undefined)(
       unkeyed: new Set(["balances"]),
     });
     await store.db.insert(balances).values(row(3));
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     const c = await pool.connect();
     try {
       await c.query("BEGIN");
@@ -320,7 +326,7 @@ test.skipIf(url === undefined)(
     await store.db.insert(swaps).values({ id: "a", params });
     await store.db.insert(swaps).values({ id: "b", params: null });
     expect((await store.db.find(swaps, { id: "a" }))?.params).toEqual(expected);
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect((await pool.query(`SELECT params FROM swaps WHERE id = 'a'`)).rows[0].params).toEqual(
       expected,
     );
@@ -355,7 +361,7 @@ test.skipIf(url === undefined)(
     expect(params).toEqual({ amount: { mag: "2" }, path: ["a", "c"] });
     expect(inserted.params).toEqual({ amount: { mag: "1" }, path: ["a"] });
     expect((await store.db.find(swaps, { id: "a" }))?.params).toEqual({ path: ["b"] });
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     expect((await pool.query(`SELECT params FROM swaps WHERE id = 'a'`)).rows[0].params).toEqual({
       path: ["b"],
     });
@@ -382,7 +388,7 @@ test.skipIf(url === undefined)(
     ];
     const store = new Store(drizzle(pool), [notes], { complete: true });
     for (const r of rows) await store.db.insert(notes).values(r);
-    await inTransaction((c) => store.flush(c));
+    await commit(store);
     const { rows: back } = await pool.query(`SELECT id, body, meta FROM notes ORDER BY id`);
     expect(back).toEqual([rows[1], rows[2], rows[0]]);
   },
