@@ -135,6 +135,12 @@ before indexing; we skip that round trip.
   ends at it; its filter streams end there as well.
 - **Windows aligned to 8,192 blocks** (the nodes' bloom aggregate size), at most 81,920 blocks (Pathfinder's scan
   cap). Windows run in parallel; inside a window, follow the token sequentially.
+- **Idle workers cut the front, not the whole range.** A window paused by the memory budget isn't work an idle
+  worker can take, so it doesn't count as some; cutting stops at the first window past which a new piece could not
+  fetch either. Counting paused windows as work left one worker on the window being read (Ekubo without the
+  cache: 339 s → 304 s to block 700k, median of 5 interleaved pairs, 3 won by 10–13%, the others within 1%). Not
+  stopping the cut there split every window on each page: 6,000 windows, and the pass over them stalled the
+  event loop for seconds. Every pass over the windows is one, with the bytes held so far carried along.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
 - Window size adapts to density: busy contracts get smaller windows so pages don't serialize a whole window;
   quiet contracts get 81,920-block windows that come back in one call.

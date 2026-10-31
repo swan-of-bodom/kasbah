@@ -177,12 +177,17 @@ class EventFetcher {
     return new Promise<void>((r) => this.#wakers.push(r));
   }
 
-  #mayFetch(w: Window): boolean {
+  #mayFetch(w: Window, held = this.#heldThrough(w)): boolean {
     const front = w === this.#windows[0];
     if (!front && w.bytes >= this.#perWindow) return false;
+    return this.#roomAt(held, front);
+  }
+
+  /** Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. */
+  #roomAt(held: number, front: boolean): boolean {
     if (this.#buffered < this.#maxBuffered) return true;
     if (!front && this.#buffered >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
-    return this.#heldThrough(w) < this.#maxBuffered;
+    return held < this.#maxBuffered;
   }
 
   #heldThrough(w: Window): number {
@@ -195,8 +200,10 @@ class EventFetcher {
   }
 
   #pick(): Window | undefined {
+    let held = 0;
     for (const w of this.#windows) {
-      if (w.state === "idle" && this.#mayFetch(w)) {
+      held += w.bytes;
+      if (w.state === "idle" && this.#mayFetch(w, held)) {
         w.state = "running";
         return w;
       }
@@ -234,9 +241,17 @@ class EventFetcher {
 
   #feed() {
     const windows = this.#windows;
-    let idle = windows.filter((x) => x.state === "idle" && this.#mayFetch(x)).length;
+    let held = 0;
+    let idle = 0;
+    for (const w of windows) {
+      held += w.bytes;
+      if (w.state === "idle" && this.#mayFetch(w, held)) idle++;
+    }
+    held = 0;
     for (let i = 0; i < windows.length && idle < this.#waiting; i++) {
       const w = windows[i]!;
+      held += w.bytes;
+      if (!this.#roomAt(held, false)) return;
       if (
         w.state !== "done" &&
         w.until - w.fetchedUntil > 2 * this.#span() &&

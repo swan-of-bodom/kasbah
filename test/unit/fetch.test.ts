@@ -194,3 +194,38 @@ test("windows paused by the budget don't keep idle workers from the front", asyn
   expect(stats.events).toBe(events.length);
   expect(requestMs / (performance.now() - started)).toBeGreaterThan(7);
 }, 60_000);
+
+test("after a dense start, cutting stops at the budget instead of splitting the whole range", async () => {
+  const BLOCKS = 1_000_000;
+  const events: EmittedEvent[] = [];
+  for (let b = 0; b < BLOCKS; b++)
+    if (b < 50_000 || b % 40 === 0)
+      events.push({
+        from_address: "0x1",
+        keys: [],
+        data: Array.from({ length: 20 }, (_, j) => `0x${(b + j).toString(16)}`),
+        block_number: b,
+        transaction_hash: "0x0",
+        transaction_index: 0,
+        event_index: 0,
+      });
+  let read: (() => FetchGauges) | undefined;
+  let maxWindows = 0;
+  const stats = await fetchEvents({
+    rpc: fakeNode(events, BLOCKS).rpc,
+    address: "0x1",
+    from: 0,
+    to: BLOCKS - 1,
+    chunkSize: 1024,
+    concurrency: 32,
+    maxBufferedBytes: 4_000_000,
+    gauges: (r) => (read = r),
+    onEvents(page) {
+      maxWindows = Math.max(maxWindows, read!().windows);
+      const until = performance.now() + page.length * 0.02;
+      while (performance.now() < until);
+    },
+  });
+  expect(stats.events).toBe(events.length);
+  expect(maxWindows).toBeLessThan(100);
+}, 60_000);
