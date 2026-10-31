@@ -84,13 +84,28 @@ export function counterNode(
           case "starknet_getEvents": {
             const f = params.filter;
             const from = f.address === undefined ? undefined : [f.address].flat().map(BigInt);
+            const matched = events.filter(
+              (e) =>
+                e.block_number >= f.from_block.block_number &&
+                e.block_number <= f.to_block.block_number &&
+                (from === undefined || from.includes(BigInt(e.from_address))),
+            );
+            // Pages of `chunk_size` with Pathfinder's `<block>-<index in block>` token, as kasbah reads it.
+            let at = 0;
+            if (f.continuation_token !== undefined) {
+              const [block, index] = f.continuation_token.split("-").map(Number);
+              while (at < matched.length && matched[at]!.block_number < block) at++;
+              at += index;
+            }
+            const end = Math.min(matched.length, at + (f.chunk_size ?? matched.length));
+            const next = matched[end];
+            const token =
+              next === undefined
+                ? undefined
+                : `${next.block_number}-${end - matched.findIndex((e) => e.block_number === next.block_number)}`;
             return ok({
-              events: events.filter(
-                (e) =>
-                  e.block_number >= f.from_block.block_number &&
-                  e.block_number <= f.to_block.block_number &&
-                  (from === undefined || from.includes(BigInt(e.from_address))),
-              ),
+              events: matched.slice(at, end),
+              ...(token === undefined ? {} : { continuation_token: token }),
             });
           }
         }

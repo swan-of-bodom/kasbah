@@ -393,3 +393,73 @@ test.skipIf(url === undefined)(
     expect(back).toEqual([rows[1], rows[2], rows[0]]);
   },
 );
+
+test.skipIf(url === undefined)(
+  "a detached batch writes exactly what was pending; rows written during its flush wait for the next",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    const store = new Store(drizzle(pool), [balances], { complete: true, maxCachedBytes: 1 });
+    const db = store.db;
+    for (let i = 0; i < 5; i++)
+      await db.insert(balances).values({ owner: `0x${i}`, amount: BigInt(i), updates: 0 });
+    const flight = store.detach();
+    // While it is written: a new row, an update of a row in flight, a delete of one.
+    await db.insert(balances).values({ owner: "0x9", amount: 9n, updates: 0 });
+    await db.update(balances, { owner: "0x1" }).set({ amount: 100n, updates: 1 });
+    await db.delete(balances, { owner: "0x2" });
+    expect((await db.find(balances, { owner: "0x1" }))?.amount).toBe(100n);
+    await inTransaction((c) => store.flushDetached(c, flight));
+    store.landed(flight, true);
+    expect(await snapshot()).toEqual([
+      { owner: "0x0", amount: "0", updates: 0, note: null },
+      { owner: "0x1", amount: "1", updates: 0, note: null },
+      { owner: "0x2", amount: "2", updates: 0, note: null },
+      { owner: "0x3", amount: "3", updates: 0, note: null },
+      { owner: "0x4", amount: "4", updates: 0, note: null },
+    ]);
+    // A budget of one byte: everything evictable goes, the rows still pending stay and read from memory.
+    store.evict();
+    expect((await db.find(balances, { owner: "0x1" }))?.amount).toBe(100n);
+    expect(await db.find(balances, { owner: "0x2" })).toBeNull();
+    expect((await db.find(balances, { owner: "0x9" }))?.amount).toBe(9n);
+    await commit(store);
+    expect(await snapshot()).toEqual([
+      { owner: "0x0", amount: "0", updates: 0, note: null },
+      { owner: "0x1", amount: "100", updates: 1, note: null },
+      { owner: "0x3", amount: "3", updates: 0, note: null },
+      { owner: "0x4", amount: "4", updates: 0, note: null },
+      { owner: "0x9", amount: "9", updates: 0, note: null },
+    ]);
+    // Evicted rows now read back from Postgres.
+    expect((await db.find(balances, { owner: "0x3" }))?.amount).toBe(3n);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a read that must build the primary key waits for the batch in flight",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances), { primaryKey: false }));
+    const store = new Store(drizzle(pool), [balances], {
+      complete: false,
+      unkeyed: new Set(["balances"]),
+    });
+    await store.db.insert(balances).values({ owner: "0xa", amount: 1n, updates: 0 });
+    const flight = store.detach();
+    let read = false;
+    const reading = store.db.find(balances, { owner: "0xb" }).then((r) => {
+      read = true;
+      return r;
+    });
+    await new Promise((r) => setTimeout(r, 200));
+    expect(read).toBe(false);
+    await inTransaction((c) => store.flushDetached(c, flight));
+    store.landed(flight, true);
+    expect(await reading).toBeNull();
+    const keys = await pool.query(
+      `SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'balances_pkey' AND contype = 'p'`,
+    );
+    expect(keys.rows[0].n).toBe(1);
+  },
+);
