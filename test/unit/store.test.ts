@@ -367,3 +367,23 @@ test.skipIf(url === undefined)(
     }).toThrow(TypeError);
   },
 );
+
+test.skipIf(url === undefined)(
+  "COPY keeps every character of text and jsonb: tabs, newlines, carriage returns, backslashes, quotes",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS notes`);
+    const notes = pgTable("notes", { id: text().primaryKey(), body: text(), meta: jsonb() });
+    await pool.query(createTableSql(tableInfo(notes)));
+    const nasty = 'a\tb\nc\rd\\e"f\\\\g\\nh\u0001i';
+    const rows = [
+      { id: "plain", body: "0xabc:1", meta: { k: "0x1", n: 2 } },
+      { id: "nasty", body: nasty, meta: { s: nasty, list: [nasty, "x"], deep: { s: nasty } } },
+      { id: "nulls", body: null, meta: null },
+    ];
+    const store = new Store(drizzle(pool), [notes], { complete: true });
+    for (const r of rows) await store.db.insert(notes).values(r);
+    await inTransaction((c) => store.flush(c));
+    const { rows: back } = await pool.query(`SELECT id, body, meta FROM notes ORDER BY id`);
+    expect(back).toEqual([rows[1], rows[2], rows[0]]);
+  },
+);
