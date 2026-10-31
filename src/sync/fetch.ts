@@ -234,7 +234,7 @@ class EventFetcher {
 
   #feed() {
     const windows = this.#windows;
-    let idle = windows.filter((x) => x.state === "idle").length;
+    let idle = windows.filter((x) => x.state === "idle" && this.#mayFetch(x)).length;
     for (let i = 0; i < windows.length && idle < this.#waiting; i++) {
       const w = windows[i]!;
       if (

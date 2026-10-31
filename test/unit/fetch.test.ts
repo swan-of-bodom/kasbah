@@ -150,3 +150,47 @@ test("without a budget, a fifteenth of the heap", async () => {
     Math.max(8 * 2 ** 20, Math.floor(heapLimit() * (1 / 15) * 0.5)),
   );
 });
+
+test("windows paused by the budget don't keep idle workers from the front", async () => {
+  const BLOCKS = 40_000;
+  const events: EmittedEvent[] = [];
+  for (let b = 0; b < BLOCKS; b++)
+    for (let i = 0; i < (b < BLOCKS / 2 ? (b % 40 === 0 ? 1 : 0) : 3); i++)
+      events.push({
+        from_address: "0x1",
+        keys: [],
+        data: [],
+        block_number: b,
+        transaction_hash: "0x0",
+        transaction_index: i,
+        event_index: 0,
+      });
+  const inner = fakeNode(events, BLOCKS).rpc as unknown as {
+    request: (method: string, params: { filter: EventFilter }) => Promise<unknown>;
+  };
+  let requestMs = 0;
+  const rpc = {
+    async request(method: string, params: { filter: EventFilter }): Promise<unknown> {
+      const t = performance.now();
+      await new Promise((r) => setTimeout(r, 5));
+      try {
+        return await inner.request(method, params);
+      } finally {
+        requestMs += performance.now() - t;
+      }
+    },
+  };
+  const started = performance.now();
+  const stats = await fetchEvents({
+    rpc: rpc as unknown as RpcClient,
+    address: "0x1",
+    from: 0,
+    to: BLOCKS - 1,
+    chunkSize: 64,
+    concurrency: 16,
+    maxBufferedBytes: 6 * 16 * 64 * maxBytes(events),
+    onEvents() {},
+  });
+  expect(stats.events).toBe(events.length);
+  expect(requestMs / (performance.now() - started)).toBeGreaterThan(7);
+}, 60_000);

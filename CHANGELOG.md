@@ -7,6 +7,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 - Memory follows the heap Node is given, so a small machine no longer crashes: the row cache is a fifth of it,
   shared by all tables, the fetch buffer at most another fifth, both counted in bytes. The Ekubo template that ran
   out of a 2 GB heap at block 500k now indexes 1.2M blocks in it.
+- A first sync without the cache no longer stalls on one request at a time: windows paused by the memory budget
+  no longer count as work for idle workers, so the window being read is cut and fetched in parallel (2× faster on
+  a slow fake node, with ~3× as many requests in flight).
 - A port already in use stops kasbah with a message saying so, instead of leaving it hung.
 - Rows `context.db` returns are read-only (and their jsonb values): changing one throws, instead of silently
   changing the cache so it disagrees with Postgres. Use `update` to change a row.
