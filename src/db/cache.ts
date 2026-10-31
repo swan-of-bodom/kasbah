@@ -11,7 +11,6 @@ import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
 import { quote } from "./table.ts";
 
-/** A felt's minimal big-endian bytes as hex ("" for zero), straight from its hex text. */
 export function feltHex(felt: string): string {
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(felt)) throw new Error(`not a felt: ${felt}`);
   let i = 2;
@@ -28,7 +27,6 @@ export function packFelts(felts: readonly string[]): Buffer {
   return Buffer.from(packFeltsHex(felts), "hex");
 }
 
-/** `packFelts` as hex, for COPY text. */
 export function packFeltsHex(felts: readonly string[]): string {
   let out = "";
   for (const f of felts) {

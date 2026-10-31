@@ -37,7 +37,6 @@ test("felts pack to minimal bytes and back", () => {
   expect(packFelts(["0x0", "0x5"]).length).toBe(3);
 });
 
-/** The encoding before it worked on the hex text: through a BigInt and Buffers. */
 const viaBigInt = (felts: string[]) =>
   Buffer.concat(
     felts.flatMap((f) => {

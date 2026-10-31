@@ -7,32 +7,22 @@ import { chunks } from "../utils/chunks.ts";
 import { errorCode } from "../utils/errors.ts";
 import { approxBytes, heapLimit } from "../utils/memory.ts";
 import { copyRows } from "./copy.ts";
-import { frozenJson, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
+import { primaryKeySql, quote, type Row, storedJson, type TableInfo, tableInfo } from "./table.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
-/** Share of the heap for cached rows, all tables together, as Ponder's indexing cache. */
-const HEAP_SHARE = 1 / 5;
-/** Share of `maxCachedBytes` left after an eviction, so the next flush doesn't evict again at once. */
+const CACHE_SHARE = 1 / 5;
 const CACHE_KEPT = 0.8;
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
-type Taken = { s: State; pending: Map<string, Pending> };
-
-/** Rows taken out by `detach`, being written while handlers go on. */
-export type Flight = { tables: Taken[]; done: Promise<void>; settle: (ok: boolean) => void };
-
 type State = {
   info: TableInfo;
   cache: Map<string, Row | null>;
-  /** Estimated, of `cache`'s keys and rows. */
-  bytes: number;
-  /** Reads `cache` answered: tables read least are evicted first. */
+  cachedBytes: number;
   hits: number;
   complete: boolean;
   pending: Map<string, Pending>;
-  /** Estimated, of `pending`'s rows. */
   pendingBytes: number;
   before: Map<string, Row | null>;
   keyed: boolean;
@@ -40,7 +30,6 @@ type State = {
 
 export type StoreOptions = {
   complete: boolean;
-  /** Estimated bytes of cached rows, all tables together. Default: `heap / 5`. */
   maxCachedBytes?: number;
   /**
    * Tables created without their primary key (backfill: a random key, like a transaction hash, made inserts four
@@ -93,19 +82,18 @@ export class Store {
   readonly #tables = new Map<PgTable, State>();
   readonly #orm: NodePgDatabase;
   readonly #maxCachedBytes: number;
-  #flight: Flight | undefined;
   /** Record pre-images for the undo journal (blocks inside the reorg window). */
   journal = false;
 
   constructor(orm: NodePgDatabase, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
-    this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * HEAP_SHARE);
+    this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * CACHE_SHARE);
     for (const t of tables) {
       const info = tableInfo(t);
       this.#tables.set(t, {
         info,
         cache: new Map(),
-        bytes: 0,
+        cachedBytes: 0,
         hits: 0,
         complete: options.complete,
         pending: new Map(),
@@ -131,30 +119,27 @@ export class Store {
       return cached;
     }
     if (s.complete) return null;
-    if (!s.keyed && this.#flight !== undefined) await this.#flight.done;
     await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
-    const row = found === undefined ? null : this.#freeze(s, found as Row);
-    this.#cache(s, k, row);
+    const row = found === undefined ? null : this.#asStored(s, found as Row);
+    this.#setNewest(s, k, row);
     return row;
   }
 
-  /** Rows are shared by the cache, pending writes and handlers: one a handler changed would differ from Postgres. */
-  #freeze(s: State, row: Row): Row {
-    for (const key of s.info.json) row[key] = frozenJson(row[key]);
+  #asStored(s: State, row: Row): Row {
+    for (const key of s.info.json) row[key] = storedJson(row[key]);
     return Object.freeze(row);
   }
 
-  /** Sets `k` as the newest entry, for eviction oldest first. */
-  #cache(s: State, k: string, row: Row | null, bytes = approxBytes(row)) {
+  #setNewest(s: State, k: string, row: Row | null, bytes = approxBytes(row)) {
     const old = s.cache.get(k);
     if (old !== undefined) {
       s.cache.delete(k);
-      s.bytes -= approxBytes(k) + approxBytes(old);
+      s.cachedBytes -= approxBytes(k) + approxBytes(old);
     }
     s.cache.set(k, row);
-    s.bytes += approxBytes(k) + bytes;
+    s.cachedBytes += approxBytes(k) + bytes;
   }
 
   #pend(s: State, k: string, p: Pending, bytes: number) {
@@ -169,8 +154,7 @@ export class Store {
   }
 
   #write(s: State, row: Row, before: Row | null) {
-    // jsonb in memory as Postgres will give it back, so a row reads the same before and after a flush.
-    this.#freeze(s, row);
+    this.#asStored(s, row);
     const existed = before !== null;
     const k = s.info.keyOf(row);
     this.#remember(s, k, before);
@@ -178,7 +162,7 @@ export class Store {
     const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
     const bytes = approxBytes(row);
     this.#pend(s, k, { op, row }, bytes);
-    this.#cache(s, k, row, bytes);
+    this.#setNewest(s, k, row, bytes);
   }
 
   #createDb(): Db {
@@ -247,7 +231,7 @@ export class Store {
           s.pending.delete(k);
           s.pendingBytes -= approxBytes(prior.row);
         } else this.#pend(s, k, { op: "delete", row: current }, approxBytes(current));
-        this.#cache(s, k, null);
+        this.#setNewest(s, k, null);
         return true;
       },
     };
@@ -259,7 +243,6 @@ export class Store {
     return n;
   }
 
-  /** Estimated bytes of the rows `flush` would write. */
   get pendingBytes(): number {
     let n = 0;
     for (const s of this.#tables.values()) n += s.pendingBytes;
@@ -270,111 +253,70 @@ export class Store {
    * Writes every buffered change with `client`, inside the caller's transaction. In journal mode, `block` tags the
    * pre-images written to the undo journal.
    */
-  /** Writes every pending row inside the caller's transaction. Then, after COMMIT, `evict`. */
   async flush(client: PoolClient, block?: number): Promise<void> {
     if (this.journal) {
       if (block === undefined) throw new Error("journal mode needs the block being flushed");
       await this.#writeJournal(client, block);
     }
-    await this.#writeTables(client, this.#take());
-  }
-
-  /**
-   * Takes the pending rows out for a flush that runs while handlers go on writing: what `flushDetached` writes is
-   * exactly what was pending now. Until `landed`, a table's primary key waits for it (two connections would both
-   * build it).
-   */
-  detach(): Flight {
-    if (this.journal) throw new Error("detach is for final batches, without the journal");
-    let settle!: (ok: boolean) => void;
-    const done = new Promise<void>((resolve, reject) => {
-      settle = (ok) => (ok ? resolve() : reject(new Error("the commit in flight failed")));
-    });
-    done.catch(() => {});
-    const flight: Flight = { tables: this.#take(), done, settle };
-    this.#flight = flight;
-    return flight;
-  }
-
-  flushDetached(client: PoolClient, flight: Flight): Promise<void> {
-    return this.#writeTables(client, flight.tables);
-  }
-
-  /** After the flight's transaction: committed (`ok`), or the run fails. */
-  landed(flight: Flight, ok: boolean) {
-    if (this.#flight === flight) this.#flight = undefined;
-    flight.settle(ok);
-  }
-
-  #take(): Taken[] {
-    const out: Taken[] = [];
     for (const s of this.#tables.values()) {
       if (s.pending.size === 0) continue;
-      out.push({ s, pending: s.pending });
-      s.pending = new Map();
+      await this.#writeTable(client, s);
+      s.pending.clear();
       s.pendingBytes = 0;
     }
-    return out;
+    this.#evict();
   }
 
-  async #writeTables(client: PoolClient, taken: Taken[]) {
-    for (const { s, pending } of taken) {
-      const inserts: Row[] = [];
-      const upserts: Row[] = [];
-      const deletes: Row[] = [];
-      for (const p of pending.values())
-        (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
-      const table = quote(s.info.name);
+  async #writeTable(client: PoolClient, s: State) {
+    const inserts: Row[] = [];
+    const upserts: Row[] = [];
+    const deletes: Row[] = [];
+    for (const p of s.pending.values())
+      (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
+    const table = quote(s.info.name);
 
-      if (upserts.length > 0 || deletes.length > 0)
-        await this.#addKey(s, (sql) => client.query(sql));
-      if (deletes.length > 0) await this.#delete(client, s.info, deletes);
-      if (inserts.length > 0) {
-        try {
-          await copyRows(client, s.info, table, inserts);
-        } catch (e) {
-          if (errorCode(e) === "23505")
-            throw new ConfigError(
-              `${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`,
-              { cause: e },
-            );
-          throw e;
-        }
+    if (upserts.length > 0 || deletes.length > 0) await this.#addKey(s, (sql) => client.query(sql));
+    if (deletes.length > 0) await this.#delete(client, s.info, deletes);
+    if (inserts.length > 0) {
+      try {
+        await copyRows(client, s.info, table, inserts);
+      } catch (e) {
+        if (errorCode(e) === "23505")
+          throw new ConfigError(
+            `${s.info.name}: insert of a key that already exists (${(e as { detail?: string }).detail ?? "duplicate key"})`,
+            { cause: e },
+          );
+        throw e;
       }
-      if (upserts.length > 0) {
-        const temp = quote(`_kasbah_${s.info.name}`);
-        await client.query(
-          `CREATE TEMP TABLE IF NOT EXISTS ${temp} (LIKE ${table}) ON COMMIT DELETE ROWS`,
-        );
-        await copyRows(client, s.info, temp, upserts);
-        const pk = s.info.primaryKey.map((c) => quote(c.column.name)).join(", ");
-        const set = s.info.columns
-          .filter((c) => !s.info.primaryKey.includes(c))
-          .map((c) => `${quote(c.column.name)} = EXCLUDED.${quote(c.column.name)}`);
-        const onConflict = set.length > 0 ? `DO UPDATE SET ${set.join(", ")}` : "DO NOTHING";
-        await client.query(
-          `INSERT INTO ${table} SELECT * FROM ${temp} ON CONFLICT (${pk}) ${onConflict}`,
-        );
-      }
+    }
+    if (upserts.length > 0) {
+      const temp = quote(`_kasbah_${s.info.name}`);
+      await client.query(
+        `CREATE TEMP TABLE IF NOT EXISTS ${temp} (LIKE ${table}) ON COMMIT DELETE ROWS`,
+      );
+      await copyRows(client, s.info, temp, upserts);
+      const pk = s.info.primaryKey.map((c) => quote(c.column.name)).join(", ");
+      const set = s.info.columns
+        .filter((c) => !s.info.primaryKey.includes(c))
+        .map((c) => `${quote(c.column.name)} = EXCLUDED.${quote(c.column.name)}`);
+      const onConflict = set.length > 0 ? `DO UPDATE SET ${set.join(", ")}` : "DO NOTHING";
+      await client.query(
+        `INSERT INTO ${table} SELECT * FROM ${temp} ON CONFLICT (${pk}) ${onConflict}`,
+      );
     }
   }
 
-  /**
-   * Past `maxCachedBytes`, drops rows oldest first from the tables read least, as Ponder evicts by reads. Only after
-   * COMMIT, and never a pending row: a table no longer complete reads a missing row from Postgres, which must have it.
-   */
-  evict() {
+  #evict() {
     const tables = [...this.#tables.values()];
-    let total = tables.reduce((n, s) => n + s.bytes, 0);
+    let total = tables.reduce((n, s) => n + s.cachedBytes, 0);
     if (total <= this.#maxCachedBytes) return;
     const target = this.#maxCachedBytes * CACHE_KEPT;
     for (const s of tables.sort((a, b) => a.hits - b.hits)) {
       for (const [k, row] of s.cache) {
         if (total <= target) break;
-        if (s.pending.has(k)) continue;
         const n = approxBytes(k) + approxBytes(row);
         s.cache.delete(k);
-        s.bytes -= n;
+        s.cachedBytes -= n;
         total -= n;
         s.complete = false;
       }
@@ -483,7 +425,7 @@ export class Store {
     }
     for (const s of this.#tables.values()) {
       s.cache.clear();
-      s.bytes = 0;
+      s.cachedBytes = 0;
       s.pending.clear();
       s.pendingBytes = 0;
       s.before.clear();

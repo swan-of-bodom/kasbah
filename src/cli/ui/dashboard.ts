@@ -389,7 +389,7 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
   if (g !== undefined) {
     label(
       "buffer",
-      `${bytes(g.buffered)} / ${bytes(g.maxBuffered)} · ${compact(g.bufferedEvents)} events ${p.dim(`(${Math.round((g.buffered / Math.max(1, g.maxBuffered)) * 100)}% of the memory budget)`)}`,
+      `${bytes(g.bufferedBytes)} / ${bytes(g.maxBufferedBytes)} · ${compact(g.bufferedEvents)} events ${p.dim(`(${Math.round((g.bufferedBytes / Math.max(1, g.maxBufferedBytes)) * 100)}% of the memory budget)`)}`,
     );
     label(
       "windows",

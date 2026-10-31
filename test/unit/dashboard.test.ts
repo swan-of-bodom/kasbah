@@ -189,8 +189,8 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   Object.assign(s.time, { fetch: 1000, extras: 8000, handlers: 500, commit: 500 });
   s.debug = true;
   s.fetcher = () => ({
-    buffered: 50 * 2 ** 20,
-    maxBuffered: 200 * 2 ** 20,
+    bufferedBytes: 50 * 2 ** 20,
+    maxBufferedBytes: 200 * 2 ** 20,
     bufferedEvents: 41_000,
     windows: 40,
     running: 30,

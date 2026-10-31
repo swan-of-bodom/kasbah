@@ -4,13 +4,13 @@ import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
+import { DEFAULTS } from "../../src/config/resolve.ts";
 import { counterAbi, counterNode } from "../fixtures/counter.ts";
 
 const url = process.env.DATABASE_URL;
 const schema = "kasbah_test_crash";
 const BLOCKS = 300_000;
-/** The last block that can't be reorged: the fake node's head less 64. */
-const TO = BLOCKS - 1 - 64;
+const LAST_FINAL_BLOCK = BLOCKS - 1 - DEFAULTS.reorgWindow;
 const node = counterNode(BLOCKS);
 const dir = mkdtempSync(join(resolve("test"), ".tmp-crash-"));
 const appFile = join(dir, "app.ts");
@@ -46,14 +46,13 @@ const start = (reset: boolean) =>
   spawn(
     process.execPath,
     [
-      // Rows waiting for a commit pass a tenth of the heap often: many commits, each overlapping handlers.
       "--max-old-space-size=192",
       "--no-warnings",
       "src/cli/main.ts",
       "start",
       appFile,
       "--to",
-      String(TO),
+      String(LAST_FINAL_BLOCK),
       "--no-ui",
       ...(reset ? ["--reset"] : []),
     ],
@@ -83,7 +82,7 @@ test.skipIf(url === undefined)(
       for (let i = 0; i < 600 && killedAt < 0; i++) {
         await new Promise((r) => setTimeout(r, 50));
         const c = await checkpoint();
-        if (c > 0 && c < TO) killedAt = c;
+        if (c > 0 && c < LAST_FINAL_BLOCK) killedAt = c;
       }
       if (first.exitCode === null && first.signalCode === null) {
         first.kill("SIGKILL");
@@ -98,12 +97,11 @@ test.skipIf(url === undefined)(
       const code = await new Promise((r) => second.once("exit", r));
       expect(out.join(""), out.join("")).not.toMatch(/already exists|duplicate/);
       expect(code).toBe(0);
-      const to = TO;
+      const to = LAST_FINAL_BLOCK;
       const { rows } = await db.query(
         `SELECT count(*)::int AS n, count(DISTINCT id)::int AS ids, min(block) AS lo, max(block) AS hi,
                 sum(block)::text AS blocks, sum(amount - block)::text AS extra FROM ${schema}.counted`,
       );
-      // The fake node's block n: one event, amount n + 1.
       expect(rows[0]).toEqual({
         n: to + 1,
         ids: to + 1,

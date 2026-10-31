@@ -16,30 +16,25 @@ export type EventStreamOptions = {
   windowEvents?: number;
   /** Smallest range worth splitting off. */
   minSplit?: number;
-  /** Bytes of events in memory before windows pause (see `mayFetch`), estimated. Default: `heap / 15`. */
   maxBufferedBytes?: number;
-  /** Of the default budget, for streams that run at once: they share it. */
-  share?: number;
+  budgetShare?: number;
   /** Receives a reader of the stream's state, for `--debug`. */
   gauges?: (read: () => FetchGauges) => void;
 };
 
 /** Smallest range, in blocks, worth splitting off a window for an idle worker. */
 const MIN_SPLIT = 64;
-/** Share of the heap for buffered events: the stream holds at most 3× its budget (`mayFetch`), so a fifth in all. */
-const HEAP_SHARE = 1 / 15;
-/** The budget's floor, so a small heap still reads a few pages ahead. */
 const MIN_BUFFERED_BYTES = 8 * 2 ** 20;
 /** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
 const DENSITY_DECAY = 0.9;
 /** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
 const FRONT_ONLY_PAST = 2;
+const BUFFER_SHARE = 1 / 5 / (FRONT_ONLY_PAST + 1);
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
-  /** Estimated bytes, like the budget. */
-  buffered: number;
-  maxBuffered: number;
+  bufferedBytes: number;
+  maxBufferedBytes: number;
   bufferedEvents: number;
   windows: number;
   running: number;
@@ -114,7 +109,7 @@ class EventFetcher {
     this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
     this.#maxBuffered =
       o.maxBufferedBytes ??
-      Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * HEAP_SHARE * (o.share ?? 1)));
+      Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * BUFFER_SHARE * (o.budgetShare ?? 1)));
     this.#perWindow = Math.floor(this.#maxBuffered / o.concurrency);
     this.#windows = [
       {
@@ -327,8 +322,8 @@ class EventFetcher {
   #gauges(): FetchGauges {
     const count = (state: Window["state"]) => this.#windows.filter((w) => w.state === state).length;
     return {
-      buffered: this.#buffered,
-      maxBuffered: this.#maxBuffered,
+      bufferedBytes: this.#buffered,
+      maxBufferedBytes: this.#maxBuffered,
       bufferedEvents: this.#windows.reduce((n, w) => n + w.events.length, 0),
       windows: this.#windows.length,
       running: count("running"),

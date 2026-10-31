@@ -142,11 +142,11 @@ test("without a budget, a fifteenth of the heap", async () => {
     to: 10,
     chunkSize: 64,
     concurrency: 2,
-    share: 0.5,
+    budgetShare: 0.5,
     gauges: (read) => (gauges = read),
   });
   for await (const _ of stream);
-  expect(gauges!().maxBuffered).toBe(
+  expect(gauges!().maxBufferedBytes).toBe(
     Math.max(8 * 2 ** 20, Math.floor(heapLimit() * (1 / 15) * 0.5)),
   );
 });

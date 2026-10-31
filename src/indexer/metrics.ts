@@ -3,30 +3,30 @@ import { getHeapStatistics } from "node:v8";
 import { type Metric, prometheus, type Sample } from "../api/prometheus.ts";
 import type { Status } from "./status.ts";
 
-/** Since the last scrape: event loop delay and utilization. Since the first: time in garbage collection. */
-let loop:
+const DELAY_RESOLUTION_MS = 10;
+
+let sinceScrape:
   | {
       delay: ReturnType<typeof monitorEventLoopDelay>;
       elu: ReturnType<typeof performance.eventLoopUtilization>;
-      gcMs: number;
     }
   | undefined;
+let gcMsTotal = 0;
 
 function processMetrics(): Metric[] {
-  if (loop === undefined) {
-    const delay = monitorEventLoopDelay({ resolution: 10 });
+  if (sinceScrape === undefined) {
+    const delay = monitorEventLoopDelay({ resolution: DELAY_RESOLUTION_MS });
     delay.enable();
-    loop = { delay, elu: performance.eventLoopUtilization(), gcMs: 0 };
-    const l = loop;
+    sinceScrape = { delay, elu: performance.eventLoopUtilization() };
     new PerformanceObserver((list) => {
-      for (const e of list.getEntries()) l.gcMs += e.duration;
+      for (const e of list.getEntries()) gcMsTotal += e.duration;
     }).observe({ entryTypes: ["gc"] });
   }
-  const elu = performance.eventLoopUtilization(loop.elu);
-  loop.elu = performance.eventLoopUtilization();
-  const d = loop.delay;
+  const elu = performance.eventLoopUtilization(sinceScrape.elu);
+  sinceScrape.elu = performance.eventLoopUtilization();
+  const d = sinceScrape.delay;
   // The histogram measures whole timer intervals: the delay is what goes past the resolution.
-  const past = (ns: number) => Math.max(0, ns / 1e9 - 0.01);
+  const past = (ns: number) => Math.max(0, ns / 1e9 - DELAY_RESOLUTION_MS / 1000);
   const delay: Metric = {
     name: "event_loop_delay_seconds",
     type: "gauge",
@@ -46,7 +46,7 @@ function processMetrics(): Metric[] {
     one("heap_used_bytes", "gauge", "V8 heap in use.", heap.used_heap_size),
     one("heap_limit_bytes", "gauge", "V8 heap limit.", heap.heap_size_limit),
     one("rss_bytes", "gauge", "Resident memory of the process.", process.memoryUsage.rss()),
-    one("gc_seconds_total", "counter", "Time in garbage collection.", loop.gcMs / 1000),
+    one("gc_seconds_total", "counter", "Time in garbage collection.", gcMsTotal / 1000),
     one(
       "event_loop_utilization",
       "gauge",
@@ -79,9 +79,14 @@ export function metricsOf(status: Status): string {
             "fetch_buffered_bytes",
             "gauge",
             "Events fetched, not yet handled (estimated).",
-            f.buffered,
+            f.bufferedBytes,
           ),
-          one("fetch_buffer_limit_bytes", "gauge", "The fetch buffer's budget.", f.maxBuffered),
+          one(
+            "fetch_buffer_limit_bytes",
+            "gauge",
+            "The fetch buffer's budget.",
+            f.maxBufferedBytes,
+          ),
           one(
             "fetch_buffered_events",
             "gauge",

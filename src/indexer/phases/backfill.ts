@@ -9,15 +9,9 @@ import type { BlockSource, Run } from "../open.ts";
 const FLUSH_EVENTS = 100_000;
 /** Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded. */
 const FLUSH_BYTES = 64 << 20;
-/** Longest the handler loop keeps the event loop before giving it a turn. */
 const YIELD_MS = 25;
-/** Share of the heap for rows written but not yet committed: the row cache evicts only at a commit. */
 const PENDING_SHARE = 1 / 10;
 
-/**
- * Final blocks from the checkpoint to the backfill's end: a commit every `FLUSH_EVENTS` events, `FLUSH_BYTES` of
- * extras, or a tenth of the heap in written rows.
- */
 export async function backfill(run: Run): Promise<void> {
   const { status, cache, signal, position } = run;
   const first = position.next;
@@ -94,7 +88,7 @@ async function handleBatch(
     await fireUntil(e.block_number!);
     await handle(run, e, extras, headers);
     // Handlers reading cached rows never wait on I/O: without a turn, the loop can't serve the API or read the
-    // next batch for a whole batch (as Ponder's indexing loop).
+    // next batch for a whole batch.
     if (performance.now() - since > YIELD_MS) {
       await new Promise(setImmediate);
       since = performance.now();

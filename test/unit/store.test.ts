@@ -4,7 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum } from "../../src/config/schema.ts";
 import { Store } from "../../src/db/store.ts";
-import { createTableSql, frozenJson, tableInfo } from "../../src/db/table.ts";
+import { createTableSql, storedJson, tableInfo } from "../../src/db/table.ts";
 import { approxBytes } from "../../src/utils/memory.ts";
 
 const url = process.env.DATABASE_URL;
@@ -43,11 +43,7 @@ async function inTransaction(body: (c: pg.PoolClient) => Promise<void>) {
   }
 }
 
-/** As `Position.commit` does: the flush in a transaction, then eviction after COMMIT. */
-async function commit(store: Store) {
-  await inTransaction((c) => store.flush(c));
-  store.evict();
-}
+const commit = (store: Store) => inTransaction((c) => store.flush(c));
 
 const snapshot = async () =>
   (await pool.query(`SELECT owner, amount::text, updates, note FROM balances ORDER BY owner`))
@@ -295,9 +291,9 @@ test.skipIf(url === undefined)(
   },
 );
 
-test("frozenJson: a frozen copy, bigints as decimal strings, the original untouched", () => {
+test("storedJson: a frozen copy, bigints as decimal strings, the original untouched", () => {
   const args = { key: { fee: 2n ** 127n, tick: { mag: 5n, sign: false } }, list: [1n, 2], at: 3 };
-  const out = frozenJson(args) as typeof args;
+  const out = storedJson(args) as typeof args;
   expect(out).toEqual({
     key: { fee: (2n ** 127n).toString(), tick: { mag: "5", sign: false } },
     list: ["1", 2],
@@ -355,7 +351,6 @@ test.skipIf(url === undefined)(
         (row.params as { path: string[] }).path.push("x");
       }).toThrow(TypeError);
     }
-    // What the handler passed in stays its own.
     params.path.push("c");
     params.amount.mag = "2";
     expect(params).toEqual({ amount: { mag: "2" }, path: ["a", "c"] });
@@ -391,75 +386,5 @@ test.skipIf(url === undefined)(
     await commit(store);
     const { rows: back } = await pool.query(`SELECT id, body, meta FROM notes ORDER BY id`);
     expect(back).toEqual([rows[1], rows[2], rows[0]]);
-  },
-);
-
-test.skipIf(url === undefined)(
-  "a detached batch writes exactly what was pending; rows written during its flush wait for the next",
-  async () => {
-    await pool.query(`DROP TABLE IF EXISTS balances`);
-    await pool.query(createTableSql(tableInfo(balances)));
-    const store = new Store(drizzle(pool), [balances], { complete: true, maxCachedBytes: 1 });
-    const db = store.db;
-    for (let i = 0; i < 5; i++)
-      await db.insert(balances).values({ owner: `0x${i}`, amount: BigInt(i), updates: 0 });
-    const flight = store.detach();
-    // While it is written: a new row, an update of a row in flight, a delete of one.
-    await db.insert(balances).values({ owner: "0x9", amount: 9n, updates: 0 });
-    await db.update(balances, { owner: "0x1" }).set({ amount: 100n, updates: 1 });
-    await db.delete(balances, { owner: "0x2" });
-    expect((await db.find(balances, { owner: "0x1" }))?.amount).toBe(100n);
-    await inTransaction((c) => store.flushDetached(c, flight));
-    store.landed(flight, true);
-    expect(await snapshot()).toEqual([
-      { owner: "0x0", amount: "0", updates: 0, note: null },
-      { owner: "0x1", amount: "1", updates: 0, note: null },
-      { owner: "0x2", amount: "2", updates: 0, note: null },
-      { owner: "0x3", amount: "3", updates: 0, note: null },
-      { owner: "0x4", amount: "4", updates: 0, note: null },
-    ]);
-    // A budget of one byte: everything evictable goes, the rows still pending stay and read from memory.
-    store.evict();
-    expect((await db.find(balances, { owner: "0x1" }))?.amount).toBe(100n);
-    expect(await db.find(balances, { owner: "0x2" })).toBeNull();
-    expect((await db.find(balances, { owner: "0x9" }))?.amount).toBe(9n);
-    await commit(store);
-    expect(await snapshot()).toEqual([
-      { owner: "0x0", amount: "0", updates: 0, note: null },
-      { owner: "0x1", amount: "100", updates: 1, note: null },
-      { owner: "0x3", amount: "3", updates: 0, note: null },
-      { owner: "0x4", amount: "4", updates: 0, note: null },
-      { owner: "0x9", amount: "9", updates: 0, note: null },
-    ]);
-    // Evicted rows now read back from Postgres.
-    expect((await db.find(balances, { owner: "0x3" }))?.amount).toBe(3n);
-  },
-);
-
-test.skipIf(url === undefined)(
-  "a read that must build the primary key waits for the batch in flight",
-  async () => {
-    await pool.query(`DROP TABLE IF EXISTS balances`);
-    await pool.query(createTableSql(tableInfo(balances), { primaryKey: false }));
-    const store = new Store(drizzle(pool), [balances], {
-      complete: false,
-      unkeyed: new Set(["balances"]),
-    });
-    await store.db.insert(balances).values({ owner: "0xa", amount: 1n, updates: 0 });
-    const flight = store.detach();
-    let read = false;
-    const reading = store.db.find(balances, { owner: "0xb" }).then((r) => {
-      read = true;
-      return r;
-    });
-    await new Promise((r) => setTimeout(r, 200));
-    expect(read).toBe(false);
-    await inTransaction((c) => store.flushDetached(c, flight));
-    store.landed(flight, true);
-    expect(await reading).toBeNull();
-    const keys = await pool.query(
-      `SELECT count(*)::int AS n FROM pg_constraint WHERE conname = 'balances_pkey' AND contype = 'p'`,
-    );
-    expect(keys.rows[0].n).toBe(1);
   },
 );

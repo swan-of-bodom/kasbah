@@ -40,7 +40,6 @@ test.skipIf(url === undefined)(
       await context.db
         .insert(counted)
         .values({ id: event.transaction.hash, block: event.block.number });
-      // Work a real handler might do, without I/O.
       let x = 0;
       for (let i = 0; i < 2_000; i++) x += Math.sqrt(i);
       if (x < 0) throw new Error();
@@ -57,7 +56,6 @@ test.skipIf(url === undefined)(
     } finally {
       clearInterval(timer);
     }
-    // Without the turns: about 1 s. With them, ~220 ms once, early in the backfill.
     expect(worst).toBeLessThan(500);
   },
   120_000,

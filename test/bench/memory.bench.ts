@@ -1,27 +1,26 @@
 import { bench, describe } from "vitest";
-import { frozenJson } from "../../src/db/table.ts";
+import { storedJson } from "../../src/db/table.ts";
 import { approxBytes } from "../../src/utils/memory.ts";
 
-/** An Ekubo `Swapped` row as the template stores it: three jsonb structs, bigints as strings. */
 const row = (i: number) => ({
   id: `0x${(i * 7919).toString(16).padStart(63, "0")}:${i}`,
   block: 300_000 + i,
   transaction: `0x${(i * 104729).toString(16).padStart(63, "0")}`,
   locker: `0x${(i * 31).toString(16).padStart(63, "0")}`,
-  pool_key: frozenJson({
+  pool_key: storedJson({
     token0: `0x${"a".repeat(63)}`,
     token1: `0x${"b".repeat(63)}`,
     fee: 170141183460469231731687303715884105n,
     tick_spacing: 5982n,
     extension: "0x0",
   }),
-  params: frozenJson({
+  params: storedJson({
     amount: { mag: 10n ** 18n + BigInt(i), sign: false },
     is_token1: true,
     sqrt_ratio_limit: 2n ** 190n,
     skip_ahead: 0n,
   }),
-  delta: frozenJson({
+  delta: storedJson({
     amount0: { mag: 123456789n * BigInt(i), sign: true },
     amount1: { mag: 987654321n, sign: false },
   }),

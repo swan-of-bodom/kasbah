@@ -21,7 +21,7 @@ export async function* events(
   to: number,
   final: boolean,
   cached = true,
-  share = 1,
+  budgetShare = 1,
 ): AsyncGenerator<Batch> {
   const { rpc, endpoint, config, status } = run;
   const cache = final && cached ? run.cache : undefined;
@@ -49,7 +49,7 @@ export async function* events(
     to,
     chunkSize: endpoint.maxChunk,
     concurrency: config.concurrency,
-    share,
+    budgetShare,
     gauges,
   })) {
     cache?.add(batch.events);
@@ -71,15 +71,15 @@ export function watchedEvents(
 ): AsyncGenerator<Batch> {
   const { sources } = run;
   if (sources.streams.length === 0) return shared(run, from, to, final);
-  const share = 1 / (1 + sources.streams.length);
+  const budgetShare = 1 / (1 + sources.streams.length);
   return merge([
-    shared(run, from, to, final, share),
+    shared(run, from, to, final, budgetShare),
     ...sources.streams.flatMap((s) => {
       const start = Math.max(from, s.from);
       const end = Math.min(to, s.to ?? to);
       return end < start
         ? []
-        : [events(run, s.addresses, s.keys, start, end, final, s.cached, share)];
+        : [events(run, s.addresses, s.keys, start, end, final, s.cached, budgetShare)];
     }),
   ]);
 }
@@ -94,7 +94,7 @@ async function* shared(
   from: number,
   to: number,
   final: boolean,
-  share = 1,
+  budgetShare = 1,
 ): AsyncGenerator<Batch> {
   const { sources } = run;
   const startOf = (a: string) => {
@@ -105,14 +105,14 @@ async function* shared(
     .filter((s) => s > from && s <= to)
     .sort((a, b) => a - b);
   if (cuts.length === 0) {
-    yield* events(run, sources.addresses, sources.keys, from, to, final, true, share);
+    yield* events(run, sources.addresses, sources.keys, from, to, final, true, budgetShare);
     return;
   }
   const edges = [from, ...cuts, to + 1];
   for (let i = 0; i < edges.length - 1; i++) {
     const [lo, hi] = [edges[i]!, edges[i + 1]! - 1];
     const started = sources.addresses.filter((a) => startOf(a) <= lo);
-    yield* events(run, started, sources.keys, lo, hi, final, true, share);
+    yield* events(run, started, sources.keys, lo, hi, final, true, budgetShare);
   }
 }
 

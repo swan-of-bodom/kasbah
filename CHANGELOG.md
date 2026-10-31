@@ -18,6 +18,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   alive while handlers run.
 - `/metrics` reports heap, GC time, event loop delay and utilization, and the fetch buffer.
 - The dashboard shows the fetch buffer in MB, and how many workers are idle out of how many.
+- `Status.fetcher`'s `buffered` and `maxBuffered` are now `bufferedBytes` and `maxBufferedBytes`: they count bytes,
+  no longer events.
 
 ## 0.1.1
 

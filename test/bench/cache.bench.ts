@@ -1,7 +1,6 @@
 import { bench, describe } from "vitest";
 import { packFeltsHex } from "../../src/db/cache.ts";
 
-/** Felts like an event's data: full-width hashes and small numbers. */
 const felts = Array.from({ length: 30 }, (_, i) =>
   i % 3 === 0
     ? `0x${(i + 1).toString(16)}`

@@ -34,7 +34,6 @@ const abi = [
 ] as const;
 
 const hash = (n: number) => `0x${(n + 1).toString(16)}bb`;
-/** Full-width felts, different in every block, so each event costs what a real one does. */
 const felt = (n: number, i: number) =>
   `0x${((BigInt(n) * 7919n + BigInt(i)) * 0x9e3779b97f4a7c15n).toString(16).slice(0, 62)}`;
 const event = (n: number) => ({
@@ -48,7 +47,6 @@ const event = (n: number) => ({
   event_index: 0,
 });
 
-/** One event per block, paged by `chunk_size` like Pathfinder; events are built per request, not held. */
 const server = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));

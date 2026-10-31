@@ -39,13 +39,12 @@ export function tableInfo(table: PgTable): TableInfo {
   return { table, name: config.name, columns, primaryKey, json, keyOf };
 }
 
-/** A frozen copy of `v` with every bigint as a decimal string, as jsonb holds it. */
-export function frozenJson(v: unknown): unknown {
+export function storedJson(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
   if (v === null || typeof v !== "object" || v instanceof Date) return v;
-  if (Array.isArray(v)) return Object.freeze(v.map(frozenJson));
+  if (Array.isArray(v)) return Object.freeze(v.map(storedJson));
   const out: Row = {};
-  for (const k in v as Row) out[k] = frozenJson((v as Row)[k]);
+  for (const k in v as Row) out[k] = storedJson((v as Row)[k]);
   return Object.freeze(out);
 }
 
