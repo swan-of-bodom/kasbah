@@ -33,6 +33,20 @@ CI runs the same three on every push to main and on every PR.
 - Comments: a doc comment on exported API and constants, and inline comments only for what the code cannot say
   (a node's quirk, an ordering that matters). No commented-out code.
 
+## Runs anywhere
+
+kasbah must work on any machine that can start it, from an old laptop to a large server, as Linux does: a smaller
+machine, a slower disk or a worse RPC may make it slower, never wrong, stuck or out of memory.
+
+- Limits follow what the process is given (the heap through `heapLimit()`), never a fixed size that assumes a
+  machine.
+- Nothing grows with the data (block range, event count, windows, rows) without a cap tied to a budget: a long
+  history must cost time, not memory.
+- Work per step stays small enough that the event loop keeps turning: no pass over a structure that can grow large
+  on every page or event.
+- A change that touches memory or the fetcher is also run at a small heap (`--max-old-space-size=512`) before
+  it is kept; `test/e2e/crash.test.ts` runs a backfill in 192 MB.
+
 ## Config compatibility
 
 Apps are written against the config type, so in a patch release:
