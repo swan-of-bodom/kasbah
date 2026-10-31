@@ -286,6 +286,9 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - In a table no longer known in full, plain inserts skip the existence check (a query per insert: JediSwap's 7M
   swaps went from 50k to 4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
   the error. `onConflictDo…`, `find` and `update` still read a missing row from Postgres.
+- The handler loop gives the event loop a turn every 25 ms (Ponder does the same). Handlers reading cached rows
+  never wait on I/O, so a 50k-event batch from the cache held it for a second: no API, and the next batch's read
+  waited. Measured on Ekubo: time waiting for events 23 s → 10 s, loop delay p99 1.2 s → 0.27 s.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
 - On a fresh run, tables live fully in memory until a memory cap, so reads in handlers never hit the database.

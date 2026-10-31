@@ -10,6 +10,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 - A port already in use stops kasbah with a message saying so, instead of leaving it hung.
 - Rows `context.db` returns are read-only (and their jsonb values): changing one throws, instead of silently
   changing the cache so it disagrees with Postgres. Use `update` to change a row.
+- The backfill gives the event loop a turn every 25 ms, as Ponder does: the API answers during a backfill, and
+  the next batch is read while handlers run (5% faster on the Ekubo template).
 - `/metrics` reports heap, GC time, event loop delay and utilization, and the fetch buffer.
 - The dashboard shows the fetch buffer in MB, and how many workers are idle out of how many.
 
