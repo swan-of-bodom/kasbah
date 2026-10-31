@@ -39,26 +39,14 @@ export function tableInfo(table: PgTable): TableInfo {
   return { table, name: config.name, columns, primaryKey, json, keyOf };
 }
 
-/** `v` with every bigint as a decimal string, as jsonb holds it; `v` itself when it has none. */
-export function jsonSafe(v: unknown): unknown {
+/** A frozen copy of `v` with every bigint as a decimal string, as jsonb holds it. */
+export function frozenJson(v: unknown): unknown {
   if (typeof v === "bigint") return v.toString();
   if (v === null || typeof v !== "object" || v instanceof Date) return v;
-  if (Array.isArray(v)) {
-    let out: unknown[] | undefined;
-    for (let i = 0; i < v.length; i++) {
-      const x = jsonSafe(v[i]);
-      if (x !== v[i]) (out ??= v.slice())[i] = x;
-    }
-    return out ?? v;
-  }
-  const o = v as Row;
-  let out: Row | undefined;
-  for (const k in o) {
-    const x = o[k];
-    const y = jsonSafe(x);
-    if (y !== x) (out ??= { ...o })[k] = y;
-  }
-  return out ?? v;
+  if (Array.isArray(v)) return Object.freeze(v.map(frozenJson));
+  const out: Row = {};
+  for (const k in v as Row) out[k] = frozenJson((v as Row)[k]);
+  return Object.freeze(out);
 }
 
 /**

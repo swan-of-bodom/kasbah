@@ -8,6 +8,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   shared by all tables, the fetch buffer at most another fifth, both counted in bytes. The Ekubo template that ran
   out of a 2 GB heap at block 500k now indexes 1.2M blocks in it.
 - A port already in use stops kasbah with a message saying so, instead of leaving it hung.
+- Rows `context.db` returns are read-only (and their jsonb values): changing one throws, instead of silently
+  changing the cache so it disagrees with Postgres. Use `update` to change a row.
+- `/metrics` reports heap, GC time, event loop delay and utilization, and the fetch buffer.
 - The dashboard shows the fetch buffer in MB, and how many workers are idle out of how many.
 
 ## 0.1.1

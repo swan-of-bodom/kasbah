@@ -7,7 +7,7 @@ import { chunks } from "../utils/chunks.ts";
 import { errorCode } from "../utils/errors.ts";
 import { approxBytes, heapLimit } from "../utils/memory.ts";
 import { copyRows } from "./copy.ts";
-import { jsonSafe, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
+import { frozenJson, primaryKeySql, quote, type Row, type TableInfo, tableInfo } from "./table.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
@@ -127,9 +127,16 @@ export class Store {
     if (s.complete) return null;
     await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
-    const [row] = await this.#orm.select().from(s.info.table).where(where).limit(1);
-    this.#cache(s, k, (row as Row | undefined) ?? null);
-    return (row as Row | undefined) ?? null;
+    const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
+    const row = found === undefined ? null : this.#freeze(s, found as Row);
+    this.#cache(s, k, row);
+    return row;
+  }
+
+  /** Rows are shared by the cache, pending writes and handlers: one a handler changed would differ from Postgres. */
+  #freeze(s: State, row: Row): Row {
+    for (const key of s.info.json) row[key] = frozenJson(row[key]);
+    return Object.freeze(row);
   }
 
   /** Sets `k` as the newest entry, for eviction oldest first. */
@@ -151,12 +158,12 @@ export class Store {
   }
 
   #remember(s: State, k: string, before: Row | null) {
-    if (this.journal && !s.before.has(k)) s.before.set(k, before === null ? null : { ...before });
+    if (this.journal && !s.before.has(k)) s.before.set(k, before);
   }
 
   #write(s: State, row: Row, before: Row | null) {
-    // In memory as Postgres will give it back, so a row reads the same before and after a flush.
-    for (const key of s.info.json) row[key] = jsonSafe(row[key]);
+    // jsonb in memory as Postgres will give it back, so a row reads the same before and after a flush.
+    this.#freeze(s, row);
     const existed = before !== null;
     const k = s.info.keyOf(row);
     this.#remember(s, k, before);

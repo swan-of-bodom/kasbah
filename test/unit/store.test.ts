@@ -4,7 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum } from "../../src/config/schema.ts";
 import { Store } from "../../src/db/store.ts";
-import { createTableSql, jsonSafe, tableInfo } from "../../src/db/table.ts";
+import { createTableSql, frozenJson, tableInfo } from "../../src/db/table.ts";
 import { approxBytes } from "../../src/utils/memory.ts";
 
 const url = process.env.DATABASE_URL;
@@ -289,16 +289,19 @@ test.skipIf(url === undefined)(
   },
 );
 
-test("jsonSafe: bigints become decimal strings, anything without one is returned as is", () => {
-  const plain = { a: [1, "x", { b: true }], c: null };
-  expect(jsonSafe(plain)).toBe(plain);
+test("frozenJson: a frozen copy, bigints as decimal strings, the original untouched", () => {
   const args = { key: { fee: 2n ** 127n, tick: { mag: 5n, sign: false } }, list: [1n, 2], at: 3 };
-  expect(jsonSafe(args)).toEqual({
+  const out = frozenJson(args) as typeof args;
+  expect(out).toEqual({
     key: { fee: (2n ** 127n).toString(), tick: { mag: "5", sign: false } },
     list: ["1", 2],
     at: 3,
   });
+  expect(Object.isFrozen(out) && Object.isFrozen(out.key.tick) && Object.isFrozen(out.list)).toBe(
+    true,
+  );
   expect(args.key.fee).toBe(2n ** 127n);
+  expect(Object.isFrozen(args.key)).toBe(false);
 });
 
 const swaps = pgTable("swaps", { id: text().primaryKey(), params: jsonb() });
@@ -325,5 +328,42 @@ test.skipIf(url === undefined)(
       (await new Store(drizzle(pool), [swaps], { complete: false }).db.find(swaps, { id: "a" }))
         ?.params,
     ).toEqual(expected);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "rows the store returns are read-only, so a handler can't change the cache behind Postgres's back",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS swaps`);
+    await pool.query(createTableSql(tableInfo(swaps)));
+    const store = new Store(drizzle(pool), [swaps], { complete: true });
+    const params = { amount: { mag: "1" }, path: ["a"] };
+    const inserted = await store.db.insert(swaps).values({ id: "a", params });
+    const found = (await store.db.find(swaps, { id: "a" }))!;
+    const updated = await store.db.update(swaps, { id: "a" }).set({ params: { path: ["b"] } });
+    for (const row of [inserted, found, updated]) {
+      expect(() => {
+        (row as { id: string }).id = "z";
+      }).toThrow(TypeError);
+      expect(() => {
+        (row.params as { path: string[] }).path.push("x");
+      }).toThrow(TypeError);
+    }
+    // What the handler passed in stays its own.
+    params.path.push("c");
+    params.amount.mag = "2";
+    expect(params).toEqual({ amount: { mag: "2" }, path: ["a", "c"] });
+    expect(inserted.params).toEqual({ amount: { mag: "1" }, path: ["a"] });
+    expect((await store.db.find(swaps, { id: "a" }))?.params).toEqual({ path: ["b"] });
+    await inTransaction((c) => store.flush(c));
+    expect((await pool.query(`SELECT params FROM swaps WHERE id = 'a'`)).rows[0].params).toEqual({
+      path: ["b"],
+    });
+    const fromDb = (await new Store(drizzle(pool), [swaps], { complete: false }).db.find(swaps, {
+      id: "a",
+    }))!;
+    expect(() => {
+      (fromDb as { id: string }).id = "z";
+    }).toThrow(TypeError);
   },
 );
