@@ -141,6 +141,9 @@ before indexing; we skip that round trip.
   cache: 339 s → 304 s to block 700k, median of 5 interleaved pairs, 3 won by 10–13%, the others within 1%). Not
   stopping the cut there split every window on each page: 6,000 windows, and the pass over them stalled the
   event loop for seconds. Every pass over the windows is one, with the bytes held so far carried along.
+  At a 512 MB heap (a ~34 MB buffer) it was 4% faster too (2 of 2 pairs, 747 s → 716 s mean), peak RSS 720 → 835 MB:
+  more pages in flight, which the budget doesn't count (32 workers × ~1.5 MB per Ekubo page). Tying the requests
+  in flight to the budget, with a hard cap on windows, is the follow-up.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
 - Window size adapts to density: busy contracts get smaller windows so pages don't serialize a whole window;
   quiet contracts get 81,920-block windows that come back in one call.
