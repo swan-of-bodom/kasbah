@@ -55,6 +55,11 @@ A performance change is kept only if it beats the noise, measured end to end, as
   alternating A, B, A, B: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
   fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down or the CPU's turbo is
   off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
+- `--rpc sim` fetches from `test/bench/node.ts` instead of the RPC: a simulated node that serves `getEvents` from
+  the event cache with hosted Pathfinder's limits after a fixed `--latency`, and replays other calls recorded once
+  from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
+  same node. The verdict is the median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left
+  out, and a run during which the CPU's turbo turned off stops the benchmark.
 - Decide on the median of 5 pairs or more and on how many pairs B won; a change inside the spread is noise.
 - Report time, peak memory and event-loop stops together: a change that speeds up one and worsens another is a
   trade-off for the user, not a win.

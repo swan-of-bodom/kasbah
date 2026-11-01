@@ -1,6 +1,7 @@
 // End-to-end A/B benchmark: an app in test/bench/apps run to `--to` on two builds of kasbah, alternating A, B, A, B.
 //   pnpm bench:app                                   HEAD against the working tree, 5 pairs, cached, to block 700k
 //   pnpm bench:app --a 0849af9 --b HEAD --cache off --heap 512 --pairs 3
+//   pnpm bench:app --rpc sim --latency 120          fetch from a simulated node (test/bench/node.ts), not the RPC
 // Each side is packed (`.` is the working tree, anything else a git rev) and installed into a copy of the app, so
 // both run the same handlers. Results go to test/bench/results.
 import { execFileSync, spawn } from "node:child_process";
@@ -30,8 +31,11 @@ const { values: a } = parseArgs({
     cache: { type: "string", default: "on" },
     port: { type: "string", default: "42169" },
     timeout: { type: "string", default: "3600" },
+    rpc: { type: "string", default: "real" },
+    latency: { type: "string", default: "120" },
   },
 });
+if (a.rpc === "sim") a.cache = "off";
 
 const repo = resolve(import.meta.dirname, "..");
 const appDir = join(repo, "test/bench/apps", a.app);
@@ -110,6 +114,32 @@ function build(side: "A" | "B", rev: string): string {
   return join(dir, "app");
 }
 
+const simPort = Number(a.port) + 1;
+let turboWentOff = false;
+
+/** Starts test/bench/node.ts, one for all runs, and resolves once it listens. */
+function simulatedNode(): Promise<ReturnType<typeof spawn>> {
+  const node = spawn(
+    process.execPath,
+    [
+      "--no-warnings",
+      join(repo, "test/bench/node.ts"),
+      "--port",
+      String(simPort),
+      "--latency",
+      a.latency,
+    ],
+    { stdio: ["ignore", "pipe", "inherit"], env: process.env },
+  );
+  console.log(`simulated node on :${simPort}, ${a.latency} ms per call`);
+  return new Promise((ready, fail) => {
+    node.on("exit", (code) => fail(new Error(`the simulated node exited (${code})`)));
+    node.stdout!.on("data", (d: Buffer) => {
+      if (d.toString().includes("ready")) ready(node);
+    });
+  });
+}
+
 function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefined> {
   if (turboOff()) throw new Error("CPU turbo went off during the runs: reboot and run again");
   const log = join(results, `${side}-${pair}.log`);
@@ -145,12 +175,29 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
   const child = spawn(cmd, args as string[], {
     cwd,
     stdio: ["ignore", fd, fd],
-    env: { ...process.env, PORT: a.port, KASBAH_BENCH_OUT: out, KASBAH_BENCH_CACHE: a.cache },
+    env: {
+      ...process.env,
+      ...(a.rpc === "sim" ? { KASBAH_RPC_URL: `http://127.0.0.1:${simPort}` } : {}),
+      PORT: a.port,
+      KASBAH_BENCH_OUT: out,
+      KASBAH_BENCH_CACHE: a.cache,
+    },
   });
   const timer = setTimeout(() => child.kill("SIGTERM"), Number(a.timeout) * 1000);
+  // The firmware can turn turbo off mid-run, which slows everything ~2x: such a run says nothing.
+  let slowed = false;
+  const watch = setInterval(() => {
+    if (turboOff()) slowed = true;
+  }, 2_000);
   return new Promise((done) =>
     child.on("exit", (code) => {
       clearTimeout(timer);
+      clearInterval(watch);
+      if (slowed) {
+        console.log(`pair ${pair} ${side}: discarded, CPU turbo went off during the run`);
+        turboWentOff = true;
+        return done(undefined);
+      }
       const seconds = readFileSync(log, "utf8").match(/handled in ([\d.]+)s/)?.[1];
       if (code !== 0 || seconds === undefined || !existsSync(out)) {
         console.log(`pair ${pair} ${side}: failed (exit ${code}), see ${log}`);
@@ -223,13 +270,19 @@ console.log(
   `${a.app} to block ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a.pairs} pairs; logs in ${results}`,
 );
 const dirs = { A: build("A", a.a), B: build("B", a.b) };
+const sim = a.rpc === "sim" ? await simulatedNode() : undefined;
 const runs: Run[] = [];
-for (let pair = 1; pair <= Number(a.pairs); pair++)
-  for (const side of ["A", "B"] as const) {
-    const r = await once(side, pair, dirs[side]);
-    if (r !== undefined) runs.push(r);
-  }
-const text = summary(runs);
-console.log(`\n${text}`);
-writeFileSync(join(results, "summary.json"), JSON.stringify({ options: a, runs }, null, 2));
-writeFileSync(join(results, "summary.txt"), `${JSON.stringify(a)}\n${text}\n`);
+try {
+  for (let pair = 1; pair <= Number(a.pairs); pair++)
+    for (const side of ["A", "B"] as const) {
+      const r = await once(side, pair, dirs[side]);
+      if (turboWentOff) throw new Error("CPU turbo went off during a run: reboot and run again");
+      if (r !== undefined) runs.push(r);
+    }
+} finally {
+  sim?.kill("SIGTERM");
+  const text = summary(runs);
+  console.log(`\n${text}`);
+  writeFileSync(join(results, "summary.json"), JSON.stringify({ options: a, runs }, null, 2));
+  writeFileSync(join(results, "summary.txt"), `${JSON.stringify(a)}\n${text}\n`);
+}
