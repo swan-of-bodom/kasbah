@@ -60,6 +60,11 @@ A performance change is kept only if it beats the noise, measured end to end, as
   from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
   same node. The verdict is the median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left
   out, and a run during which the CPU's turbo turned off stops the benchmark.
+- On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float):
+  a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports kasbah's own totals from
+  `/metrics` (in commits, in handlers, waiting for events) and its GC time, so a difference comes with where it is.
+- After each run the runner counts every app table's rows; the summary says if any run wrote different rows than
+  the others, so "faster" can't mean "skipped work".
 - Decide on the median of 5 pairs or more and on how many pairs B won; a change inside the spread is noise.
 - Report time, peak memory and event-loop stops together: a change that speeds up one and worsens another is a
   trade-off for the user, not a win.

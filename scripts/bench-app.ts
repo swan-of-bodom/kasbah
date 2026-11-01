@@ -33,6 +33,7 @@ const { values: a } = parseArgs({
     timeout: { type: "string", default: "3600" },
     rpc: { type: "string", default: "real" },
     latency: { type: "string", default: "120" },
+    pin: { type: "string", default: "auto" },
   },
 });
 if (a.rpc === "sim") a.cache = "off";
@@ -54,13 +55,89 @@ type Run = {
   maxGapMs: number;
   cpuSeconds: number;
   rpcMedianMs: number;
+  gcSeconds: number;
+  /** kasbah's own totals from /metrics: waiting for events, in handlers, in commits. */
+  waitSeconds: number;
+  handlerSeconds: number;
+  commitSeconds: number;
+  /** Rows per app table after the run, `table=count` sorted: every run of either side must write the same. */
+  rows: string;
 };
+
+const SCHEMA = "bench_run";
+
+async function rowCounts(): Promise<string> {
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    const { rows: tables } = await client.query<{ name: string }>(
+      `SELECT table_name AS name FROM information_schema.tables
+       WHERE table_schema = $1 AND table_name NOT LIKE '\\_kasbah%' ORDER BY table_name`,
+      [SCHEMA],
+    );
+    const counts: string[] = [];
+    for (const { name } of tables) {
+      const { rows } = await client.query<{ n: string }>(
+        `SELECT count(*) AS n FROM "${SCHEMA}"."${name}"`,
+      );
+      counts.push(`${name}=${rows[0]!.n}`);
+    }
+    return counts.join(",");
+  } finally {
+    await client.end();
+  }
+}
+
+/** The last `kasbah_seconds_total` values the run's /metrics served, by part. */
+async function parts(): Promise<Record<string, number> | undefined> {
+  try {
+    const text = await (
+      await fetch(`http://127.0.0.1:${a.port}/metrics`, { signal: AbortSignal.timeout(1_000) })
+    ).text();
+    const out: Record<string, number> = {};
+    for (const m of text.matchAll(/^kasbah_seconds_total\{part="(\w+)"\} ([\d.e+-]+)$/gm))
+      out[m[1]!] = Number(m[2]);
+    return out;
+  } catch {
+    return undefined;
+  }
+}
 
 /** Pairs whose RPC answered this much slower or faster on one side are left out of the comparison. */
 const RPC_DRIFT = 0.25;
 
 const sh = (cmd: string, args: string[], cwd: string) =>
   execFileSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
+
+const has = (cmd: string) => {
+  try {
+    execFileSync("which", [cmd], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+/**
+ * On a CPU with fast and slow cores, Linux moves a busy process between them, which changed a run's CPU time by up
+ * to ~60%: kasbah is pinned to the fastest cores, the simulated node to the others.
+ */
+function cpuSplit(): { fast: string; rest: string } | undefined {
+  const dir = "/sys/devices/system/cpu";
+  if (a.pin === "off" || !existsSync(dir) || !has("taskset")) return undefined;
+  const max = new Map<number, number>();
+  for (const d of readdirSync(dir)) {
+    const f = join(dir, d, "cpufreq/cpuinfo_max_freq");
+    if (/^cpu\d+$/.test(d) && existsSync(f))
+      max.set(Number(d.slice(3)), Number(readFileSync(f, "utf8")));
+  }
+  const top = Math.max(...max.values());
+  const cpus = [...max.keys()].sort((x, y) => x - y);
+  const fast = cpus.filter((c) => max.get(c) === top);
+  const rest = cpus.filter((c) => max.get(c) !== top);
+  return rest.length === 0 ? undefined : { fast: fast.join(","), rest: rest.join(",") };
+}
+const split = cpuSplit();
 
 function turboOff(): boolean {
   const intel = "/sys/devices/system/cpu/intel_pstate/no_turbo";
@@ -119,18 +196,18 @@ let turboWentOff = false;
 
 /** Starts test/bench/node.ts, one for all runs, and resolves once it listens. */
 function simulatedNode(): Promise<ReturnType<typeof spawn>> {
-  const node = spawn(
+  const pinned = split === undefined ? [] : ["taskset", "-c", split.rest];
+  const [cmd, ...args] = [
+    ...pinned,
     process.execPath,
-    [
-      "--no-warnings",
-      join(repo, "test/bench/node.ts"),
-      "--port",
-      String(simPort),
-      "--latency",
-      a.latency,
-    ],
-    { stdio: ["ignore", "pipe", "inherit"], env: process.env },
-  );
+    "--no-warnings",
+    join(repo, "test/bench/node.ts"),
+    "--port",
+    String(simPort),
+    "--latency",
+    a.latency,
+  ];
+  const node = spawn(cmd!, args, { stdio: ["ignore", "pipe", "inherit"], env: process.env });
   console.log(`simulated node on :${simPort}, ${a.latency} ms per call`);
   return new Promise((ready, fail) => {
     node.on("exit", (code) => fail(new Error(`the simulated node exited (${code})`)));
@@ -151,28 +228,22 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
     "node_modules/kasbah/dist/cli/main.js",
     "start",
     "--schema",
-    "bench_run",
+    SCHEMA,
     "--to",
     a.to,
     "--reset",
     "--no-ui",
   ];
-  const awake = (() => {
-    try {
-      execFileSync("which", ["systemd-inhibit"], { stdio: "ignore" });
-      return true;
-    } catch {
-      return false;
-    }
-  })();
-  const [cmd, args] = awake
-    ? [
-        "systemd-inhibit",
-        ["--what=sleep:idle", "--who=kasbah-bench", "--why=benchmark", process.execPath, ...node],
-      ]
-    : [process.execPath, node];
+  const [cmd, ...args] = [
+    ...(has("systemd-inhibit")
+      ? ["systemd-inhibit", "--what=sleep:idle", "--who=kasbah-bench", "--why=benchmark"]
+      : []),
+    ...(split === undefined ? [] : ["taskset", "-c", split.fast]),
+    process.execPath,
+    ...node,
+  ];
   const fd = openSync(log, "w");
-  const child = spawn(cmd, args as string[], {
+  const child = spawn(cmd!, args, {
     cwd,
     stdio: ["ignore", fd, fd],
     env: {
@@ -184,15 +255,20 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
     },
   });
   const timer = setTimeout(() => child.kill("SIGTERM"), Number(a.timeout) * 1000);
+  let last: Record<string, number> = {};
+  const scrape = setInterval(async () => {
+    last = (await parts()) ?? last;
+  }, 2_000);
   // The firmware can turn turbo off mid-run, which slows everything ~2x: such a run says nothing.
   let slowed = false;
   const watch = setInterval(() => {
     if (turboOff()) slowed = true;
   }, 2_000);
   return new Promise((done) =>
-    child.on("exit", (code) => {
+    child.on("exit", async (code) => {
       clearTimeout(timer);
       clearInterval(watch);
+      clearInterval(scrape);
       if (slowed) {
         console.log(`pair ${pair} ${side}: discarded, CPU turbo went off during the run`);
         turboWentOff = true;
@@ -208,12 +284,18 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
         pair,
         seconds: Number(seconds),
         ...JSON.parse(readFileSync(out, "utf8")),
+        waitSeconds: last.fetch ?? 0,
+        handlerSeconds: last.handlers ?? 0,
+        commitSeconds: last.commit ?? 0,
+        rows: await rowCounts(),
       };
       console.log(
         `pair ${pair} ${side}: ${r.seconds.toFixed(1)} s, rss ${r.maxRssMb.toFixed(0)} MB, ` +
           `stops >100 ms ${r.gaps} (>400 ms ${r.gapsOver400}, ${r.gapSeconds.toFixed(1)} s), longest ${r.maxGapMs.toFixed(0)} ms, ` +
           `cpu ${r.cpuSeconds.toFixed(0)} s` +
-          (r.rpcMedianMs > 0 ? `, rpc median ${r.rpcMedianMs.toFixed(0)} ms` : ""),
+          (r.rpcMedianMs > 0 ? `, rpc median ${r.rpcMedianMs.toFixed(0)} ms` : "") +
+          `\n    commits ${r.commitSeconds.toFixed(1)} s, handlers ${r.handlerSeconds.toFixed(1)} s, ` +
+          `waiting for events ${r.waitSeconds.toFixed(1)} s, gc ${r.gcSeconds.toFixed(1)} s`,
       );
       done(r);
     }),
@@ -235,7 +317,9 @@ function summary(runs: Run[]): string {
     lines.push(
       `${s}: median ${median(t).toFixed(1)} s (min ${Math.min(...t).toFixed(1)}, max ${Math.max(...t).toFixed(1)}), ` +
         `rss ${median(rs.map((r) => r.maxRssMb)).toFixed(0)} MB, stops >400 ms ${median(rs.map((r) => r.gapsOver400))}, ` +
-        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms, cpu ${median(rs.map((r) => r.cpuSeconds)).toFixed(0)} s`,
+        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms, cpu ${median(rs.map((r) => r.cpuSeconds)).toFixed(0)} s` +
+        `\n   commits ${median(rs.map((r) => r.commitSeconds)).toFixed(1)} s, handlers ${median(rs.map((r) => r.handlerSeconds)).toFixed(1)} s, ` +
+        `waiting for events ${median(rs.map((r) => r.waitSeconds)).toFixed(1)} s, gc ${median(rs.map((r) => r.gcSeconds)).toFixed(1)} s`,
     );
   }
   const pairs = side("A").flatMap((x) =>
@@ -254,11 +338,23 @@ function summary(runs: Run[]): string {
     );
   if (steady.length > 0) {
     const pct = (f: (r: Run) => number) =>
-      ((median(steady.map(([x, y]) => f(y) / f(x))) - 1) * 100).toFixed(1);
+      steady.every(([x]) => f(x) > 0)
+        ? `${((median(steady.map(([x, y]) => f(y) / f(x))) - 1) * 100).toFixed(1)}%`
+        : "n/a";
     const wins = steady.filter(([x, y]) => y.seconds < x.seconds).length;
     lines.push(
-      `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}%, cpu ${pct((r) => r.cpuSeconds)}%, ` +
-        `rss ${pct((r) => r.maxRssMb)}%; B faster in ${wins} of ${steady.length} pairs`,
+      `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}, cpu ${pct((r) => r.cpuSeconds)}, ` +
+        `rss ${pct((r) => r.maxRssMb)}, commits ${pct((r) => r.commitSeconds)}, gc ${pct((r) => r.gcSeconds)}; ` +
+        `B faster in ${wins} of ${steady.length} pairs`,
+    );
+  }
+  const written = new Set(runs.map((r) => r.rows));
+  if (written.size > 1)
+    lines.push(`ROWS DIFFER between runs, B may be wrong:\n  ${[...written].join("\n  ")}`);
+  else if (runs.length > 0) {
+    const counts = runs[0]!.rows.split(",").map((t) => Number(t.split("=")[1]));
+    lines.push(
+      `every run wrote the same rows: ${counts.reduce((x, y) => x + y, 0)} in ${counts.length} tables`,
     );
   }
   return lines.join("\n");
@@ -267,7 +363,10 @@ function summary(runs: Run[]): string {
 await preflight();
 mkdirSync(results, { recursive: true });
 console.log(
-  `${a.app} to block ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a.pairs} pairs; logs in ${results}`,
+  `${a.app} to block ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a.pairs} pairs; logs in ${results}` +
+    (split === undefined
+      ? ""
+      : `\nkasbah pinned to CPUs ${split.fast} (the fastest cores), the simulated node to ${split.rest}`),
 );
 const dirs = { A: build("A", a.a), B: build("B", a.b) };
 const sim = a.rpc === "sim" ? await simulatedNode() : undefined;

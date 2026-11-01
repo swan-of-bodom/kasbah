@@ -1,4 +1,5 @@
 import { writeFileSync } from "node:fs";
+import { PerformanceObserver } from "node:perf_hooks";
 
 const out = process.env.KASBAH_BENCH_OUT!;
 const TICK_MS = 10;
@@ -19,6 +20,11 @@ globalThis.fetch = async (input, init) => {
   if (init?.method === "POST") rpcMs.push(performance.now() - t);
   return res;
 };
+let gcMs = 0;
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) gcMs += e.duration;
+}).observe({ entryTypes: ["gc"] });
+
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 
 process.on("exit", () => {
@@ -32,6 +38,7 @@ process.on("exit", () => {
       maxGapMs: Math.max(0, ...gaps),
       cpuSeconds: (process.cpuUsage().user + process.cpuUsage().system) / 1e6,
       rpcMedianMs: median(rpcMs),
+      gcSeconds: gcMs / 1000,
     }),
   );
 });
