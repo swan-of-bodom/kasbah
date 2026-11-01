@@ -144,6 +144,13 @@ before indexing; we skip that round trip.
   At a 512 MB heap (a ~34 MB buffer) it was 4% faster too (2 of 2 pairs, 747 s → 716 s mean), peak RSS 720 → 835 MB:
   more pages in flight, which the budget doesn't count (32 workers × ~1.5 MB per Ekubo page). Tying the requests
   in flight to the budget, with a hard cap on windows, is the follow-up.
+
+TODO, the commit stall (parked): during a backfill the event loop stops for up to ~0.6 s per commit (cached Ekubo to
+block 700k: ~45 stops over 400 ms, ~50 s in all). Inside those stops: building the COPY text 56% (drizzle's jsonb
+`JSON.stringify` and escaping), GC 14%, eviction re-measuring rows one by one 10%, handlers 1%. Tried together:
+yielding every 25 ms while building COPY text and clearing whole tables on eviction (as Ponder does). Stops over
+400 ms went to 0 and the longest to ~0.3 s, but the backfill was 8% slower (median of 3 pairs, 251 → 272 s), so
+neither was kept. Next: measure each alone and the yield at 100 ms. Live commits are small (max loop delay 0.5 ms).
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
 - Window size adapts to density: busy contracts get smaller windows so pages don't serialize a whole window;
   quiet contracts get 81,920-block windows that come back in one call.
