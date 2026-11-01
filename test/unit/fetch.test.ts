@@ -261,3 +261,59 @@ test.each([1, 2, 5])(
     );
   },
 );
+
+test("pages in flight count toward the budget: buffered plus downloading stays under 3x", async () => {
+  const BLOCKS = 20_000;
+  const events: EmittedEvent[] = [];
+  for (let b = 0; b < BLOCKS; b++)
+    for (let i = 0; i < 3; i++)
+      events.push({
+        from_address: "0x1",
+        keys: [],
+        data: Array.from({ length: 20 }, (_, j) => `0x${(b * 64 + j).toString(16)}`),
+        block_number: b,
+        transaction_hash: "0x0",
+        transaction_index: i,
+        event_index: 0,
+      });
+  const inner = fakeNode(events, BLOCKS).rpc as unknown as {
+    request: (method: string, params: unknown) => Promise<unknown>;
+  };
+  let inFlight = 0;
+  const rpc = {
+    async request(method: string, params: unknown): Promise<unknown> {
+      inFlight++;
+      try {
+        await new Promise((r) => setTimeout(r, 5));
+        return await inner.request(method, params);
+      } finally {
+        inFlight--;
+      }
+    },
+  };
+  const pageBytes = 64 * maxBytes(events);
+  const budget = 4 * pageBytes;
+  let read: (() => FetchGauges) | undefined;
+  let peak = 0;
+  let total = 0;
+  const watch = setInterval(
+    () => (peak = Math.max(peak, (read?.().bufferedBytes ?? 0) + inFlight * pageBytes)),
+    1,
+  );
+  for await (const batch of eventStream({
+    rpc: rpc as unknown as RpcClient,
+    address: "0x1",
+    from: 0,
+    to: BLOCKS - 1,
+    chunkSize: 64,
+    concurrency: 32,
+    maxBufferedBytes: budget,
+    gauges: (r) => (read = r),
+  })) {
+    total += batch.events.length;
+    await new Promise((r) => setTimeout(r, 2));
+  }
+  clearInterval(watch);
+  expect(total).toBe(events.length);
+  expect(peak / budget).toBeLessThanOrEqual(3 + 2 / 4);
+}, 60_000);

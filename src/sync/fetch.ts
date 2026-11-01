@@ -100,6 +100,9 @@ class EventFetcher {
   readonly #windows: Window[];
   readonly #workers: Promise<void>[];
   #buffered = 0;
+  /** Bytes reserved for pages being downloaded, at the recent page size: the ceiling counts them too. */
+  #inFlight = 0;
+  #pageBytes = 0;
   #waiting = 0;
   #recentEvents = 0;
   #recentBlocks = 0;
@@ -191,8 +194,9 @@ class EventFetcher {
 
   /** Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. */
   #roomAt(held: number, front: boolean): boolean {
-    if (this.#buffered < this.#maxBuffered) return true;
-    if (!front && this.#buffered >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
+    const used = this.#buffered + this.#inFlight;
+    if (used < this.#maxBuffered) return true;
+    if (!front && used >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
     return held < this.#maxBuffered;
   }
 
@@ -282,7 +286,14 @@ class EventFetcher {
         w.state = "idle";
         return;
       }
-      const page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
+      const reserved = this.#pageBytes;
+      this.#inFlight += reserved;
+      let page: Awaited<ReturnType<typeof getEvents>>;
+      try {
+        page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
+      } finally {
+        this.#inFlight -= reserved;
+      }
       stats.pages++;
       let kept = 0;
       let bytes = 0;
@@ -294,6 +305,8 @@ class EventFetcher {
       }
       w.bytes += bytes;
       this.#buffered += bytes;
+      this.#pageBytes =
+        stats.pages === 1 ? bytes : this.#pageBytes * DENSITY_DECAY + bytes * (1 - DENSITY_DECAY);
       stats.events += kept;
       if (this.#buffered > stats.peakBufferedBytes) stats.peakBufferedBytes = this.#buffered;
       const token = page.continuation_token;

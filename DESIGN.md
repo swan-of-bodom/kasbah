@@ -142,8 +142,12 @@ before indexing; we skip that round trip.
   stopping the cut there split every window on each page: 6,000 windows, and the pass over them stalled the
   event loop for seconds. Every pass over the windows is one, with the bytes held so far carried along.
   At a 512 MB heap (a ~34 MB buffer) it was 4% faster too (2 of 2 pairs, 747 s → 716 s mean), peak RSS 720 → 835 MB:
-  more pages in flight, which the budget doesn't count (32 workers × ~1.5 MB per Ekubo page). Tying the requests
-  in flight to the budget is the follow-up.
+  more pages in flight, which the budget didn't count (32 workers × ~1.5 MB per Ekubo page).
+- **Pages in flight count toward the budget.** Each request reserves the recent page size (seeded by the first
+  page) until its page arrives, so the 3× ceiling holds for what is downloading too: in the unit test, held plus
+  downloading reached 8.7× the budget without it. On Ekubo it costs ~1% at a 512 MB heap (3 of 3 pairs, 686 →
+  696 s, peak RSS 810 → 789 MB) and nothing measurable at 4 GB (5 pairs, 323 → 327 s, inside the spread): the
+  bound is kept for a machine whose pages are larger than Ekubo's, as "Runs anywhere" asks.
 - **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
   peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
 
