@@ -1,4 +1,4 @@
-// End-to-end A/B benchmark: an app in test/bench/apps run to `--to` on two builds of kasbah, alternating A, B, A, B.
+// End-to-end A/B benchmark: an app in test/bench/apps run to `--to` on two builds of kasbah, in pairs A B, B A, …
 //   pnpm bench:app                                   HEAD against the working tree, 5 pairs, cached, to block 700k
 //   pnpm bench:app --a 0849af9 --b HEAD --cache off --heap 512 --pairs 3
 //   pnpm bench:app --rpc sim --latency 120          fetch from a simulated node (test/bench/node.ts), not the RPC
@@ -274,7 +274,8 @@ const sim = a.rpc === "sim" ? await simulatedNode() : undefined;
 const runs: Run[] = [];
 try {
   for (let pair = 1; pair <= Number(a.pairs); pair++)
-    for (const side of ["A", "B"] as const) {
+    // A B, then B A: whichever runs second in a pair (warmer Postgres, a hotter CPU) doesn't always favor one side.
+    for (const side of pair % 2 === 1 ? (["A", "B"] as const) : (["B", "A"] as const)) {
       const r = await once(side, pair, dirs[side]);
       if (turboWentOff) throw new Error("CPU turbo went off during a run: reboot and run again");
       if (r !== undefined) runs.push(r);
