@@ -78,7 +78,8 @@ streams that run at once. Windows behind the front pause at `perWindow` bytes ea
 window may fetch; under twice that, only a window holding less than `maxBuffered` together with the windows before
 it (including itself), so the front never waits on the back; past that, only the front, while it holds less than
 `maxBuffered`, and the consumer drains it. So the buffer stays under three times `maxBuffered`: a fifth of the
-heap. Counting events instead crashed a 2 GB heap on Ekubo's events, about 1.2 kB each.
+heap. A window with half of `maxBuffered` held before it (itself included) fetches only while the buffer is under
+that half: the other half is kept for the blocks handled next. Counting events instead crashed a 2 GB heap on Ekubo's events, about 1.2 kB each.
 
 **On a first run, events go straight from fetch to handlers in memory.** The raw events are written to the cache
 on the side (COPY, not awaited by indexing). Ponder instead writes everything to its sync store and reads it back
@@ -148,6 +149,11 @@ before indexing; we skip that round trip.
   downloading reached 8.7× the budget without it. On Ekubo it costs ~1% at a 512 MB heap (3 of 3 pairs, 686 →
   696 s, peak RSS 810 → 789 MB) and nothing measurable at 4 GB (5 pairs, 323 → 327 s, inside the spread): the
   bound is kept for a machine whose pages are larger than Ekubo's, as "Runs anywhere" asks.
+- **Half the budget is kept for the front** (`FRONT_RESERVE`). Without it, windows far ahead could fill the
+  budget with events handled last. On the simulated node (Ekubo without the cache, to block 700k): at 4 GB, 5%
+  faster, 7% less CPU, 6% lower peak RSS (median of 5 pairs, 404 → 392 s, 4 won); at 512 MB, where the run waits
+  on the node, the same time and 4% less CPU (3 of 3 pairs). Synthetic histories in the unit tests were mixed
+  (±4%), so no test pins it.
 - **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
   peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
 

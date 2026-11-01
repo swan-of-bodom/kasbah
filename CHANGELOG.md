@@ -10,6 +10,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 - A first sync without the cache is about 10% faster on Ekubo: idle workers now help with the window being read
   when the others are paused by the memory budget, instead of waiting (median of 5 interleaved runs to block 700k,
   339 s → 304 s).
+- A first sync without the cache is about 5% faster on Ekubo, with 7% less CPU: half the fetch buffer is kept for
+  the blocks handled next, instead of filling with blocks far ahead.
 - The fetch buffer's memory ceiling now counts pages still downloading, so it holds on a small machine whatever
   the page size or worker count.
 - A port already in use stops kasbah with a message saying so, instead of leaving it hung.

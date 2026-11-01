@@ -32,6 +32,8 @@ const DENSITY_DECAY = 0.9;
 /** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
 const FRONT_ONLY_PAST = 2;
 const BUFFER_SHARE = 1 / 5 / (FRONT_ONLY_PAST + 1);
+/** Windows with this share of the budget held before them fetch only while the buffer is under it: the rest stays for the front. */
+const FRONT_RESERVE = 0.5;
 /** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
 const MAX_WINDOWS_PER_WORKER = 8;
 
@@ -195,6 +197,8 @@ class EventFetcher {
   /** Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. */
   #roomAt(held: number, front: boolean): boolean {
     const used = this.#buffered + this.#inFlight;
+    const reserve = FRONT_RESERVE * this.#maxBuffered;
+    if (!front && held >= reserve) return used < reserve;
     if (used < this.#maxBuffered) return true;
     if (!front && used >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
     return held < this.#maxBuffered;
