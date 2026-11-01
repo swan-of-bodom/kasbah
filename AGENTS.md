@@ -47,6 +47,19 @@ machine, a slower disk or a worse RPC may make it slower, never wrong, stuck or 
 - A change that touches memory or the fetcher is also run at a small heap (`--max-old-space-size=512`) before
   it is kept; `test/e2e/crash.test.ts` runs a backfill in 192 MB.
 
+## Benchmarks
+
+A performance change is kept only if it beats the noise, measured end to end, as Ponder's `benchmark/` does.
+
+- `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core to block 700k by default) on two builds, A and B,
+  alternating A, B, A, B: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
+  fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down or the CPU's turbo is
+  off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
+- Decide on the median of 5 pairs or more and on how many pairs B won; a change inside the spread is noise.
+- Report time, peak memory and event-loop stops together: a change that speeds up one and worsens another is a
+  trade-off for the user, not a win.
+- `pnpm bench` runs the micro benchmarks in `test/bench/*.bench.ts` (one function on synthetic rows).
+
 ## Config compatibility
 
 Apps are written against the config type, so in a patch release:

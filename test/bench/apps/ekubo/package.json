@@ -1,0 +1,8 @@
+{
+  "name": "kasbah-bench-ekubo",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "kasbah": "file:../kasbah.tgz"
+  }
+}

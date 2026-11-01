@@ -4,3 +4,4 @@ dist
 test/.tmp-*
 *.tgz
 documentation/src/pages.gen.ts
+test/bench/results
