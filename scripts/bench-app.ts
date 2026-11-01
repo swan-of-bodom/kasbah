@@ -146,6 +146,30 @@ function turboOff(): boolean {
   return existsSync(boost) && readFileSync(boost, "utf8").trim() === "0";
 }
 
+/** A discharging battery: the CPU is held back, and turbo turns off when the battery runs low. */
+function onBattery(): boolean {
+  const dir = "/sys/class/power_supply";
+  if (!existsSync(dir)) return false;
+  return readdirSync(dir).some((d) => {
+    const read = (f: string) => {
+      try {
+        return readFileSync(join(dir, d, f), "utf8").trim();
+      } catch {
+        return "";
+      }
+    };
+    return read("type") === "Battery" && read("status") === "Discharging";
+  });
+}
+
+/** Why runs would now be slower than usual, with what to do: such a run says nothing. */
+function slowedBy(): string | undefined {
+  if (onBattery()) return "the laptop is on battery: plug in the charger";
+  if (turboOff())
+    return "CPU turbo is off (runs ~2x slower): plug in the charger, or reboot if it is plugged in";
+  return undefined;
+}
+
 async function preflight() {
   if (!existsSync(appDir)) throw new Error(`no app at test/bench/apps/${a.app}`);
   if (process.env.DATABASE_URL === undefined) throw new Error("DATABASE_URL is not set (.env)");
@@ -163,8 +187,8 @@ async function preflight() {
   await client.end();
   if (a.cache === "on" && cached.rowCount === 0)
     console.warn("no kasbah_cache_* schema: the first run will fetch");
-  if (turboOff())
-    throw new Error("CPU turbo is off (a firmware glitch makes runs ~2x slower): reboot first");
+  const slow = slowedBy();
+  if (slow !== undefined) throw new Error(slow);
   if (loadavg()[0]! > 2)
     console.warn(`load average ${loadavg()[0]!.toFixed(1)}: close other work for clean numbers`);
 }
@@ -192,7 +216,7 @@ function build(side: "A" | "B", rev: string): string {
 }
 
 const simPort = Number(a.port) + 1;
-let turboWentOff = false;
+let stopped: string | undefined;
 
 /** Starts test/bench/node.ts, one for all runs, and resolves once it listens. */
 function simulatedNode(): Promise<ReturnType<typeof spawn>> {
@@ -218,7 +242,8 @@ function simulatedNode(): Promise<ReturnType<typeof spawn>> {
 }
 
 function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefined> {
-  if (turboOff()) throw new Error("CPU turbo went off during the runs: reboot and run again");
+  const slow = slowedBy();
+  if (slow !== undefined) throw new Error(slow);
   const log = join(results, `${side}-${pair}.log`);
   const out = join(results, `${side}-${pair}.json`);
   const node = [
@@ -259,19 +284,18 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
   const scrape = setInterval(async () => {
     last = (await parts()) ?? last;
   }, 2_000);
-  // The firmware can turn turbo off mid-run, which slows everything ~2x: such a run says nothing.
-  let slowed = false;
+  let slowed: string | undefined;
   const watch = setInterval(() => {
-    if (turboOff()) slowed = true;
+    slowed ??= slowedBy();
   }, 2_000);
   return new Promise((done) =>
     child.on("exit", async (code) => {
       clearTimeout(timer);
       clearInterval(watch);
       clearInterval(scrape);
-      if (slowed) {
-        console.log(`pair ${pair} ${side}: discarded, CPU turbo went off during the run`);
-        turboWentOff = true;
+      if (slowed !== undefined) {
+        console.log(`pair ${pair} ${side}: discarded, during the run ${slowed}`);
+        stopped = slowed;
         return done(undefined);
       }
       const seconds = readFileSync(log, "utf8").match(/handled in ([\d.]+)s/)?.[1];
@@ -376,7 +400,7 @@ try {
     // A B, then B A: whichever runs second in a pair (warmer Postgres, a hotter CPU) doesn't always favor one side.
     for (const side of pair % 2 === 1 ? (["A", "B"] as const) : (["B", "A"] as const)) {
       const r = await once(side, pair, dirs[side]);
-      if (turboWentOff) throw new Error("CPU turbo went off during a run: reboot and run again");
+      if (stopped !== undefined) throw new Error(stopped);
       if (r !== undefined) runs.push(r);
     }
 } finally {

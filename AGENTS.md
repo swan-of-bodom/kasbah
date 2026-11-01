@@ -53,13 +53,14 @@ A performance change is kept only if it beats the noise, measured end to end, as
 
 - `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core to block 700k by default) on two builds, A and B,
   in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
-  fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down or the CPU's turbo is
-  off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
+  fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down, the laptop is on battery
+  or the CPU's turbo is off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
 - `--rpc sim` fetches from `test/bench/node.ts` instead of the RPC: a simulated node that serves `getEvents` from
   the event cache with hosted Pathfinder's limits after a fixed `--latency`, and replays other calls recorded once
   from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
   same node. The verdict is the median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left
-  out, and a run during which the CPU's turbo turned off stops the benchmark.
+  out. A run during which the laptop went on battery or the CPU's turbo turned off (on this laptop, a low battery)
+  is discarded and stops the benchmark, and neither starts one.
 - On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float):
   a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports kasbah's own totals from
   `/metrics` (in commits, in handlers, waiting for events) and its GC time, so a difference comes with where it is.
