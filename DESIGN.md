@@ -143,7 +143,9 @@ before indexing; we skip that round trip.
   event loop for seconds. Every pass over the windows is one, with the bytes held so far carried along.
   At a 512 MB heap (a ~34 MB buffer) it was 4% faster too (2 of 2 pairs, 747 s → 716 s mean), peak RSS 720 → 835 MB:
   more pages in flight, which the budget doesn't count (32 workers × ~1.5 MB per Ekubo page). Tying the requests
-  in flight to the budget, with a hard cap on windows, is the follow-up.
+  in flight to the budget is the follow-up.
+- **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
+  peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
 
 TODO, the commit stall (parked): during a backfill the event loop stops for up to ~0.6 s per commit (cached Ekubo to
 block 700k: ~45 stops over 400 ms, ~50 s in all). Inside those stops: building the COPY text 56% (drizzle's jsonb

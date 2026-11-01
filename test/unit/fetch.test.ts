@@ -229,3 +229,35 @@ test("after a dense start, cutting stops at the budget instead of splitting the 
   expect(stats.events).toBe(events.length);
   expect(maxWindows).toBeLessThan(100);
 }, 60_000);
+
+test.each([1, 2, 5])(
+  "with at most %i windows, every event still arrives once, in order",
+  async (maxWindows) => {
+    const events = syntheticEvents(20_000, maxWindows);
+    let read: (() => FetchGauges) | undefined;
+    let peak = 0;
+    const seen: string[] = [];
+    const stats = await fetchEvents({
+      rpc: fakeNode(events, 2_048).rpc,
+      address: "0x1",
+      from: 0,
+      to: 19_999,
+      chunkSize: 16,
+      concurrency: 8,
+      windowEvents: 1,
+      minSplit: 1,
+      maxWindows,
+      gauges: (r) => (read = r),
+      onEvents(page) {
+        peak = Math.max(peak, read!().windows);
+        for (const e of page)
+          seen.push(`${e.block_number}:${e.transaction_index}:${e.event_index}`);
+      },
+    });
+    expect(peak).toBeLessThanOrEqual(maxWindows);
+    expect(stats.events).toBe(events.length);
+    expect(seen).toEqual(
+      events.map((e) => `${e.block_number}:${e.transaction_index}:${e.event_index}`),
+    );
+  },
+);

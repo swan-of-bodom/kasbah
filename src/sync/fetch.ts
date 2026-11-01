@@ -16,6 +16,8 @@ export type EventStreamOptions = {
   windowEvents?: number;
   /** Smallest range worth splitting off. */
   minSplit?: number;
+  /** Most windows at once. Default: `MAX_WINDOWS_PER_WORKER` per worker. */
+  maxWindows?: number;
   maxBufferedBytes?: number;
   budgetShare?: number;
   /** Receives a reader of the stream's state, for `--debug`. */
@@ -30,6 +32,8 @@ const DENSITY_DECAY = 0.9;
 /** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
 const FRONT_ONLY_PAST = 2;
 const BUFFER_SHARE = 1 / 5 / (FRONT_ONLY_PAST + 1);
+/** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
+const MAX_WINDOWS_PER_WORKER = 8;
 
 /** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
 export type FetchGauges = {
@@ -89,6 +93,7 @@ class EventFetcher {
   readonly #o: EventStreamOptions;
   readonly #stats: FetchStats;
   readonly #minSplit: number;
+  readonly #maxWindows: number;
   readonly #windowEvents: number;
   readonly #maxBuffered: number;
   readonly #perWindow: number;
@@ -106,6 +111,7 @@ class EventFetcher {
     this.#o = o;
     this.#stats = stats;
     this.#minSplit = o.minSplit ?? MIN_SPLIT;
+    this.#maxWindows = o.maxWindows ?? MAX_WINDOWS_PER_WORKER * o.concurrency;
     this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
     this.#maxBuffered =
       o.maxBufferedBytes ??
@@ -219,7 +225,7 @@ class EventFetcher {
 
   #split(w: Window): Window | undefined {
     const left = w.until - w.fetchedUntil;
-    if (left < 2 * this.#minSplit) return undefined;
+    if (left < 2 * this.#minSplit || this.#windows.length >= this.#maxWindows) return undefined;
     const cut =
       w.fetchedUntil + Math.round(Math.max(this.#minSplit, Math.min(left / 2, this.#span())));
     const rest: Window = {
