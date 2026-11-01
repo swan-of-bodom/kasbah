@@ -48,7 +48,12 @@ type Run = {
   gapsOver400: number;
   gapSeconds: number;
   maxGapMs: number;
+  cpuSeconds: number;
+  rpcMedianMs: number;
 };
+
+/** Pairs whose RPC answered this much slower or faster on one side are left out of the comparison. */
+const RPC_DRIFT = 0.25;
 
 const sh = (cmd: string, args: string[], cwd: string) =>
   execFileSync(cmd, args, { cwd, stdio: ["ignore", "pipe", "pipe"], encoding: "utf8" });
@@ -159,7 +164,9 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
       };
       console.log(
         `pair ${pair} ${side}: ${r.seconds.toFixed(1)} s, rss ${r.maxRssMb.toFixed(0)} MB, ` +
-          `stops >100 ms ${r.gaps} (>400 ms ${r.gapsOver400}, ${r.gapSeconds.toFixed(1)} s), longest ${r.maxGapMs.toFixed(0)} ms`,
+          `stops >100 ms ${r.gaps} (>400 ms ${r.gapsOver400}, ${r.gapSeconds.toFixed(1)} s), longest ${r.maxGapMs.toFixed(0)} ms, ` +
+          `cpu ${r.cpuSeconds.toFixed(0)} s` +
+          (r.rpcMedianMs > 0 ? `, rpc median ${r.rpcMedianMs.toFixed(0)} ms` : ""),
       );
       done(r);
     }),
@@ -181,7 +188,7 @@ function summary(runs: Run[]): string {
     lines.push(
       `${s}: median ${median(t).toFixed(1)} s (min ${Math.min(...t).toFixed(1)}, max ${Math.max(...t).toFixed(1)}), ` +
         `rss ${median(rs.map((r) => r.maxRssMb)).toFixed(0)} MB, stops >400 ms ${median(rs.map((r) => r.gapsOver400))}, ` +
-        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms`,
+        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms, cpu ${median(rs.map((r) => r.cpuSeconds)).toFixed(0)} s`,
     );
   }
   const pairs = side("A").flatMap((x) =>
@@ -189,12 +196,22 @@ function summary(runs: Run[]): string {
       .filter((y) => y.pair === x.pair)
       .map((y) => [x, y] as const),
   );
-  if (pairs.length > 0) {
-    const ma = median(side("A").map((r) => r.seconds));
-    const mb = median(side("B").map((r) => r.seconds));
-    const wins = pairs.filter(([x, y]) => y.seconds < x.seconds).length;
+  // Each pair ran minutes apart, so B/A within a pair cancels a slow hour of the RPC or the machine.
+  const drifted = ([x, y]: (typeof pairs)[number]) =>
+    x.rpcMedianMs > 0 && Math.abs(y.rpcMedianMs / x.rpcMedianMs - 1) > RPC_DRIFT;
+  const steady = pairs.filter((p) => !drifted(p));
+  const left = pairs.filter(drifted).map(([x]) => x.pair);
+  if (left.length > 0)
     lines.push(
-      `B vs A: ${(((mb - ma) / ma) * 100).toFixed(1)}% median, B faster in ${wins} of ${pairs.length} pairs`,
+      `left out, the RPC's speed changed within the pair by over ${RPC_DRIFT * 100}%: pairs ${left.join(", ")}`,
+    );
+  if (steady.length > 0) {
+    const pct = (f: (r: Run) => number) =>
+      ((median(steady.map(([x, y]) => f(y) / f(x))) - 1) * 100).toFixed(1);
+    const wins = steady.filter(([x, y]) => y.seconds < x.seconds).length;
+    lines.push(
+      `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}%, cpu ${pct((r) => r.cpuSeconds)}%, ` +
+        `rss ${pct((r) => r.maxRssMb)}%; B faster in ${wins} of ${steady.length} pairs`,
     );
   }
   return lines.join("\n");
