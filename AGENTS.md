@@ -64,6 +64,10 @@ A performance change is kept only if it beats the noise, measured end to end, as
 - On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float):
   a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports kasbah's own totals from
   `/metrics` (in commits, in handlers, waiting for events) and its GC time, so a difference comes with where it is.
+- About 1 run in 5, on either side, is ~12% slower with ~30% more CPU: its young-generation scavenges each take ~35%
+  longer (the run's line shows them). Such runs had the same CPU clock and temperature as the others, a full
+  battery, and Postgres pinned off kasbah's cores (2026-11-02): the extra time is kasbah's own GC, not the machine,
+  and pairs and the median absorb it.
 - After each run the runner counts every app table's rows; the summary says if any run wrote different rows than
   the others, so "faster" can't mean "skipped work".
 - Ekubo's handlers only insert, so a run can start late: `--from 620000` (the default) keeps 58% of the events to

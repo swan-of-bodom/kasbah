@@ -59,6 +59,8 @@ type Run = {
   cpuSeconds: number;
   rpcMedianMs: number;
   gcSeconds: number;
+  /** By kind (`minor` is the young generation's scavenges): a run with slower scavenges was a slow run. */
+  gc?: Record<string, { count: number; seconds: number }>;
   /** kasbah's own totals from /metrics: waiting for events, in handlers, in commits. */
   waitSeconds: number;
   handlerSeconds: number;
@@ -323,7 +325,10 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
           `cpu ${r.cpuSeconds.toFixed(0)} s` +
           (r.rpcMedianMs > 0 ? `, rpc median ${r.rpcMedianMs.toFixed(0)} ms` : "") +
           `\n    commits ${r.commitSeconds.toFixed(1)} s, handlers ${r.handlerSeconds.toFixed(1)} s, ` +
-          `waiting for events ${r.waitSeconds.toFixed(1)} s, gc ${r.gcSeconds.toFixed(1)} s`,
+          `waiting for events ${r.waitSeconds.toFixed(1)} s, gc ${r.gcSeconds.toFixed(1)} s` +
+          (r.gc?.minor === undefined
+            ? ""
+            : ` (${r.gc.minor.count} scavenges of ${((r.gc.minor.seconds / r.gc.minor.count) * 1000).toFixed(1)} ms)`),
       );
       done(r);
     }),
