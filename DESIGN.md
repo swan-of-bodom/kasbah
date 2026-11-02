@@ -334,6 +334,14 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   512 MB, the same time and RSS, and no stops over 400 ms (9 before; longest 534 → 219 ms): there the halved row
   limit triggers the commits, 200 instead of 109, and their fixed cost takes back the overlap. Clearing whole
   tables on eviction, as Ponder does, made no difference (median 2.7% faster, 3 of 5 pairs) and was dropped.
+- COPY text: a value is escaped only when a regex test finds a tab, newline, carriage return or backslash (a
+  replace that finds nothing cost more), each line is built by concatenation, and each 64 KB chunk is joined once
+  from its lines. On 198k real Ekubo rows (81% `swapped`, ~880 bytes of text each), 3,300 → 2,550 ns per row;
+  ~1,100 ns of the rest is `JSON.stringify` of jsonb values, inside drizzle. Writing per field with
+  `Buffer.write` or a JS loop into a Buffer was as slow or slower, and `TextEncoder.encodeInto` slower than
+  `Buffer.from`. Cached Ekubo to block 700k, 5 pairs, 4 GB: −4.1% pinned to the E-cores (main thread CPU −4.3%,
+  4 of 5 pairs, waiting for commits −61%), −2.6% on the P-cores (4 of 5, −44%), −1.9% at 512 MB (3 of 5); all
+  inside A's spread, set by slow-scavenge runs.
 - On a fresh run, tables live fully in memory until a memory cap, so reads in handlers never hit the database.
 - Updates: COPY into a temp table, then `UPDATE … FROM`.
 - Primary keys and user indexes come after the backfill (Ponder defers only user indexes). Measured on

@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Writing rows to Postgres takes less CPU: COPY text is escaped only where a value needs it and each 64 KB chunk
+  is joined once (a quarter less time per row on Ekubo's rows, about 4% off a cached run).
 - With contracts that start at different blocks, the event cache now keeps everything the first run fetched: the
   blocks fetched just before each later start block were left out, so a re-index fetched them again.
 - A backfill no longer stops for its commits: Postgres writes each batch while the next one is handled. On the

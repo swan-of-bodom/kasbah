@@ -7,10 +7,14 @@ import { ConfigError } from "../config/errors.ts";
 import { YIELD_MS, yieldToEventLoop } from "../utils/time.ts";
 import { quote, type Row, type TableInfo } from "./table.ts";
 
+const special = /[\\\n\r\t]/;
+/** Most values have nothing to escape: a test is cheaper than a replace that finds nothing. */
 const escapeText = (s: string) =>
-  s.replace(/[\\\n\r\t]/g, (c) =>
-    c === "\\" ? "\\\\" : c === "\n" ? "\\n" : c === "\r" ? "\\r" : "\\t",
-  );
+  special.test(s)
+    ? s.replace(/[\\\n\r\t]/g, (c) =>
+        c === "\\" ? "\\\\" : c === "\n" ? "\\n" : c === "\r" ? "\\r" : "\\t",
+      )
+    : s;
 
 function arrayLiteral(values: unknown[]): string {
   const items = values.map((v) => {
@@ -31,27 +35,32 @@ function text(value: unknown): string {
   return escapeText(JSON.stringify(value));
 }
 
-/** One row as a COPY text line: drizzle's driver mapping per column, then COPY escaping. */
-export function copyLine(info: TableInfo, row: Row): string {
-  const fields = info.columns.map(({ key, column }) => {
-    let v = row[key];
-    if (v === undefined) {
-      if (column.defaultFn !== undefined) v = column.defaultFn();
-      else if (column.default !== undefined) {
-        if (is(column.default, SQL))
-          throw new ConfigError(`${info.name}.${key}: SQL defaults need a value from the handler`);
-        v = column.default;
-      }
+/** One column of a COPY line: drizzle's driver mapping, then COPY escaping. */
+function field(info: TableInfo, row: Row, i: number): string {
+  const { key, column } = info.columns[i]!;
+  let v = row[key];
+  if (v === undefined) {
+    if (column.defaultFn !== undefined) v = column.defaultFn();
+    else if (column.default !== undefined) {
+      if (is(column.default, SQL))
+        throw new ConfigError(`${info.name}.${key}: SQL defaults need a value from the handler`);
+      v = column.default;
     }
-    return text(v === null || v === undefined ? v : column.mapToDriverValue(v));
-  });
-  return `${fields.join("\t")}\n`;
+  }
+  return text(v === null || v === undefined ? v : column.mapToDriverValue(v));
+}
+
+/** One row as a COPY text line. */
+export function copyLine(info: TableInfo, row: Row): string {
+  let line = field(info, row, 0);
+  for (let i = 1; i < info.columns.length; i++) line += `\t${field(info, row, i)}`;
+  return `${line}\n`;
 }
 
 /**
- * Runs `sql` (a `COPY … FROM STDIN`) with each item's `line`, built as it's sent in 64 KB chunks. Building the
- * text never waits on I/O, so it lets the event loop run every `YIELD_MS`: the next batch's handlers go on while
- * a commit writes.
+ * Runs `sql` (a `COPY … FROM STDIN`) with each item's `line`, sent in 64 KB chunks, each joined once from its
+ * lines. Building the text never waits on I/O, so it lets the event loop run every `YIELD_MS`: the next batch's
+ * handlers go on while a commit writes.
  */
 export async function copyLines<T>(
   client: PoolClient,
@@ -61,20 +70,24 @@ export async function copyLines<T>(
 ): Promise<void> {
   const stream = client.query(copyFrom(sql));
   async function* chunks() {
-    let chunk = "";
+    let lines: string[] = [];
+    let size = 0;
     let since = performance.now();
     for (const item of items) {
-      chunk += line(item);
-      if (chunk.length > 1 << 16) {
-        yield chunk;
-        chunk = "";
+      const l = line(item);
+      lines.push(l);
+      size += l.length;
+      if (size > 1 << 16) {
+        yield lines.join("");
+        lines = [];
+        size = 0;
         if (performance.now() - since > YIELD_MS) {
           await yieldToEventLoop();
           since = performance.now();
         }
       }
     }
-    if (chunk !== "") yield chunk;
+    if (size > 0) yield lines.join("");
   }
   await pipeline(Readable.from(chunks()), stream);
 }

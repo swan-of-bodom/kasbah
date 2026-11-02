@@ -469,21 +469,23 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
-  "COPY keeps every character of text and jsonb: tabs, newlines, carriage returns, backslashes, quotes",
+  "COPY keeps every character of text and jsonb: tabs, newlines, carriage returns, backslashes, quotes, UTF-8",
   async () => {
     await pool.query(`DROP TABLE IF EXISTS notes`);
     const notes = pgTable("notes", { id: text().primaryKey(), body: text(), meta: jsonb() });
     await pool.query(createTableSql(tableInfo(notes)));
-    const nasty = 'a\tb\nc\rd\\e"f\\\\g\\nh\u0001i';
+    const nasty = 'a\tb\nc\rd\\e"f\\\\g\\nh\u0001ié€𝄞';
     const rows = [
       { id: "plain", body: "0xabc:1", meta: { k: "0x1", n: 2 } },
       { id: "nasty", body: nasty, meta: { s: nasty, list: [nasty, "x"], deep: { s: nasty } } },
       { id: "nulls", body: null, meta: null },
+      // Longer than a COPY chunk, in two-byte characters.
+      { id: "long", body: `${"é".repeat(70_000)}\t`, meta: { s: "€".repeat(30_000) } },
     ];
     const store = new Store(drizzle(pool), [notes], { complete: true });
     for (const r of rows) await store.db.insert(notes).values(r);
     await commit(store);
     const { rows: back } = await pool.query(`SELECT id, body, meta FROM notes ORDER BY id`);
-    expect(back).toEqual([rows[1], rows[2], rows[0]]);
+    expect(back).toEqual([rows[3], rows[1], rows[2], rows[0]]);
   },
 );
