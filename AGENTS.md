@@ -61,13 +61,18 @@ A performance change is kept only if it beats the noise, measured end to end, as
   same node. The verdict is the median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left
   out. A run during which the laptop went on battery or the CPU's turbo turned off (on this laptop, a low battery)
   is discarded and stops the benchmark, and neither starts one.
-- On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float):
-  a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports kasbah's own totals from
-  `/metrics` (in commits, in handlers, waiting for events) and its GC time, so a difference comes with where it is.
-- About 1 run in 5, on either side, is ~12% slower with ~30% more CPU: its young-generation scavenges each take ~35%
+- On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float,
+  `--pin 4-11` to name the CPUs): a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports
+  kasbah's own totals from `/metrics` (in commits, in handlers, waiting for events), its GC time, and its main
+  thread's CPU time (the JS, without GC helper threads or waiting on Postgres), so a difference comes with where
+  it is.
+- Some runs, on either side, are ~12% slower with ~30% more CPU: their young-generation scavenges each take ~35%
   longer (the run's line shows them). Such runs had the same CPU clock and temperature as the others, a full
-  battery, and Postgres pinned off kasbah's cores (2026-11-02): the extra time is kasbah's own GC, not the machine,
-  and pairs and the median absorb it.
+  battery, and Postgres pinned off kasbah's cores (2026-11-02), and pairs and the median absorb them. They depend
+  on where kasbah runs: on this laptop the fastest cores are two P-cores of two hyperthreads each, where 8 of 10
+  runs were slow one day (2026-11-02, scavenges 12–19 ms) and fewer GC helper threads (`--v8-pool-size=2`) didn't
+  help; pinned to the eight E-cores, which have no hyperthreads (`--pin 4-11`), 1 of 13 was (11–13 ms), with runs
+  ~25% longer.
 - After each run the runner counts every app table's rows; the summary says if any run wrote different rows than
   the others, so "faster" can't mean "skipped work".
 - Ekubo's handlers only insert, so a run can start late: `--from 620000` (the default) keeps 58% of the events to

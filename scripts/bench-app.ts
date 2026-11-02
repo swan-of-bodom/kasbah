@@ -57,6 +57,8 @@ type Run = {
   gapSeconds: number;
   maxGapMs: number;
   cpuSeconds: number;
+  /** The main thread's alone: the JS kasbah runs, without GC helper threads or waiting on Postgres. */
+  mainCpuSeconds: number;
   rpcMedianMs: number;
   gcSeconds: number;
   /** By kind (`minor` is the young generation's scavenges): a run with slower scavenges was a slow run. */
@@ -123,9 +125,16 @@ const has = (cmd: string) => {
   }
 };
 
+/** CPUs in a `taskset` list such as `4-11` or `0,2`. */
+const cpuList = (list: string) =>
+  list.split(",").flatMap((part) => {
+    const [lo, hi = lo] = part.split("-").map(Number);
+    return Array.from({ length: hi! - lo! + 1 }, (_, i) => lo! + i);
+  });
+
 /**
  * On a CPU with fast and slow cores, Linux moves a busy process between them, which changed a run's CPU time by up
- * to ~60%: kasbah is pinned to the fastest cores, the simulated node to the others.
+ * to ~60%: kasbah is pinned to the fastest cores (or to `--pin`'s CPUs), the simulated node to the others.
  */
 function cpuSplit(): { fast: string; rest: string } | undefined {
   const dir = "/sys/devices/system/cpu";
@@ -138,9 +147,10 @@ function cpuSplit(): { fast: string; rest: string } | undefined {
   }
   const top = Math.max(...max.values());
   const cpus = [...max.keys()].sort((x, y) => x - y);
-  const fast = cpus.filter((c) => max.get(c) === top);
-  const rest = cpus.filter((c) => max.get(c) !== top);
-  return rest.length === 0 ? undefined : { fast: fast.join(","), rest: rest.join(",") };
+  const chosen = a.pin === "auto" ? cpus.filter((c) => max.get(c) === top) : cpuList(a.pin!);
+  const rest = cpus.filter((c) => !chosen.includes(c));
+  if (a.pin === "auto" && rest.length === 0) return undefined;
+  return { fast: chosen.join(","), rest: rest.join(",") };
 }
 const split = cpuSplit();
 
@@ -322,7 +332,7 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
       console.log(
         `pair ${pair} ${side}: ${r.seconds.toFixed(1)} s, rss ${r.maxRssMb.toFixed(0)} MB, ` +
           `stops >100 ms ${r.gaps} (>400 ms ${r.gapsOver400}, ${r.gapSeconds.toFixed(1)} s), longest ${r.maxGapMs.toFixed(0)} ms, ` +
-          `cpu ${r.cpuSeconds.toFixed(0)} s` +
+          `cpu ${r.cpuSeconds.toFixed(0)} s (main thread ${r.mainCpuSeconds.toFixed(1)} s)` +
           (r.rpcMedianMs > 0 ? `, rpc median ${r.rpcMedianMs.toFixed(0)} ms` : "") +
           `\n    commits ${r.commitSeconds.toFixed(1)} s, handlers ${r.handlerSeconds.toFixed(1)} s, ` +
           `waiting for events ${r.waitSeconds.toFixed(1)} s, gc ${r.gcSeconds.toFixed(1)} s` +
@@ -382,7 +392,8 @@ function summary(runs: Run[]): string {
     lines.push(
       `${s}: median ${median(t).toFixed(1)} s (min ${Math.min(...t).toFixed(1)}, max ${Math.max(...t).toFixed(1)}), ` +
         `rss ${median(rs.map((r) => r.maxRssMb)).toFixed(0)} MB, stops >400 ms ${median(rs.map((r) => r.gapsOver400))}, ` +
-        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms, cpu ${median(rs.map((r) => r.cpuSeconds)).toFixed(0)} s` +
+        `longest ${median(rs.map((r) => r.maxGapMs)).toFixed(0)} ms, cpu ${median(rs.map((r) => r.cpuSeconds)).toFixed(0)} s ` +
+        `(main thread ${median(rs.map((r) => r.mainCpuSeconds)).toFixed(1)} s)` +
         `\n   commits ${median(rs.map((r) => r.commitSeconds)).toFixed(1)} s, handlers ${median(rs.map((r) => r.handlerSeconds)).toFixed(1)} s, ` +
         `waiting for events ${median(rs.map((r) => r.waitSeconds)).toFixed(1)} s, gc ${median(rs.map((r) => r.gcSeconds)).toFixed(1)} s`,
     );
@@ -399,7 +410,8 @@ function summary(runs: Run[]): string {
         : "n/a";
     const wins = steady.filter(([x, y]) => y.seconds < x.seconds).length;
     lines.push(
-      `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}, cpu ${pct((r) => r.cpuSeconds)}, ` +
+      `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}, cpu ${pct((r) => r.cpuSeconds)} ` +
+        `(main thread ${pct((r) => r.mainCpuSeconds)}), ` +
         `rss ${pct((r) => r.maxRssMb)}, commits ${pct((r) => r.commitSeconds)}, gc ${pct((r) => r.gcSeconds)}; ` +
         `B faster in ${wins} of ${steady.length} pairs, A's own spread ${(spread(runs) * 100).toFixed(1)}%`,
     );
@@ -422,7 +434,7 @@ console.log(
   `${a.app} blocks ${a.from} to ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a["min-pairs"]} to ${a.pairs} pairs; logs in ${results}` +
     (split === undefined
       ? ""
-      : `\nkasbah pinned to CPUs ${split.fast} (the fastest cores), the simulated node to ${split.rest}`),
+      : `\nkasbah pinned to CPUs ${split.fast}${a.pin === "auto" ? " (the fastest cores)" : ""}, the simulated node to ${split.rest}`),
 );
 const dirs = { A: build("A", a.a), B: build("B", a.b) };
 const sim = a.rpc === "sim" ? await simulatedNode() : undefined;

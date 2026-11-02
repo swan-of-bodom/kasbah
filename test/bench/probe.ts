@@ -50,6 +50,7 @@ process.on("exit", () => {
       gapSeconds: gaps.reduce((a, g) => a + g, 0) / 1000,
       maxGapMs: Math.max(0, ...gaps),
       cpuSeconds: (process.cpuUsage().user + process.cpuUsage().system) / 1e6,
+      mainCpuSeconds: (process.threadCpuUsage().user + process.threadCpuUsage().system) / 1e6,
       systemSeconds: process.cpuUsage().system / 1e6,
       rpcMedianMs: median(rpcMs),
       gcSeconds: gcMs / 1000,
