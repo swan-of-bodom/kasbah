@@ -16,7 +16,7 @@
 kasbah start --schema my_indexer_$(git rev-parse --short HEAD)
 ```
 
-With `cache: true`, a new schema re-indexes from the cache, so it fetches nothing it already fetched. When it's
+With the cache on (the default), a new schema re-indexes from it, so it fetches nothing it already fetched. When it's
 ready, switch traffic to it, then delete the old one:
 
 ```bash

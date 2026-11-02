@@ -29,6 +29,7 @@ test.skipIf(url === undefined)(
   "a backfill gives the event loop a turn every few ms, even when handlers never wait",
   async () => {
     const app = kasbah({
+      cache: false,
       rpc,
       database: url!,
       schema,

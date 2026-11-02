@@ -22,7 +22,7 @@ const appSource = (factor: number) => `import { integer, pgTable, text } from "d
 import { bignum, kasbah } from ${JSON.stringify(index)};
 const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull(), n: integer().notNull() });
 const abi = ${JSON.stringify(abi)} as const;
-const app = kasbah({ rpc: ${JSON.stringify("RPC")}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
+const app = kasbah({ cache: false, rpc: ${JSON.stringify("RPC")}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
   contracts: { C: { abi, address: "0xc", startBlock: 0 } }, tables: { totals }, pollMs: 50, reorgWindow: 4 });
 app.on("C:Counted", async ({ event, context }) => {
   const v = event.args.amount * ${factor}n;
@@ -281,7 +281,7 @@ export const totals = pgTable("totals", { id: text().primaryKey(), total: bignum
     writeFileSync(
       join(project, "kasbah.config.ts"),
       `import { kasbah } from ${JSON.stringify(index)};
-export default kasbah({ rpc: ${JSON.stringify(rpcUrl)},
+export default kasbah({ cache: false, rpc: ${JSON.stringify(rpcUrl)},
   contracts: { C: { abi: ${JSON.stringify(abi)}, address: "0xc", startBlock: 0 } }, pollMs: 50, reorgWindow: 4 });
 `,
     );

@@ -28,7 +28,7 @@ export default kasbah({
 | `pollMs` | `number` | `2000` | Head polling interval, ms. |
 | `ws` | `string \| true` | none | WebSocket for new heads. `true`: the RPC URL as `ws`. |
 | `concurrency` | `number` | `32` | `getEvents` requests in parallel. |
-| `cache` | `boolean \| { maxCalls? }` | `false` | Keep final events and reads in Postgres. `maxCalls` default 1,000,000. |
+| `cache` | `boolean \| { maxCalls? }` | `true` | Keep final events and reads in Postgres. `maxCalls` default 1,000,000. |
 | `api` | `false \| { port?, host?, readDatabase? }` | port `42069`, localhost | The read API. `PORT` and `API_HOST` win. |
 | `database` | `string` | `DATABASE_URL` | Postgres URL. |
 | `schema` | `string` | `dev`: the directory's name | Postgres schema. `DATABASE_SCHEMA` wins. `start`/`serve` need one. |

@@ -46,6 +46,7 @@ afterAll(async () => {
 
 const app = (rpc: Parameters<typeof kasbah>[0]["rpc"]) => {
   const a = kasbah({
+    cache: false,
     rpc,
     database: url,
     schema,

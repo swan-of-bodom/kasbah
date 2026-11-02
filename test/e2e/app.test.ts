@@ -214,6 +214,7 @@ afterAll(async () => {
 
 function app(s = schema, rpc = rpcUrl) {
   const a = kasbah({
+    cache: false,
     rpc,
     database: url!,
     schema: s,

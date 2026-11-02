@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- The raw-event cache is on by default, as Ponder always keeps what it fetched: a re-index fetches nothing again.
+  It costs disk, about 400 bytes per event (tens of GB for a busy contract's whole history); `cache: false` turns
+  it off.
 - Ctrl-C during startup stops at once: it used to wait until every class was read, which takes several seconds on a
   contract with a long history. A stopped run shows as stopped, with the block it committed through, instead of
   `DONE ✓ through block 0`.

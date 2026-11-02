@@ -525,7 +525,7 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 
 ## 9. Storage and caches
 
-**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, opt-in (`cache: true`) (`src/db/cache.ts`):
+**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, on unless `cache: false` (`src/db/cache.ts`):
 - `events(block, tx, idx, address, selector, block_hash, tx_hash, keys, data)`, primary key = the three ints.
   `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
   small numbers).

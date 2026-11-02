@@ -17,7 +17,7 @@ test("resolveConfig: every left-out field gets its default", () => {
     reorgWindow: DEFAULTS.reorgWindow,
     pollMs: DEFAULTS.pollMs,
     ws: undefined,
-    cache: undefined,
+    cache: { maxCalls: DEFAULTS.maxCalls },
     blocks: {},
   });
 });
@@ -27,6 +27,7 @@ test("resolveConfig: `ws: true` is the RPC URL's socket, and `cache: true` keeps
   expect(r.ws).toBe("wss://node/rpc");
   expect(r.cache).toEqual({ maxCalls: DEFAULTS.maxCalls });
   expect(resolveConfig({ ...base, cache: { maxCalls: 5 } }).cache).toEqual({ maxCalls: 5 });
+  expect(resolveConfig({ ...base, cache: false }).cache).toBeUndefined();
 });
 
 test("resolveConfig: the environment wins over the config, so one config deploys anywhere", () => {

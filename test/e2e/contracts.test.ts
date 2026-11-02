@@ -60,6 +60,7 @@ const app = (
   l1 = false,
 ) => {
   const a = kasbah({
+    cache: false,
     rpc: at,
     database: url,
     schema,
@@ -222,6 +223,7 @@ test.skipIf(url === undefined)(
     asked.length = 0;
     const START = 20;
     const a = kasbah({
+      cache: false,
       rpc: proxied,
       database: url,
       schema,

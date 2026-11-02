@@ -88,12 +88,14 @@ export function resolveConfig(
     reorgWindow: config.reorgWindow ?? DEFAULTS.reorgWindow,
     pollMs: config.pollMs ?? DEFAULTS.pollMs,
     ws: config.ws === true ? rpc[0]!.url.replace(/^http/, "ws") : config.ws,
-    cache: config.cache
-      ? {
-          maxCalls:
-            (config.cache === true ? undefined : config.cache.maxCalls) ?? DEFAULTS.maxCalls,
-        }
-      : undefined,
+    cache:
+      config.cache !== false
+        ? {
+            maxCalls:
+              (typeof config.cache === "object" ? config.cache.maxCalls : undefined) ??
+              DEFAULTS.maxCalls,
+          }
+        : undefined,
     blocks: config.blocks ?? {},
   };
 }

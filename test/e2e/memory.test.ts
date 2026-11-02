@@ -119,7 +119,7 @@ beforeAll(async () => {
 import { kasbah } from ${JSON.stringify(index)};
 const big = pgTable("big", { id: text().primaryKey(), block: integer().notNull(), values: jsonb().notNull() });
 const abi = ${JSON.stringify(abi)} as const;
-const app = kasbah({ rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
+const app = kasbah({ cache: false, rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
   contracts: { M: { abi, address: "0xb", startBlock: 0 } }, tables: { big }, reorgWindow: 4 });
 app.on("M:Big", async ({ event, context }) => {
   await context.db.insert(big).values({ id: event.transaction.hash, block: event.block.number, values: Object.values(event.args).map(String) });

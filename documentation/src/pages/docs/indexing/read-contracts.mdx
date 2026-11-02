@@ -36,5 +36,5 @@ const [name, symbol] = await context.client.readContracts({
 
 ## Caching
 
-Reads at final blocks are cached: in memory, and in Postgres with `cache: true`, so a re-index makes no calls.
+Reads at final blocks are cached: in memory, and in Postgres unless `cache: false`, so a re-index makes no calls.
 `readContracts` saves round trips, but the provider still bills each call in it.

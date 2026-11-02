@@ -102,7 +102,7 @@ export type Config = {
   api?: false | { port?: number; host?: string; readDatabase?: string };
   /**
    * Keep final raw events and call results in Postgres (schema `kasbah_cache_<chain>`), so a re-index refetches
-   * nothing. `maxCalls`: call results kept, oldest dropped first (default 1M).
+   * nothing. On unless `false`. `maxCalls`: call results kept, oldest dropped first (default 1M).
    */
   cache?: boolean | { maxCalls?: number };
 };

@@ -135,7 +135,7 @@ test.skipIf(url === undefined)(
 import { bignum, kasbah } from "kasbah";
 const totals = pgTable("totals", { id: text().primaryKey(), total: bignum().notNull(), n: integer().notNull() });
 const abi = ${JSON.stringify(counterAbi)} as const;
-const app = kasbah({ rpc: ${JSON.stringify(rpcUrl)}, database: process.env.DATABASE_URL!, schema: "kasbah_test_pkg",
+const app = kasbah({ cache: false, rpc: ${JSON.stringify(rpcUrl)}, database: process.env.DATABASE_URL!, schema: "kasbah_test_pkg",
   contracts: { C: { abi, address: "0xc", startBlock: 0 } }, tables: { totals }, reorgWindow: 4 });
 app.on("C:Counted", async ({ event, context }) => {
   const v = event.args.amount;

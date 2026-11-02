@@ -38,8 +38,8 @@ Each deploy indexes into its own schema while the old one keeps serving. `exec` 
 ### Health check
 
 **Settings → Deploy → Healthcheck Path**: `/ready`, and **Healthcheck Timeout**: `3600` (the most Railway allows).
-Traffic moves to a new deploy only once it's caught up. A backfill longer than an hour fails the deploy: turn on
-`cache: true` so later deploys re-index from the cache.
+Traffic moves to a new deploy only once it's caught up. A backfill longer than an hour fails the deploy: keep the
+cache on (the default) so later deploys re-index from it.
 
 ### Get a URL
 
