@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Building each handler's `event` costs a third of what it did, 7% off a cached run on Ekubo. `event` is now an
+  instance of a class and `event.log` a getter on its prototype, so spreading an event (`{ ...event }`) no
+  longer copies `log`.
 - Writing rows to Postgres takes less CPU: COPY text is escaped only where a value needs it and each 64 KB chunk
   is joined once (a quarter less time per row on Ekubo's rows, about 4% off a cached run).
 - With contracts that start at different blocks, the event cache now keeps everything the first run fetched: the

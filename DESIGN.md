@@ -310,6 +310,12 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - The handler loop gives the event loop a turn every 25 ms (Ponder does the same). Handlers reading cached rows
   never wait on I/O, so a 50k-event batch from the cache held it for a second: no API, and the next batch's read
   waited. Measured on Ekubo: time waiting for events 23 s → 10 s, loop delay p99 1.2 s → 0.27 s.
+- A handler's `event` is an instance of a class (`src/indexer/handle.ts`) whose `log` is a getter on the
+  prototype, and each address is padded once, when it is watched. As an object literal with `get log()` it cost
+  ~1.2 µs per event to build (a new closure and accessor each time, then a spread or two); as a class, 0.35 µs
+  (Ekubo's events, micro-benchmark). Sharing one block and transaction object per transaction would save ~0.14 µs
+  more, not worth the bookkeeping. Cached Ekubo to block 700k, 4 GB: −7.3% (3 of 3 pairs, A's spread 3.0%), main
+  thread CPU −7.7%, GC −7.3%, peak RSS +1.6%. Spreading an event leaves `log` out.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
 - **A backfill commit is written while the next batch is handled** (`Position.start`). Waiting for each one stopped

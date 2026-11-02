@@ -9,7 +9,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
   event.block.number;      // also hash; the whole header with include.block
   event.transaction.hash;
   event.index;             // position in the transaction
-  event.log;               // raw keys and data
+  event.log;               // raw keys and data, built when read
 
   context.db;              // read and write your tables
   context.client;          // read contracts at this block

@@ -2,8 +2,10 @@ import type { IndexedBlock } from "../config/app.ts";
 import { type EmittedEvent, getHeaders } from "../rpc/methods.ts";
 import { type Extras, fetchExtras } from "../sync/extras.ts";
 import { type Block, blockOf } from "../types/block.ts";
-import { canonical, felt } from "../types/felt.ts";
+import { canonical, type Felt, felt } from "../types/felt.ts";
+import type { Receipt, Transaction } from "../types/transaction.ts";
 import type { Run } from "./open.ts";
+import type { Watched } from "./sources.ts";
 
 export type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Block> };
 
@@ -52,6 +54,48 @@ export async function blockHeaders(run: Run, numbers: number[]): Promise<Map<num
   return found;
 }
 
+/**
+ * A handler's `event`. An instance of a class, not a literal: a literal with a getter cost ~1 µs per event to
+ * build. `log` is a getter on the prototype, built only if read, so spreading an event leaves it out.
+ */
+class HandlerEvent {
+  readonly contract: string;
+  readonly name: string;
+  readonly args: unknown;
+  readonly address: Felt;
+  readonly block: Block | { number: number; hash: Felt | undefined };
+  readonly transaction: Partial<Transaction> & { hash: Felt; index: number | undefined };
+  declare readonly receipt?: Receipt;
+  readonly index: number | undefined;
+  readonly #emitted: EmittedEvent;
+
+  constructor(
+    w: Watched,
+    decoded: { name: string; args: unknown },
+    block: HandlerEvent["block"],
+    x: Extras | undefined,
+    e: EmittedEvent,
+  ) {
+    this.contract = w.contract;
+    this.name = decoded.name;
+    this.args = decoded.args;
+    this.address = w.padded;
+    this.block = block;
+    const hash = felt(e.transaction_hash);
+    this.transaction =
+      x?.transaction === undefined
+        ? { hash, index: e.transaction_index }
+        : { ...x.transaction, hash, index: e.transaction_index };
+    if (x?.receipt !== undefined) this.receipt = x.receipt;
+    this.index = e.event_index;
+    this.#emitted = e;
+  }
+
+  get log(): { keys: Felt[]; data: Felt[] } {
+    return { keys: this.#emitted.keys.map(felt), data: this.#emitted.data.map(felt) };
+  }
+}
+
 /** Decodes `e` with its address's class at that block and runs its handler, if any. */
 export async function handle(
   run: Run,
@@ -68,25 +112,18 @@ export async function handle(
   const handler = run.handlers.get(name);
   if (handler === undefined) return;
   if (run.sources.filterOf(w.contract, decoded.name)?.matches(decoded.args) === false) return;
-  const x = extras.get(e.transaction_hash);
-  const event = {
-    contract: w.contract,
-    name: decoded.name,
-    args: decoded.args,
-    address: felt(e.from_address),
-    block: run.config.contracts[w.contract]!.include?.block
+  const event = new HandlerEvent(
+    w,
+    decoded,
+    run.config.contracts[w.contract]!.include?.block
       ? headers.get(e.block_number!)!
       : {
           number: e.block_number!,
           hash: e.block_hash === undefined ? undefined : felt(e.block_hash),
         },
-    transaction: { ...x?.transaction, hash: felt(e.transaction_hash), index: e.transaction_index },
-    get log() {
-      return { keys: e.keys.map(felt), data: e.data.map(felt) };
-    },
-    ...(x?.receipt === undefined ? {} : { receipt: x.receipt }),
-    index: e.event_index,
-  };
+    extras.get(e.transaction_hash),
+    e,
+  );
   run.client.current = event.block;
   const t = performance.now();
   try {

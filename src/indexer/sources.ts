@@ -8,7 +8,7 @@ import {
 } from "../abi/history.ts";
 import { ConfigError } from "../config/errors.ts";
 import type { RpcClient } from "../rpc/client.ts";
-import { canonical } from "../types/felt.ts";
+import { canonical, type Felt, felt } from "../types/felt.ts";
 import { chunks } from "../utils/chunks.ts";
 import type { CompiledFilter } from "./filters.ts";
 import type { Note } from "./status.ts";
@@ -19,6 +19,8 @@ export type SourceNote = Extract<Note, { kind: "class" | "skipped" }>;
 export type Watched = {
   contract: string;
   address: string;
+  /** `address` as handlers get it in `event.address`: padded to 64 hex digits. */
+  padded: Felt;
   /** First block indexed: the contract's start block, or the block a child was created in. */
   from: number;
   child: boolean;
@@ -255,6 +257,7 @@ export class Sources {
     const w: Watched = {
       contract,
       address: a,
+      padded: felt(a),
       from,
       child,
       spans: [],
