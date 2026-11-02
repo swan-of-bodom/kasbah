@@ -316,6 +316,10 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   (Ekubo's events, micro-benchmark). Sharing one block and transaction object per transaction would save ~0.14 µs
   more, not worth the bookkeeping. Cached Ekubo to block 700k, 4 GB: −7.3% (3 of 3 pairs, A's spread 3.0%), main
   thread CPU −7.7%, GC −7.3%, peak RSS +1.6%. Spreading an event leaves `log` out.
+- A bigger young generation doesn't help: a scavenge costs what survives it (rows waiting for their commit, cached
+  rows), not what dies. At 4 GB, V8's default semi-space is 64 MB (~1,430 scavenges of 13 ms, ~19 s); 128 MB
+  gave half as many of 24.5 ms and 256 MB a third as many of 44.5 ms, the same GC time, with more stops over
+  400 ms and RSS +4% and +12% (`--node-b=--max-semi-space-size=…`, 5 and 2 pairs: +2.3%, 2 of 5).
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
 - **A backfill commit is written while the next batch is handled** (`Position.start`). Waiting for each one stopped
