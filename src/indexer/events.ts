@@ -37,7 +37,7 @@ export async function* events(
       yield* cache.read(addresses, keys[0]!, from, end);
       start = end + 1;
     }
-    if (start <= to) cache.track(addresses, keys[0]!, start);
+    if (start <= to) cache.track(addresses, keys[0]!, start, to);
   }
   if (start > to) return;
   const gauges = (read: () => FetchGauges) => (status.fetcher = read);

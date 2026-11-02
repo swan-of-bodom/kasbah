@@ -87,12 +87,10 @@ type CachedCall = {
   block: number;
   result: Buffer;
 };
-/** One commit's share: what was fetched until it started, and the tracked events of its blocks. */
-type Taken = {
-  transactions: CachedTransaction[];
-  calls: CachedCall[];
-  events?: { list: EmittedEvent[]; from: number; through: number; pairs: Pairs };
-};
+/** Events fetched for `pairs` in blocks `[from, to]`, not yet written. */
+type Tracked = { pairs: Pairs; from: number; to: number; events: EmittedEvent[] };
+/** One commit's share: what was fetched until it started, and the tracked blocks it covers. */
+type Taken = { transactions: CachedTransaction[]; calls: CachedCall[]; ranges: Tracked[] };
 
 /**
  * Final events (below the reorg window) kept in Postgres, shared by every app on the same database and chain.
@@ -102,9 +100,11 @@ type Taken = {
 export class EventCache {
   readonly #pool: pg.Pool;
   readonly #schema: string;
-  #pending: EmittedEvent[] = [];
-  #pendingFrom: number | undefined;
-  #pendingPairs: Pairs | undefined;
+  /**
+   * Ranges being fetched, oldest first. One stays until commits have passed all of its blocks: the next range
+   * (a contract's start block) begins while its last blocks are still being handled.
+   */
+  #tracked: Tracked[] = [];
   #transactions: CachedTransaction[] = [];
   #calls: CachedCall[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
@@ -285,16 +285,17 @@ export class EventCache {
     }
   }
 
-  /** Remembers events fetched from RPC for `addresses` × `selectors` from block `from`, until `persist`. */
-  track(addresses: string[], selectors: string[], from: number) {
-    this.#pendingPairs = { addresses: [...addresses], selectors: [...selectors] };
-    this.#pendingFrom = from;
-    this.#pending = [];
+  /** Remembers events fetched from RPC for `addresses` × `selectors` in `[from, to]`, until commits pass them. */
+  track(addresses: string[], selectors: string[], from: number, to: number) {
+    const pairs = { addresses: [...addresses], selectors: [...selectors] };
+    this.#tracked.push({ pairs, from, to, events: [] });
   }
 
+  /** Events of the range tracked last. */
   add(events: EmittedEvent[]) {
-    if (this.#pendingFrom === undefined) return;
-    for (const e of events) this.#pending.push(e);
+    const t = this.#tracked.at(-1);
+    if (t === undefined) return;
+    for (const e of events) t.events.push(e);
     this.stats.fetchedEvents += events.length;
   }
 
@@ -370,20 +371,23 @@ export class EventCache {
 
   /**
    * Moves out what the next `persist` writes, before the commit's first await: transactions, receipts and calls
-   * fetched so far, and the tracked events with `[from, through]` to mark covered (`through` -1: none). What's
-   * fetched or tracked from here on is the next commit's.
+   * fetched so far, and the events of every tracked range the commit reaches, with its blocks through `through`
+   * to mark covered (-1: none). What's fetched or tracked from here on is the next commit's.
    */
   take(through: number): void {
-    const from = this.#pendingFrom;
-    const pairs = this.#pendingPairs;
-    this.#taken = { transactions: this.#transactions, calls: this.#calls };
+    const ranges: Tracked[] = [];
+    for (const t of this.#tracked) {
+      if (through < t.from) continue;
+      const to = Math.min(through, t.to);
+      ranges.push({ pairs: t.pairs, from: t.from, to, events: t.events });
+      t.from = to + 1;
+      t.events = [];
+    }
+    this.#tracked = this.#tracked.filter((t) => t.from <= t.to);
+    this.#taken = { transactions: this.#transactions, calls: this.#calls, ranges };
     this.#transactions = [];
     this.#calls = [];
     this.#pendingBytes = 0;
-    if (from === undefined || pairs === undefined || through < from) return;
-    this.#taken.events = { list: this.#pending, from, through, pairs };
-    this.#pending = [];
-    this.#pendingFrom = through + 1;
   }
 
   /** Writes what `take` moved out, and marks its blocks covered, inside the caller's transaction. */
@@ -419,37 +423,38 @@ export class EventCache {
       this.#callRows += r.rowCount ?? 0;
       await this.#pruneCalls(tx);
     }
-    if (taken.events === undefined) return;
-    const { list, from, through, pairs } = taken.events;
-    if (list.length > 0) {
+    if (taken.ranges.some((r) => r.events.length > 0)) {
       await tx.query(
         `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
       );
-      await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, list, eventLine);
+      const events = function* () {
+        for (const r of taken.ranges) yield* r.events;
+      };
+      await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, events(), eventLine);
       await tx.query(
         `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
       );
     }
-    const a: Buffer[] = [];
-    const s: Buffer[] = [];
-    for (const x of pairs.addresses)
-      for (const y of pairs.selectors) {
-        a.push(feltBytes(x));
-        s.push(feltBytes(y));
-      }
-    await tx.query(
-      `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
-       SELECT address, selector, int8multirange(int8range($1, $2)) FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
-       ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
-      [from, through + 1, a, s],
-    );
+    for (const { pairs, from, to } of taken.ranges) {
+      const a: Buffer[] = [];
+      const s: Buffer[] = [];
+      for (const x of pairs.addresses)
+        for (const y of pairs.selectors) {
+          a.push(feltBytes(x));
+          s.push(feltBytes(y));
+        }
+      await tx.query(
+        `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
+         SELECT address, selector, int8multirange(int8range($1, $2)) FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
+         ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
+        [from, to + 1, a, s],
+      );
+    }
   }
 
   /** Stops tracking (the rest of the range is live, or the run stopped). */
   untrack() {
-    this.#pendingFrom = undefined;
-    this.#pendingPairs = undefined;
-    this.#pending = [];
+    this.#tracked = [];
   }
 
   async headers(numbers: number[]): Promise<Map<number, Block>> {

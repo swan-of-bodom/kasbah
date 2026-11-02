@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- With contracts that start at different blocks, the event cache now keeps everything the first run fetched: the
+  blocks fetched just before each later start block were left out, so a re-index fetched them again.
 - A backfill no longer stops for its commits: Postgres writes each batch while the next one is handled. On the
   Ekubo template it is 4–7% faster with a 4 GB heap and as fast at 512 MB, with no event-loop stops over 400 ms
   (there were about 20), so the API keeps answering. `kasbah_seconds_total{part="commit"}` and the dashboard's

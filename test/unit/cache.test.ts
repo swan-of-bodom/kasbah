@@ -101,7 +101,7 @@ test.skipIf(url === undefined)(
         });
       }
     }
-    cache.track(["0xa", "0xb"], ["0x51"], 100);
+    cache.track(["0xa", "0xb"], ["0x51"], 100, 399);
     cache.add(events);
     cache.take(399);
     const c = await pool.connect();
@@ -142,47 +142,75 @@ test.skipIf(url === undefined)(
   },
 );
 
+const event = (address: string, block: number): EmittedEvent => ({
+  from_address: address,
+  keys: ["0x51"],
+  data: [],
+  block_number: block,
+  block_hash: "0x1",
+  transaction_hash: `0x${block.toString(16)}`,
+  transaction_index: 0,
+  event_index: 0,
+});
+
+/** As a backfill commit writes the cache; `meanwhile` runs while the write is under way. */
+async function commit(cache: EventCache, through: number, meanwhile = () => {}) {
+  cache.take(through);
+  const c = await pool!.connect();
+  await c.query("BEGIN");
+  const persisting = cache.persist(c);
+  meanwhile();
+  await persisting;
+  await c.query("COMMIT");
+  c.release();
+}
+
+async function cachedBlocks(cache: EventCache, addresses: string[], from: number, to: number) {
+  const out: number[] = [];
+  for await (const b of cache.read(addresses, ["0x51"], from, to))
+    for (const e of b.events) out.push(e.block_number!);
+  return out;
+}
+
 test.skipIf(url === undefined)(
   "a range tracked while a commit writes the cache is covered from its own start only",
   async () => {
     pool ??= new pg.Pool({ connectionString: url, max: 2 });
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     const cache = await EventCache.open(pool, CHAIN);
-    const event = (address: string, block: number): EmittedEvent => ({
-      from_address: address,
-      keys: ["0x51"],
-      data: [],
-      block_number: block,
-      block_hash: "0x1",
-      transaction_hash: `0x${block.toString(16)}`,
-      transaction_index: 0,
-      event_index: 0,
-    });
-    const commit = async (through: number, meanwhile = () => {}) => {
-      cache.take(through);
-      const c = await pool!.connect();
-      await c.query("BEGIN");
-      const persisting = cache.persist(c);
-      meanwhile();
-      await persisting;
-      await c.query("COMMIT");
-      c.release();
-    };
-    cache.track(["0xa"], ["0x51"], 100);
+    cache.track(["0xa"], ["0x51"], 100, 299);
     cache.add([event("0xa", 150)]);
     // 0xb starts at block 300: its range is fetched while blocks 100–199 are being written.
-    await commit(199, () => {
-      cache.track(["0xa", "0xb"], ["0x51"], 300);
+    await commit(cache, 199, () => {
+      cache.track(["0xa", "0xb"], ["0x51"], 300, 349);
       cache.add([event("0xa", 310), event("0xb", 320)]);
     });
-    await commit(349);
-    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(200);
+    await commit(cache, 349);
+    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(350);
     expect(await cache.coveredUntil(["0xb"], ["0x51"], 200)).toBe(200);
     expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 300)).toBe(350);
-    const read: number[] = [];
-    for await (const b of cache.read(["0xa", "0xb"], ["0x51"], 300, 349))
-      for (const e of b.events) read.push(e.block_number!);
-    expect(read).toEqual([310, 320]);
+    expect(await cachedBlocks(cache, ["0xa", "0xb"], 300, 349)).toEqual([310, 320]);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a range that ends at a contract's start block is cached once a commit passes it, though the next began first",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    cache.track(["0xa"], ["0x51"], 100, 199);
+    cache.add([event("0xa", 150)]);
+    // The backfill reads a batch ahead: 0xb's range, from its start block, is fetched before block 199 commits.
+    cache.track(["0xa", "0xb"], ["0x51"], 200, 349);
+    cache.add([event("0xb", 250)]);
+    await commit(cache, 199);
+    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(200);
+    expect(await cache.coveredUntil(["0xb"], ["0x51"], 200)).toBe(200);
+    await commit(cache, 349);
+    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(350);
+    expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 200)).toBe(350);
+    expect(await cachedBlocks(cache, ["0xa", "0xb"], 100, 349)).toEqual([150, 250]);
   },
 );
 

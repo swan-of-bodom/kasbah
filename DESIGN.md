@@ -516,7 +516,10 @@ plain log lines, better for Docker and log files. Skipped events are reported on
   blocks. Ponder's fragment idea, without its EVM topic cross-products.
 - Only data below the safety window is cached, so the cache never needs reorg handling.
 - A backfill reads the prefix of its range that every (address, selector) pair covers from the cache, then fetches
-  the rest; fetched events and coverage are written in the same transaction as the app's checkpoint.
+  the rest; fetched events and coverage are written in the same transaction as the app's checkpoint. Each piece
+  between start blocks is tracked on its own until commits have passed all of its blocks: the next piece is
+  fetched before this one's last blocks are handled, and starting it used to drop them (a re-index fetched them
+  again).
 - Reads page by position (`LIMIT` 12k as Ponder reads, a batch never ends inside a block) and get hex text from
   Postgres (`encode(.., 'hex')`), skipping the Buffer round trip. Fewer events alive while handled is less for the
   GC to copy: 50k → 12k was 5% faster on Ekubo (5 of 5 interleaved pairs, median 88.8 s → 84.5 s), and 12k
