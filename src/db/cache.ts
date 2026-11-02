@@ -38,11 +38,17 @@ export function unpackFelts(b: Buffer): string[] {
   return unpackHex(b.toString("hex"));
 }
 
-/** `unpackFelts` from the bytea's hex text, as Postgres' `encode(x, 'hex')` returns it. */
+/** A lowercase hex digit's value. */
+const nibble = (c: number) => (c < 97 ? c - 48 : c - 87);
+
+/**
+ * `unpackFelts` from the bytea's hex text, as Postgres' `encode(x, 'hex')` returns it (lowercase). Each length
+ * byte is read from its two characters' codes: slicing it out for `parseInt` cost ~40% more per felt.
+ */
 export function unpackHex(h: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < h.length; ) {
-    const n = Number.parseInt(h.slice(i, i + 2), 16) * 2;
+    const n = (nibble(h.charCodeAt(i)) * 16 + nibble(h.charCodeAt(i + 1))) * 2;
     out.push(feltFromMinimalBytes(h.slice(i + 2, i + 2 + n)));
     i += 2 + n;
   }

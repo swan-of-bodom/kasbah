@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Re-indexing from the cache waits less for events: felts are unpacked without slicing out each one's length
+  (on Ekubo, waiting for events 37% shorter, the run about 2% faster).
 - Building each handler's `event` costs a third of what it did, 7% off a cached run on Ekubo. `event` is now an
   instance of a class and `event.log` a getter on its prototype, so spreading an event (`{ ...event }`) no
   longer copies `log`.

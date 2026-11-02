@@ -539,6 +539,9 @@ plain log lines, better for Docker and log files. Skipped events are reported on
   GC to copy: 50k → 12k was 5% faster on Ekubo (5 of 5 interleaved pairs, median 88.8 s → 84.5 s), and 12k
   beat 3k, 6k and 25k by 3–5% (12 of 12 pairs): fewer queries one way, more events alive the other. Reading the
   bytea as Buffers and unpacking felts from them was 9% slower (5 of 5): node-postgres gets hex text either way.
+  Each felt's length byte is read from its two characters' codes: slicing it out for `parseInt` cost 73 ns per
+  felt, the codes 43 ns. Cached Ekubo to block 700k, 4 GB: waiting for events 13.9 → 8.7 s (5 of 5 pairs), the
+  run −2.4% (4 of 5, inside A's 3.5% spread).
 - Measured, Ekubo to block 700k (7.68M events): 3.3 GB (≈430 bytes per event; full history would be
   ≈24 GB). Indexing from RPC while writing the cache 232 s; re-index from the cache 132 s, zero `getEvents`.
   Possible later: block hashes and addresses as ids instead of 32 bytes per row.
