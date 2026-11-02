@@ -53,7 +53,8 @@ A performance change is kept only if it beats the noise, measured end to end, as
 
 - `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core, blocks 620k to 700k by default) on two builds, A
   and B, in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
-  fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down, the laptop is on battery
+  fetches from the RPC, `--heap 512` checks a small machine, `--node-b=<flags>` gives one side Node or V8 flags
+  on the same build. It stops if Postgres is down, the laptop is on battery
   or the CPU's turbo is off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
 - `--rpc sim` fetches from `test/bench/node.ts` instead of the RPC: a simulated node that serves `getEvents` from
   the event cache with hosted Pathfinder's limits after a fixed `--latency`, and replays other calls recorded once

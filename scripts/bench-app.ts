@@ -37,6 +37,9 @@ const { values: a } = parseArgs({
     rpc: { type: "string", default: "real" },
     latency: { type: "string", default: "120" },
     pin: { type: "string", default: "auto" },
+    // Node flags for one side only, e.g. `--b HEAD --node-b=--max-semi-space-size=128`: a V8 setting, same build.
+    "node-a": { type: "string", default: "" },
+    "node-b": { type: "string", default: "" },
   },
 });
 if (a.rpc === "sim") a.cache = "off";
@@ -261,7 +264,9 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
   if (slow !== undefined) throw new Error(slow);
   const log = join(results, `${side}-${pair}.log`);
   const out = join(results, `${side}-${pair}.json`);
+  const flags = (side === "A" ? a["node-a"] : a["node-b"])!.split(" ").filter((f) => f !== "");
   const node = [
+    ...flags,
     `--max-old-space-size=${a.heap}`,
     "--import",
     join(repo, "test/bench/probe.ts"),
@@ -437,6 +442,8 @@ console.log(
       : `\nkasbah pinned to CPUs ${split.fast}${a.pin === "auto" ? " (the fastest cores)" : ""}, the simulated node to ${split.rest}`),
 );
 const dirs = { A: build("A", a.a), B: build("B", a.b) };
+for (const s of ["a", "b"] as const)
+  if (a[`node-${s}`] !== "") console.log(`${s.toUpperCase()} runs with node ${a[`node-${s}`]}`);
 const sim = a.rpc === "sim" ? await simulatedNode() : undefined;
 const runs: Run[] = [];
 try {
