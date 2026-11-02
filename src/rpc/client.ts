@@ -1,6 +1,7 @@
 import { promisify } from "node:util";
 import { zstdDecompress as zstdCallback } from "node:zlib";
 import { chunks } from "../utils/chunks.ts";
+import { Stopped } from "../utils/errors.ts";
 import { sleep } from "../utils/sleep.ts";
 
 const zstdDecompress = promisify(zstdCallback);
@@ -58,6 +59,8 @@ export type RpcClientOptions = {
   maxAttempts?: number;
   /** The transport, for tests: a fake node with no sockets, under fake timers. */
   fetch?: typeof fetch;
+  /** Once aborted, requests in flight and every later one throw `Stopped`, without retrying. */
+  signal?: AbortSignal;
 };
 
 /** A request with no answer by then is a timeout, retried like a transport failure. */
@@ -244,6 +247,7 @@ export class RpcClient {
   readonly #timeoutMs: number;
   readonly #maxConcurrency: number;
   readonly #maxAttempts: number;
+  readonly #signal: AbortSignal | undefined;
   readonly #issuers = new Map<string, Endpoint>();
   #active = 0;
   #waiting: (() => void)[] = [];
@@ -261,6 +265,7 @@ export class RpcClient {
     this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.#maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
     this.#maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+    this.#signal = options.signal;
   }
 
   /** The current limit over every endpoint, in calls per second. */
@@ -346,6 +351,7 @@ export class RpcClient {
     const issuer = pinned ?? this.#issuer(calls);
     let avoid: Endpoint | undefined;
     for (let attempt = 1; ; attempt++) {
+      if (this.#signal?.aborted) throw new Stopped();
       await this.#acquire();
       const endpoint = issuer ?? this.#pick(pending.length, avoid);
       endpoint.active++;
@@ -375,6 +381,7 @@ export class RpcClient {
         pending = again;
         if (pending.length === 0) return results;
       } catch (e) {
+        if (this.#signal?.aborted) throw new Stopped();
         const code = e instanceof RpcError ? e.code : undefined;
         if (e instanceof RpcError && !retryable(status, code)) throw e;
         failure = e;
@@ -401,6 +408,7 @@ export class RpcClient {
       else
         await sleep(
           Math.min(MAX_BACKOFF_MS, BACKOFF_MS * 2 ** (attempt - 1)) * (0.5 + Math.random()),
+          this.#signal,
         );
     }
   }
@@ -426,7 +434,10 @@ export class RpcClient {
       method: "POST",
       headers: { "content-type": "application/json", "accept-encoding": "zstd, br, gzip" },
       body: JSON.stringify(calls.length === 1 ? body[0] : body),
-      signal: AbortSignal.timeout(this.#timeoutMs),
+      signal:
+        this.#signal === undefined
+          ? AbortSignal.timeout(this.#timeoutMs)
+          : AbortSignal.any([AbortSignal.timeout(this.#timeoutMs), this.#signal]),
     });
     onStatus(res.status);
     // fetch decodes br and gzip itself, and zstd too in newer Node 24 (still labelled zstd): the frame magic tells.

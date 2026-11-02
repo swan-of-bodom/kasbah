@@ -532,7 +532,7 @@ test.skipIf(url === undefined)(
     expect(status.children).toBe(node.children().length);
     stop.abort();
     await run;
-    expect(status.phase).toBe("done");
+    expect(status.phase).toBe("stopped");
     expect(status.checkpoint).toBe(node.blocks.length - 1);
 
     const tip = node.blocks.length - 1;

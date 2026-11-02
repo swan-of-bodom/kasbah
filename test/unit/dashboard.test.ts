@@ -76,7 +76,7 @@ test("a pace that varies gives a range of time left", () => {
   expect(text).toMatch(/1m 09s – 3m 20s left \(varies with event density\)/);
 });
 
-test("live and done", () => {
+test("live, done and stopped", () => {
   const s = new Status();
   s.enter("live");
   s.live = { block: 1234, timestamp: Date.now() / 1000 - 3, events: 7, at: Date.now(), reorgs: 1 };
@@ -86,6 +86,10 @@ test("live and done", () => {
   s.enter("done");
   expect(render(s)[0]).toContain("[DONE]");
   expect(inside(render(s)).join("\n")).toMatch(/✓ through block/);
+  s.checkpoint = 1234;
+  s.enter("stopped");
+  expect(render(s)[0]).toContain("[STOPPED]");
+  expect(inside(render(s)).join("\n")).toMatch(/■ stopped · committed through block 1,234 ·/);
   s.fail(new Error("the node refused"));
   expect(inside(render(s)).join("\n")).toMatch(/✗ the node refused · committed through block/);
 });
@@ -216,4 +220,10 @@ test("live: the delay behind the chain, split between the node and us", () => {
   expect(text).toMatch(
     /delay +\d\.\ds block timestamp → node announced it · 40\.0 ms announced → committed/,
   );
+});
+
+test("stopped before the first block: says so instead of a checkpoint of 0", () => {
+  const s = new Status();
+  s.enter("stopped");
+  expect(inside(render(s)).join("\n")).toMatch(/■ stopped before indexing started/);
 });

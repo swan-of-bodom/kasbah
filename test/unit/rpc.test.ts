@@ -1,6 +1,7 @@
 import { createServer } from "node:http";
 import { expect, test } from "vitest";
 import { RpcClient } from "../../src/rpc/client.ts";
+import { Stopped } from "../../src/utils/errors.ts";
 
 async function node(
   answer: (call: { id: number; method: string; params: any }, seen: number) => unknown,
@@ -146,5 +147,26 @@ test("a batch larger than a second's worth of calls goes out in pieces", async (
     expect(n.sent.map((s) => s.length)).toEqual([40, 40, 20]);
   } finally {
     n.server.close();
+  }
+});
+
+test("a stop rejects the requests in flight and every later one with Stopped, without retrying", async () => {
+  const server = createServer(() => {});
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const stop = new AbortController();
+    const rpc = new RpcClient(`http://127.0.0.1:${(server.address() as { port: number }).port}`, {
+      signal: stop.signal,
+    });
+    const hung = rpc.request("m", {});
+    setTimeout(() => stop.abort(), 50);
+    const started = Date.now();
+    await expect(hung).rejects.toBeInstanceOf(Stopped);
+    expect(Date.now() - started).toBeLessThan(2_000);
+    await expect(rpc.request("m", {})).rejects.toBeInstanceOf(Stopped);
+    expect(rpc.stats.retries).toBe(0);
+  } finally {
+    server.closeAllConnections();
+    server.close();
   }
 });

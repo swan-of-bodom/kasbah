@@ -37,7 +37,8 @@ kasbah start [--to <block>] [--reset]
 
 The same for production: needs `DATABASE_URL` and a schema name (`--schema`), refuses data from another build and a
 schema another indexer is running on. `--to` stops at that block.
-Ctrl-C or `SIGTERM` finishes the current block and exits; a third one exits at once.
+Ctrl-C or `SIGTERM` finishes the current block and exits (during startup, it stops at once); a third one exits at
+once. The dashboard then shows the run as stopped, with the block it committed through.
 
 ## serve
 

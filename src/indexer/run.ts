@@ -2,6 +2,7 @@ import type { Route } from "../api/routes.ts";
 import type { RunOptions, StartBlock } from "../config/app.ts";
 import type { Resolved } from "../config/resolve.ts";
 import type { Db } from "../db/store.ts";
+import { Stopped } from "../utils/errors.ts";
 import type { Client } from "./client.ts";
 import { setup } from "./handle.ts";
 import { open, type Run } from "./open.ts";
@@ -43,7 +44,7 @@ export async function run(
       await phase(r);
     }
   } catch (error) {
-    failure = { error };
+    if (!(signal.aborted && error instanceof Stopped)) failure = { error };
   }
   for (const close of closers.reverse()) {
     try {
@@ -53,7 +54,7 @@ export async function run(
       failure ??= { error };
     }
   }
-  if (failure === undefined) status.enter("done");
+  if (failure === undefined) status.enter(signal.aborted ? "stopped" : "done");
   else status.fail(failure.error);
   unsubscribe?.();
   if (failure !== undefined) throw failure.error;

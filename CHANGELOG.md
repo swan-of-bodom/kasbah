@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Ctrl-C during startup stops at once: it used to wait until every class was read, which takes several seconds on a
+  contract with a long history. A stopped run shows as stopped, with the block it committed through, instead of
+  `DONE ✓ through block 0`.
 - Re-indexing from the cache waits less for events: felts are unpacked without slicing out each one's length
   (on Ekubo, waiting for events 37% shorter, the run about 2% faster).
 - Building each handler's `event` costs a third of what it did, 7% off a cached run on Ekubo. `event` is now an

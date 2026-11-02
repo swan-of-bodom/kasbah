@@ -3,7 +3,15 @@ import type { EndpointStats, RpcStats } from "../rpc/client.ts";
 import type { FetchGauges } from "../sync/fetch.ts";
 import { secondsSince } from "../utils/time.ts";
 
-export type Phase = "starting" | "factories" | "backfill" | "keys" | "live" | "done" | "failed";
+export type Phase =
+  | "starting"
+  | "factories"
+  | "backfill"
+  | "keys"
+  | "live"
+  | "done"
+  | "stopped"
+  | "failed";
 
 /** Milliseconds per point of the events/s history, and points kept (2 minutes). */
 const BUCKET_MS = 2_000;

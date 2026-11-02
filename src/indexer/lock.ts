@@ -3,6 +3,7 @@ import type pg from "pg";
 import { ConfigError } from "../config/errors.ts";
 import { quote } from "../db/table.ts";
 import { transaction } from "../db/transaction.ts";
+import { Stopped } from "../utils/errors.ts";
 import { sleep } from "../utils/sleep.ts";
 import type { Status } from "./status.ts";
 
@@ -57,6 +58,7 @@ export class SchemaLock {
         seconds: Math.ceil((first.untilMs - Date.now()) / 1000),
       });
       await sleep(Math.max(0, first.untilMs - Date.now()), signal);
+      if (signal.aborted) throw new Stopped();
       if (!(await lock.#try(claim, status)).claimed)
         throw new ConfigError(
           `schema "${schema}" is in use by another indexer: stop it, or use another --schema (DATABASE_SCHEMA)`,

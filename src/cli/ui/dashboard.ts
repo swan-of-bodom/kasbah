@@ -63,6 +63,7 @@ function paint(on: boolean): Paint {
     keys: 45,
     live: 42,
     done: 44,
+    stopped: 100,
     failed: 41,
   };
   return {
@@ -192,6 +193,13 @@ function phase(box: Box, status: Status, now: number) {
     case "done":
       line(
         `${p.green("✓")} through block ${p.bold(thousands(status.checkpoint))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`,
+      );
+      break;
+    case "stopped":
+      line(
+        status.handled === 0 && status.checkpoint === 0
+          ? `${p.dim("■")} stopped before indexing started`
+          : `${p.dim("■")} stopped · committed through block ${p.bold(thousands(status.checkpoint))} · ${compact(status.handled)} handled in ${duration((now - status.started) / 1000)}`,
       );
       break;
     case "failed":

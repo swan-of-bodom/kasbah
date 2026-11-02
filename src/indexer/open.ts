@@ -99,8 +99,15 @@ export async function open(
   const tables = Object.values(configured.tables).filter((t): t is PgTable => is(t, PgTable));
   // Built now, so an index kasbah can't create is refused before the backfill, not after it.
   const indexes = new Map(tables.map((t) => [t, indexSql(tableInfo(t))]));
+  // Ctrl-C cuts startup's requests short; once indexing starts, a stop waits for the last commit instead.
+  const starting = new AbortController();
+  const stop = () => starting.abort();
+  signal.addEventListener("abort", stop, { once: true });
   // The RPC first: a wrong one (another network) is refused before the schema is touched.
-  const rpc = new RpcClient(configured.rpc, { maxConcurrency: configured.concurrency });
+  const rpc = new RpcClient(configured.rpc, {
+    maxConcurrency: configured.concurrency,
+    signal: starting.signal,
+  });
   const endpoint = await probe(rpc);
   const chainId = await chainOf(rpc, configured);
   if (configured.network !== undefined) checkNetwork(configured.network, chainId!);
@@ -188,6 +195,7 @@ export async function open(
   status.calls = client.stats;
   status.watched = () => ({ contracts: sources.watched, children: sources.children });
   await resume(run, stored.children);
+  signal.removeEventListener("abort", stop);
   return run;
 }
 

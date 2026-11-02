@@ -1,3 +1,4 @@
+import { createServer } from "node:http";
 import { expect, test } from "vitest";
 import type { Config } from "../../src/config/app.ts";
 import { type Resolved, resolveConfig as resolve } from "../../src/config/resolve.ts";
@@ -7,6 +8,7 @@ import { moves } from "../../src/indexer/commit.ts";
 const resolveConfig = (c: Config) => resolve(c) as Resolved;
 
 import { planOf } from "../../src/indexer/plan.ts";
+import { run } from "../../src/indexer/run.ts";
 import { upgradeEventsOf } from "../../src/indexer/sources.ts";
 import { type Notice, Status } from "../../src/indexer/status.ts";
 import { blockOf } from "../../src/types/block.ts";
@@ -138,4 +140,30 @@ test("upgrade events: the common ones by name, the configured ones checked, none
   expect(() => upgradeEventsOf("Core", ekubo, ["Upgraded"])).toThrow(
     "Core: upgradeEvents: the ABI has no event Upgraded",
   );
+});
+
+test("run: a stop during startup ends it at once as stopped, not done or failed", async () => {
+  const server = createServer(() => {});
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  try {
+    const port = (server.address() as { port: number }).port;
+    const status = new Status();
+    const stop = new AbortController();
+    const running = run(
+      resolveConfig({ ...config(), rpc: `http://127.0.0.1:${port}` }),
+      new Map(),
+      {
+        signal: stop.signal,
+        status,
+      },
+    );
+    setTimeout(() => stop.abort(), 50);
+    const started = Date.now();
+    await running;
+    expect(Date.now() - started).toBeLessThan(2_000);
+    expect(status.phase).toBe("stopped");
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
 });
