@@ -40,6 +40,9 @@ const { values: a } = parseArgs({
     // Node flags for one side only, e.g. `--b HEAD --node-b=--max-semi-space-size=128`: a V8 setting, same build.
     "node-a": { type: "string", default: "" },
     "node-b": { type: "string", default: "" },
+    // Environment for one side only, e.g. `--b HEAD --env-b KASBAH_BENCH_CONCURRENCY=64`: the app's setting, same build.
+    "env-a": { type: "string", default: "" },
+    "env-b": { type: "string", default: "" },
   },
 });
 if (a.rpc === "sim") a.cache = "off";
@@ -298,6 +301,12 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
       KASBAH_BENCH_OUT: out,
       KASBAH_BENCH_CACHE: a.cache,
       KASBAH_BENCH_FROM: a.from,
+      ...Object.fromEntries(
+        (side === "A" ? a["env-a"] : a["env-b"])!
+          .split(" ")
+          .filter((v) => v.includes("="))
+          .map((v) => [v.slice(0, v.indexOf("=")), v.slice(v.indexOf("=") + 1)]),
+      ),
     },
   });
   const timer = setTimeout(() => child.kill("SIGTERM"), Number(a.timeout) * 1000);
@@ -442,8 +451,10 @@ console.log(
       : `\nkasbah pinned to CPUs ${split.fast}${a.pin === "auto" ? " (the fastest cores)" : ""}, the simulated node to ${split.rest}`),
 );
 const dirs = { A: build("A", a.a), B: build("B", a.b) };
-for (const s of ["a", "b"] as const)
+for (const s of ["a", "b"] as const) {
   if (a[`node-${s}`] !== "") console.log(`${s.toUpperCase()} runs with node ${a[`node-${s}`]}`);
+  if (a[`env-${s}`] !== "") console.log(`${s.toUpperCase()} runs with ${a[`env-${s}`]}`);
+}
 const sim = a.rpc === "sim" ? await simulatedNode() : undefined;
 const runs: Run[] = [];
 try {

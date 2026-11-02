@@ -44,8 +44,9 @@ machine, a slower disk or a worse RPC may make it slower, never wrong, stuck or 
   history must cost time, not memory.
 - Work per step stays small enough that the event loop keeps turning: no pass over a structure that can grow large
   on every page or event.
-- A change that touches memory or the fetcher is also run at a small heap (`--max-old-space-size=512`) before
-  it is kept; `test/e2e/crash.test.ts` runs a backfill in 192 MB.
+- A change that touches memory or the fetcher (buffers, caches, budgets, windows) is also run at a small heap
+  (`--max-old-space-size=512`) before it is kept; a change to CPU work alone isn't. `test/e2e/crash.test.ts` runs a
+  backfill in 192 MB.
 
 ## Benchmarks
 
@@ -54,14 +55,17 @@ A performance change is kept only if it beats the noise, measured end to end, as
 - `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core, blocks 620k to 700k by default) on two builds, A
   and B, in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
   fetches from the RPC, `--heap 512` checks a small machine, `--node-b=<flags>` gives one side Node or V8 flags
-  on the same build. It stops if Postgres is down, the laptop is on battery
-  or the CPU's turbo is off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
+  on the same build, `--env-b "K=V …"` environment variables (`KASBAH_BENCH_CONCURRENCY` sets the app's
+  `concurrency`). It stops if Postgres is down, the laptop is on battery or the CPU's turbo is off, and writes
+  each run's log and the summary to `test/bench/results` (ignored by git).
 - `--rpc sim` fetches from `test/bench/node.ts` instead of the RPC: a simulated node that serves `getEvents` from
   the event cache with hosted Pathfinder's limits after a fixed `--latency`, and replays other calls recorded once
   from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
-  same node. The verdict is the median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left
-  out. A run during which the laptop went on battery or the CPU's turbo turned off (on this laptop, a low battery)
-  is discarded and stops the benchmark, and neither starts one.
+  same node. Give it a hosted provider's latency, `--latency 700`: Alchemy answered `getEvents` in ~650–900 ms
+  (2026-11-02), and at 120 ms a window fetched page after page looked 6× cheaper than it is. The verdict is the
+  median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left out. A run during which the
+  laptop went on battery or the CPU's turbo turned off (on this laptop, a low battery) is discarded and stops the
+  benchmark, and neither starts one.
 - On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float,
   `--pin 4-11` to name the CPUs): a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports
   kasbah's own totals from `/metrics` (in commits, in handlers, waiting for events), its GC time, and its main
@@ -82,6 +86,9 @@ A performance change is kept only if it beats the noise, measured end to end, as
 - It runs 3 pairs, then stops if every pair moved the same way by more than A's own spread (and 1%), or else goes
   on to 5 (`--min-pairs`, `--pairs`). Decide on the median of the pairs and on how many B won; a change inside the
   spread is noise.
+- Two ways to keep a run short: at a small heap, which checks memory rather than speed, run a shorter range
+  (`--to`, ~10k blocks past `--from`); and when the first pair differs by several times the noise (540 s against
+  143 s), stop there and say the verdict rests on one pair.
 - Report time, peak memory and event-loop stops together: a change that speeds up one and worsens another is a
   trade-off for the user, not a win.
 - `pnpm bench` runs the micro benchmarks in `test/bench/*.bench.ts` (one function on synthetic rows).

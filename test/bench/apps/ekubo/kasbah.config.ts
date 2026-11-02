@@ -14,4 +14,8 @@ export default kasbah({
     },
   },
   cache: process.env.KASBAH_BENCH_CACHE !== "off",
+  concurrency:
+    process.env.KASBAH_BENCH_CONCURRENCY === undefined
+      ? undefined
+      : Number(process.env.KASBAH_BENCH_CONCURRENCY),
 });
