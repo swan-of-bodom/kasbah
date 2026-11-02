@@ -51,8 +51,8 @@ machine, a slower disk or a worse RPC may make it slower, never wrong, stuck or 
 
 A performance change is kept only if it beats the noise, measured end to end, as Ponder's `benchmark/` does.
 
-- `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core to block 700k by default) on two builds, A and B,
-  in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
+- `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core, blocks 620k to 700k by default) on two builds, A
+  and B, in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
   fetches from the RPC, `--heap 512` checks a small machine. It stops if Postgres is down, the laptop is on battery
   or the CPU's turbo is off, and writes each run's log and the summary to `test/bench/results` (ignored by git).
 - `--rpc sim` fetches from `test/bench/node.ts` instead of the RPC: a simulated node that serves `getEvents` from
@@ -66,7 +66,12 @@ A performance change is kept only if it beats the noise, measured end to end, as
   `/metrics` (in commits, in handlers, waiting for events) and its GC time, so a difference comes with where it is.
 - After each run the runner counts every app table's rows; the summary says if any run wrote different rows than
   the others, so "faster" can't mean "skipped work".
-- Decide on the median of 5 pairs or more and on how many pairs B won; a change inside the spread is noise.
+- Ekubo's handlers only insert, so a run can start late: `--from 620000` (the default) keeps 58% of the events to
+  block 700k in a ~2.5 min run; `--from 165387` runs its whole history (~4 min), for fetcher changes on sparse
+  ranges too.
+- It runs 3 pairs, then stops if every pair moved the same way by more than A's own spread (and 1%), or else goes
+  on to 5 (`--min-pairs`, `--pairs`). Decide on the median of the pairs and on how many B won; a change inside the
+  spread is noise.
 - Report time, peak memory and event-loop stops together: a change that speeds up one and worsens another is a
   trade-off for the user, not a win.
 - `pnpm bench` runs the micro benchmarks in `test/bench/*.bench.ts` (one function on synthetic rows).

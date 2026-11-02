@@ -10,7 +10,7 @@ export default kasbah({
     Core: {
       abi: coreAbi,
       address: "0x5dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b",
-      startBlock: 165387,
+      startBlock: Number(process.env.KASBAH_BENCH_FROM ?? 165387),
     },
   },
   cache: process.env.KASBAH_BENCH_CACHE !== "off",

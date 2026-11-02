@@ -1,5 +1,5 @@
 // End-to-end A/B benchmark: an app in test/bench/apps run to `--to` on two builds of kasbah, in pairs A B, B A, …
-//   pnpm bench:app                                   HEAD against the working tree, 5 pairs, cached, to block 700k
+//   pnpm bench:app                                   HEAD against the working tree, cached, blocks 620k to 700k
 //   pnpm bench:app --a 0849af9 --b HEAD --cache off --heap 512 --pairs 3
 //   pnpm bench:app --rpc sim --latency 120          fetch from a simulated node (test/bench/node.ts), not the RPC
 // Each side is packed (`.` is the working tree, anything else a git rev) and installed into a copy of the app, so
@@ -26,6 +26,9 @@ const { values: a } = parseArgs({
     a: { type: "string", default: "HEAD" },
     b: { type: "string", default: "." },
     pairs: { type: "string", default: "5" },
+    "min-pairs": { type: "string", default: "3" },
+    // Ekubo's handlers only insert, so a run can start late: 58% of its events to block 700k come after 620k.
+    from: { type: "string", default: "620000" },
     to: { type: "string", default: "700000" },
     heap: { type: "string", default: "4096" },
     cache: { type: "string", default: "on" },
@@ -277,6 +280,7 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
       PORT: a.port,
       KASBAH_BENCH_OUT: out,
       KASBAH_BENCH_CACHE: a.cache,
+      KASBAH_BENCH_FROM: a.from,
     },
   });
   const timer = setTimeout(() => child.kill("SIGTERM"), Number(a.timeout) * 1000);
@@ -331,11 +335,43 @@ const median = (xs: number[]) => {
   return s.length % 2 ? s[(s.length - 1) / 2]! : (s[s.length / 2 - 1]! + s[s.length / 2]!) / 2;
 };
 
+const side = (runs: Run[], s: "A" | "B") => runs.filter((r) => r.side === s);
+
+/** Complete pairs, without those whose RPC speed changed within the pair by over `RPC_DRIFT` (`left`). */
+function paired(runs: Run[]) {
+  const pairs = side(runs, "A").flatMap((x) =>
+    side(runs, "B")
+      .filter((y) => y.pair === x.pair)
+      .map((y) => [x, y] as const),
+  );
+  // Each pair ran minutes apart, so B/A within a pair cancels a slow hour of the RPC or the machine.
+  const drifted = ([x, y]: (typeof pairs)[number]) =>
+    x.rpcMedianMs > 0 && Math.abs(y.rpcMedianMs / x.rpcMedianMs - 1) > RPC_DRIFT;
+  return {
+    steady: pairs.filter((p) => !drifted(p)),
+    left: pairs.filter(drifted).map(([x]) => x.pair),
+  };
+}
+
+/** How much A's own runs differ, as a share of their median: a pair's B/A inside it is noise. */
+function spread(runs: Run[]): number {
+  const t = side(runs, "A").map((r) => r.seconds);
+  return t.length < 2 ? Number.POSITIVE_INFINITY : (Math.max(...t) - Math.min(...t)) / median(t);
+}
+
+/** Enough pairs, all of which moved the same way by more than A's own spread (and 1%): more would not change it. */
+function settled(runs: Run[]): boolean {
+  const { steady } = paired(runs);
+  if (steady.length < Number(a["min-pairs"])) return false;
+  const floor = Math.max(spread(runs), 0.01);
+  const moved = steady.map(([x, y]) => y.seconds / x.seconds - 1);
+  return moved.every((m) => m < -floor) || moved.every((m) => m > floor);
+}
+
 function summary(runs: Run[]): string {
   const lines: string[] = [];
-  const side = (s: "A" | "B") => runs.filter((r) => r.side === s);
   for (const s of ["A", "B"] as const) {
-    const rs = side(s);
+    const rs = side(runs, s);
     if (rs.length === 0) continue;
     const t = rs.map((r) => r.seconds);
     lines.push(
@@ -346,16 +382,7 @@ function summary(runs: Run[]): string {
         `waiting for events ${median(rs.map((r) => r.waitSeconds)).toFixed(1)} s, gc ${median(rs.map((r) => r.gcSeconds)).toFixed(1)} s`,
     );
   }
-  const pairs = side("A").flatMap((x) =>
-    side("B")
-      .filter((y) => y.pair === x.pair)
-      .map((y) => [x, y] as const),
-  );
-  // Each pair ran minutes apart, so B/A within a pair cancels a slow hour of the RPC or the machine.
-  const drifted = ([x, y]: (typeof pairs)[number]) =>
-    x.rpcMedianMs > 0 && Math.abs(y.rpcMedianMs / x.rpcMedianMs - 1) > RPC_DRIFT;
-  const steady = pairs.filter((p) => !drifted(p));
-  const left = pairs.filter(drifted).map(([x]) => x.pair);
+  const { steady, left } = paired(runs);
   if (left.length > 0)
     lines.push(
       `left out, the RPC's speed changed within the pair by over ${RPC_DRIFT * 100}%: pairs ${left.join(", ")}`,
@@ -369,7 +396,7 @@ function summary(runs: Run[]): string {
     lines.push(
       `B vs A, median of the pairs' ratios: time ${pct((r) => r.seconds)}, cpu ${pct((r) => r.cpuSeconds)}, ` +
         `rss ${pct((r) => r.maxRssMb)}, commits ${pct((r) => r.commitSeconds)}, gc ${pct((r) => r.gcSeconds)}; ` +
-        `B faster in ${wins} of ${steady.length} pairs`,
+        `B faster in ${wins} of ${steady.length} pairs, A's own spread ${(spread(runs) * 100).toFixed(1)}%`,
     );
   }
   const written = new Set(runs.map((r) => r.rows));
@@ -387,7 +414,7 @@ function summary(runs: Run[]): string {
 await preflight();
 mkdirSync(results, { recursive: true });
 console.log(
-  `${a.app} to block ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a.pairs} pairs; logs in ${results}` +
+  `${a.app} blocks ${a.from} to ${a.to}, cache ${a.cache}, heap ${a.heap} MB, ${a["min-pairs"]} to ${a.pairs} pairs; logs in ${results}` +
     (split === undefined
       ? ""
       : `\nkasbah pinned to CPUs ${split.fast} (the fastest cores), the simulated node to ${split.rest}`),
@@ -396,13 +423,20 @@ const dirs = { A: build("A", a.a), B: build("B", a.b) };
 const sim = a.rpc === "sim" ? await simulatedNode() : undefined;
 const runs: Run[] = [];
 try {
-  for (let pair = 1; pair <= Number(a.pairs); pair++)
+  for (let pair = 1; pair <= Number(a.pairs); pair++) {
     // A B, then B A: whichever runs second in a pair (warmer Postgres, a hotter CPU) doesn't always favor one side.
-    for (const side of pair % 2 === 1 ? (["A", "B"] as const) : (["B", "A"] as const)) {
-      const r = await once(side, pair, dirs[side]);
+    for (const s of pair % 2 === 1 ? (["A", "B"] as const) : (["B", "A"] as const)) {
+      const r = await once(s, pair, dirs[s]);
       if (stopped !== undefined) throw new Error(stopped);
       if (r !== undefined) runs.push(r);
     }
+    if (pair < Number(a.pairs) && settled(runs)) {
+      console.log(
+        `settled after ${pair} pairs: each moved the same way by more than A's own spread`,
+      );
+      break;
+    }
+  }
 } finally {
   sim?.kill("SIGTERM");
   const text = summary(runs);
