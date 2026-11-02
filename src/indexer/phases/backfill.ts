@@ -1,16 +1,19 @@
 import type { Batch } from "../../sync/fetch.ts";
 import { heapLimit } from "../../utils/memory.ts";
-import { secondsSince } from "../../utils/time.ts";
+import { secondsSince, YIELD_MS, yieldToEventLoop } from "../../utils/time.ts";
 import { watchedEvents } from "../events.ts";
 import { blockHeaders, fire, handle, type Prefetched, prefetch } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
 
 /** Events (and block handlers) handled between two backfill commits. */
 const FLUSH_EVENTS = 100_000;
-/** Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded. */
-const FLUSH_BYTES = 64 << 20;
-const YIELD_MS = 25;
-const PENDING_SHARE = 1 / 10;
+/**
+ * Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded: half of
+ * 64 MB, since the commit in flight holds as much again.
+ */
+const FLUSH_BYTES = 32 << 20;
+/** Share of the heap for rows handlers wrote and no commit took yet: a twentieth, the commit in flight holds another. */
+const PENDING_SHARE = 1 / 20;
 
 export async function backfill(run: Run): Promise<void> {
   const { status, cache, signal, position } = run;
@@ -27,25 +30,34 @@ export async function backfill(run: Run): Promise<void> {
   const batches = watchedEvents(run, first, to, true);
   const waited = (what: "events" | "extras", ms: number) =>
     what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);
-  for await (const [batch, pre] of ahead(
-    run.anyInclude || run.anyBlock ? slices(batches, 2_000) : batches,
-    (b) => prefetch(run, b.events),
-    waited,
-  )) {
-    since += await handleBatch(run, through + 1, batch, pre);
-    through = batch.through;
-    status.range.through = through;
-    if (signal.aborted) break;
-    if (
-      since >= FLUSH_EVENTS ||
-      through === to ||
-      (cache?.pendingBytes ?? 0) > FLUSH_BYTES ||
-      run.store.pendingBytes > maxPending
-    ) {
-      await position.commit({ kind: "batch", through });
-      since = 0;
+  try {
+    for await (const [batch, pre] of ahead(
+      run.anyInclude || run.anyBlock ? slices(batches, 2_000) : batches,
+      (b) => prefetch(run, b.events),
+      waited,
+    )) {
+      position.check();
+      since += await handleBatch(run, through + 1, batch, pre);
+      through = batch.through;
+      status.range.through = through;
+      if (signal.aborted) break;
+      if (
+        since >= FLUSH_EVENTS ||
+        through === to ||
+        (cache?.pendingBytes ?? 0) > FLUSH_BYTES ||
+        run.store.pendingBytes > maxPending
+      ) {
+        // Postgres writes this batch while the next one is handled.
+        await position.start({ kind: "batch", through });
+        since = 0;
+      }
     }
+  } catch (e) {
+    // The run stops with the first error, and no commit left running past it.
+    await position.drain().catch(() => {});
+    throw e;
   }
+  await position.drain();
   if (!signal.aborted) through = to;
   if (through !== (position.checkpoint ?? first - 1))
     await position.commit({ kind: "batch", through });
@@ -90,7 +102,7 @@ async function handleBatch(
     // Handlers reading cached rows never wait on I/O: without a turn, the loop can't serve the API or read the
     // next batch for a whole batch.
     if (performance.now() - since > YIELD_MS) {
-      await new Promise(setImmediate);
+      await yieldToEventLoop();
       since = performance.now();
     }
   }

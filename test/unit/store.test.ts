@@ -43,7 +43,33 @@ async function inTransaction(body: (c: pg.PoolClient) => Promise<void>) {
   }
 }
 
-const commit = (store: Store) => inTransaction((c) => store.flush(c));
+/** As `Position` commits: `take` before the transaction, `written` after it. */
+async function commit(store: Store, block?: number) {
+  store.take();
+  try {
+    await inTransaction((c) => store.flush(c, block));
+  } finally {
+    store.written();
+  }
+}
+
+/** A commit stopped inside its transaction, as one running while handlers go on; the result finishes it. */
+async function commitInFlight(store: Store): Promise<() => Promise<void>> {
+  store.take();
+  const c = await pool.connect();
+  await c.query("BEGIN");
+  const flushing = store.flush(c);
+  flushing.catch(() => {});
+  return async () => {
+    try {
+      await flushing;
+      await c.query("COMMIT");
+    } finally {
+      c.release();
+      store.written();
+    }
+  };
+}
 
 const snapshot = async () =>
   (await pool.query(`SELECT owner, amount::text, updates, note FROM balances ORDER BY owner`))
@@ -92,7 +118,7 @@ test.skipIf(url === undefined)(
           await store.db.insert(balances).values({ owner, amount: 1n, updates: 0, note: "new" });
         }
       }
-      await inTransaction((c) => store.flush(c, block));
+      await commit(store, block);
       snapshots.set(block, await snapshot());
     }
 
@@ -156,6 +182,7 @@ test.skipIf(url === undefined)(
     ).toEqual({ n: 60, u: 1 });
 
     await store.db.insert(balances).values(row(2));
+    store.take();
     const c = await pool.connect();
     try {
       await c.query("BEGIN");
@@ -165,6 +192,7 @@ test.skipIf(url === undefined)(
       await c.query("ROLLBACK");
     } finally {
       c.release();
+      store.written();
     }
   },
 );
@@ -288,6 +316,77 @@ test.skipIf(url === undefined)(
     } finally {
       c.release();
     }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "writes made while a commit runs go to the next one, and reads see them and the rows being written",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    const store = new Store(drizzle(pool), [balances], { complete: true });
+    await store.db.insert(balances).values({ owner: "0xa", amount: 1n, updates: 0 });
+    const done = await commitInFlight(store);
+    await store.db.update(balances, { owner: "0xa" }).set({ updates: 1 });
+    await store.db.insert(balances).values({ owner: "0xb", amount: 2n, updates: 0 });
+    expect((await store.db.find(balances, { owner: "0xa" }))?.updates).toBe(1);
+    expect((await store.db.find(balances, { owner: "0xb" }))?.amount).toBe(2n);
+    await done();
+    expect(await snapshot()).toEqual([{ owner: "0xa", amount: "1", updates: 0, note: null }]);
+    await commit(store);
+    expect(await snapshot()).toEqual([
+      { owner: "0xa", amount: "1", updates: 1, note: null },
+      { owner: "0xb", amount: "2", updates: 0, note: null },
+    ]);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "past the cache limit, a commit's eviction keeps the rows written while it ran: only the cache has them",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    const row = (i: number) => ({ owner: `0x${i}`, amount: BigInt(i), updates: 0 });
+    const store = new Store(drizzle(pool), [balances], {
+      complete: true,
+      maxCachedBytes: 10 * (approxBytes(row(0)) + 64),
+    });
+    for (let i = 0; i < 20; i++) await store.db.insert(balances).values(row(i));
+    const done = await commitInFlight(store);
+    for (let i = 20; i < 40; i++) await store.db.insert(balances).values(row(i));
+    await done();
+    for (let i = 0; i < 40; i++)
+      expect((await store.db.find(balances, { owner: row(i).owner }))?.amount).toBe(BigInt(i));
+    await commit(store);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM balances`)).rows[0].n).toBe(40);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "an unkeyed table's read from Postgres waits for the commit that is adding its key",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances), { primaryKey: false }));
+    const store = new Store(drizzle(pool), [balances], {
+      complete: false,
+      unkeyed: new Set(["balances"]),
+    });
+    await store.db.insert(balances).values({ owner: "0x1", amount: 1n, updates: 0 });
+    await commit(store);
+    // An upsert: the commit adds the key in its transaction.
+    await store.db.update(balances, { owner: "0x1" }).set({ updates: 1 });
+    const done = await commitInFlight(store);
+    const missing = store.db.find(balances, { owner: "0x2" });
+    await done();
+    expect(await missing).toBeNull();
+    expect(
+      (
+        await pool.query(
+          `SELECT count(*)::int AS n FROM pg_constraint WHERE conrelid = 'balances'::regclass AND contype = 'p'`,
+        )
+      ).rows[0].n,
+    ).toBe(1);
+    expect(await snapshot()).toEqual([{ owner: "0x1", amount: "1", updates: 1, note: null }]);
   },
 );
 

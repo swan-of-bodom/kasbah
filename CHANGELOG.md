@@ -4,6 +4,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A backfill no longer stops for its commits: Postgres writes each batch while the next one is handled. On the
+  Ekubo template it is 4–7% faster with a 4 GB heap and as fast at 512 MB, with no event-loop stops over 400 ms
+  (there were about 20), so the API keeps answering. `kasbah_seconds_total{part="commit"}` and the dashboard's
+  commit share now count only the time spent waiting for a commit.
 - Memory follows the heap Node is given, so a small machine no longer crashes: the row cache is a fifth of it,
   shared by all tables, the fetch buffer at most another fifth, both counted in bytes. The Ekubo template that ran
   out of a 2 GB heap at block 500k now indexes 1.2M blocks in it.

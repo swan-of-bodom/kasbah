@@ -4,6 +4,7 @@ import { is, SQL } from "drizzle-orm";
 import type { PoolClient } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
 import { ConfigError } from "../config/errors.ts";
+import { YIELD_MS, yieldToEventLoop } from "../utils/time.ts";
 import { quote, type Row, type TableInfo } from "./table.ts";
 
 const escapeText = (s: string) =>
@@ -47,25 +48,46 @@ export function copyLine(info: TableInfo, row: Row): string {
   return `${fields.join("\t")}\n`;
 }
 
-/** Streams rows into `target` (a table or temp table with the same columns) with COPY. */
-export async function copyRows(
+/**
+ * Runs `sql` (a `COPY … FROM STDIN`) with each item's `line`, built as it's sent in 64 KB chunks. Building the
+ * text never waits on I/O, so it lets the event loop run every `YIELD_MS`: the next batch's handlers go on while
+ * a commit writes.
+ */
+export async function copyLines<T>(
   client: PoolClient,
-  info: TableInfo,
-  target: string,
-  rows: Iterable<Row>,
-) {
-  const columns = info.columns.map((c) => quote(c.column.name)).join(", ");
-  const stream = client.query(copyFrom(`COPY ${target} (${columns}) FROM STDIN`));
-  async function* lines() {
+  sql: string,
+  items: Iterable<T>,
+  line: (item: T) => string,
+): Promise<void> {
+  const stream = client.query(copyFrom(sql));
+  async function* chunks() {
     let chunk = "";
-    for (const row of rows) {
-      chunk += copyLine(info, row);
+    let since = performance.now();
+    for (const item of items) {
+      chunk += line(item);
       if (chunk.length > 1 << 16) {
         yield chunk;
         chunk = "";
+        if (performance.now() - since > YIELD_MS) {
+          await yieldToEventLoop();
+          since = performance.now();
+        }
       }
     }
     if (chunk !== "") yield chunk;
   }
-  await pipeline(Readable.from(lines()), stream);
+  await pipeline(Readable.from(chunks()), stream);
+}
+
+/** Streams rows into `target` (a table or temp table with the same columns) with COPY. */
+export function copyRows(
+  client: PoolClient,
+  info: TableInfo,
+  target: string,
+  rows: Iterable<Row>,
+): Promise<void> {
+  const columns = info.columns.map((c) => quote(c.column.name)).join(", ");
+  return copyLines(client, `COPY ${target} (${columns}) FROM STDIN`, rows, (row) =>
+    copyLine(info, row),
+  );
 }

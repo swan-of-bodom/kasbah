@@ -156,13 +156,6 @@ before indexing; we skip that round trip.
   (±4%), so no test pins it.
 - **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
   peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
-
-TODO, the commit stall (parked): during a backfill the event loop stops for up to ~0.6 s per commit (cached Ekubo to
-block 700k: ~45 stops over 400 ms, ~50 s in all). Inside those stops: building the COPY text 56% (drizzle's jsonb
-`JSON.stringify` and escaping), GC 14%, eviction re-measuring rows one by one 10%, handlers 1%. Tried together:
-yielding every 25 ms while building COPY text and clearing whole tables on eviction (as Ponder does). Stops over
-400 ms went to 0 and the longest to ~0.3 s, but the backfill was 8% slower (median of 3 pairs, 251 → 272 s), so
-neither was kept. Next: measure each alone and the yield at 100 ms. Live commits are small (max loop delay 0.5 ms).
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
 - Window size adapts to density: busy contracts get smaller windows so pages don't serialize a whole window;
   quiet contracts get 81,920-block windows that come back in one call.
@@ -307,10 +300,10 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - Handlers run sequentially in checkpoint order. Checkpoint = `(block_number, transaction_index, event_index)`;
   one chain means no timestamps or chain ids in it.
 - The row cache is a fifth of the heap, all tables together, rows sized by estimate, as Ponder's indexing cache
-  (`indexingCacheMaxBytes`). At a flush past it, rows are dropped oldest first from the tables read least, down to
-  80%, and a table that lost rows is no longer known in full. A limit of 500k rows per table held 1 GB of Ekubo's
-  12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet committed count too: past a tenth of
-  the heap they force a backfill commit.
+  (`indexingCacheMaxBytes`). After a commit past it, rows are dropped oldest first from the tables read least, down
+  to 80% (never a row no commit wrote yet), and a table that lost rows is no longer known in full. A limit of 500k
+  rows per table held 1 GB of Ekubo's 12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet
+  committed count too: past a twentieth of the heap they force a backfill commit (the one in flight holds as many).
 - In a table no longer known in full, plain inserts skip the existence check (a query per insert: JediSwap's 7M
   swaps went from 50k to 4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
   the error. `onConflictDo…`, `find` and `update` still read a missing row from Postgres.
@@ -319,6 +312,28 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   waited. Measured on Ekubo: time waiting for events 23 s → 10 s, loop delay p99 1.2 s → 0.27 s.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
+- **A backfill commit is written while the next batch is handled** (`Position.start`). Waiting for each one stopped
+  the event loop for up to ~0.6 s (cached Ekubo to block 700k: ~45 stops over 400 ms, ~50 s in all; inside them,
+  building the COPY text 56%, GC 14%, eviction 10%). The commit takes its rows before its first await
+  (`Store.take`, `EventCache.take`), handlers write for the next one meanwhile, and the COPY text is built with a
+  turn for the event loop every 25 ms. At most one is in flight, and:
+  - it holds exactly its blocks' writes, so a crash resumes from a checkpoint with nothing applied twice;
+  - handlers read the rows it is writing from the cache, which keeps them until COMMIT;
+  - an unkeyed table's first read from Postgres waits for it: it may be adding the same key (both at once: a
+    catalog error);
+  - the event cache marks covered only the blocks it took: a range tracked meanwhile (a contract's start block)
+    is covered from its own start;
+  - a failed one stops the run at the next batch, and none outlives an error;
+  - the limits on rows and receipts not yet taken are halved (a twentieth of the heap, 32 MB), so memory stays
+    where it was.
+
+  Live blocks still commit one by one, awaited (max loop delay 0.5 ms). `commit` in `kasbah_seconds_total` and on
+  the dashboard counts only the time spent waiting for one. Measured on cached Ekubo, blocks 620k–700k, 5 pairs:
+  at 4 GB, 143 → 133 s (−7%) over the 6 runs without slow scavenges (all pairs: −4.2%, 3 of 5, inside A's 17%
+  spread), waiting for commits 53 → 13 s, stops over 400 ms 23 → 0, CPU 4–6% higher, peak RSS the same. At
+  512 MB, the same time and RSS, and no stops over 400 ms (9 before; longest 534 → 219 ms): there the halved row
+  limit triggers the commits, 200 instead of 109, and their fixed cost takes back the overlap. Clearing whole
+  tables on eviction, as Ponder does, made no difference (median 2.7% faster, 3 of 5 pairs) and was dropped.
 - On a fresh run, tables live fully in memory until a memory cap, so reads in handlers never hit the database.
 - Updates: COPY into a temp table, then `UPDATE … FROM`.
 - Primary keys and user indexes come after the backfill (Ponder defers only user indexes). Measured on
@@ -341,8 +356,9 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - One run (`src/indexer/run.ts`): setup (`open.ts`), then the phases factories → backfill → keys → live
   (`phases/`), each starting from the committed position (checkpoint, factory watermark, the window's hashes) and a
   no-op when it has nothing left, so a restart resumes through the same code. The position is a `Position`
-  (`commit.ts`) whose fields only its own `commit` sets. Every write after startup is one of six commits (pre-pass
-  children, backfill batch, entering live, live block, revert, done: a run with `to` indexed through it), all through that method: `moves()` says what each moves in
+  (`commit.ts`) whose fields only its own commits set. Every write after startup is one of six commits (pre-pass
+  children, backfill batch, entering live, live block, revert, done: a run with `to` indexed through it), all through
+  `commit`, or `start` for a backfill batch (written while the next is handled, above): `moves()` says what each moves in
   `_kasbah_meta` (checkpoint and `pg_notify`, `discovered:*`, `phase`), and memory takes the same values only
   after COMMIT. Pre-pass children are resolved (classes read) before their transaction and watched after it.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
@@ -361,7 +377,8 @@ handlers `event.transaction` with the transaction's RPC fields and `event.receip
 - Backfill fetches the next slice's data while the current one is handled; with `include`, batches are cut into
   slices of ≈2,000 events at block boundaries, so memory stays flat.
 - Cached (final blocks, `cache: true`) in `transactions(hash, block, transaction jsonb, receipt jsonb)`, written
-  in chunks with the commit; a commit also happens once 64 MB of it is waiting.
+  in chunks with the commit; a commit also happens once 32 MB of it is waiting (as much again may be in the
+  commit being written).
 - Measured, Ekubo blocks 2.00M–2.02M (56k events, 15k transactions): without `include` 4 s; with both
   51–54 s from RPC (bound by Alchemy's compute units, ≈280 transactions/s) at 0.5–0.7 GB; again from the cache
   2.7 s. ≈5.2 KB per transaction cached, so full Ekubo history with receipts would be ≈40 GB.

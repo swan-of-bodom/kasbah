@@ -27,8 +27,8 @@ CI runs the same three on every push to main and on every PR.
   `canonical`) belong in `src/types/felt.ts`.
 - A mistake the user can fix (config, CLI arguments, a missing handler) throws `ConfigError`, which the CLI prints
   without a stack. Anything else is a bug and prints with its stack and cause.
-- Only `Position.commit()` (`src/indexer/commit.ts`) moves the checkpoint. Phases ask for a commit and never
-  write progress themselves.
+- Only `Position` (`src/indexer/commit.ts`) moves the checkpoint, through `commit()` or, for a backfill batch,
+  `start()`. Phases ask for a commit and never write progress themselves.
 - No module-level mutable state: a run's state lives on its `Run`, and stopping goes through its `AbortSignal`.
 - Comments: a doc comment on exported API and constants, and inline comments only for what the code cannot say
   (a node's quirk, an ordering that matters). No commented-out code.

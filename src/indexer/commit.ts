@@ -74,6 +74,9 @@ export class Position {
   #checkpoint: number | undefined;
   #watermark: number;
   readonly #known: Map<number, string>;
+  /** The commit `start` began; it never rejects, its error waits in `#failed` for the next caller. */
+  #writing: Promise<void> | undefined;
+  #failed: { error: unknown } | undefined;
 
   constructor(
     w: Writers,
@@ -105,12 +108,53 @@ export class Position {
     return Math.max(this.#w.start, (this.#checkpoint ?? -1) + 1);
   }
 
+  /** Commits `c` once the commit `start` began is done, and waits for it. */
+  async commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
+    await this.drain();
+    const t = performance.now();
+    try {
+      return await this.#commit(c);
+    } finally {
+      this.#w.status.time.commit += performance.now() - t;
+    }
+  }
+
+  /**
+   * Starts `c` once the commit before it is done, and returns while Postgres writes it: the backfill handles the
+   * next batch meanwhile. A failure is thrown by the next `start`, `commit` or `drain`.
+   */
+  async start(c: Commit): Promise<void> {
+    await this.drain();
+    this.#writing = this.#commit(c).then(
+      () => {},
+      (error: unknown) => {
+        this.#failed = { error };
+      },
+    );
+  }
+
+  /** Waits for the commit `start` began; throws if it failed. The wait counts as time committing. */
+  async drain(): Promise<void> {
+    if (this.#writing !== undefined) {
+      const t = performance.now();
+      await this.#writing;
+      this.#writing = undefined;
+      this.#w.status.time.commit += performance.now() - t;
+    }
+    this.check();
+  }
+
+  /** Throws the error of a commit `start` began, without waiting for one still running. */
+  check(): void {
+    if (this.#failed !== undefined) throw this.#failed.error;
+  }
+
   /**
    * A transaction per `Commit`, then, after COMMIT, memory follows (the position, the watched children, known
-   * hashes) and `status.committed`. Store and cache drain their buffers into the transaction; a failed commit fails
-   * the run, so nothing retries against them.
+   * hashes) and `status.committed`. Store and cache hand over their buffers before the first await, so what's
+   * handled meanwhile is the next commit's; a failed commit fails the run, so nothing retries against them.
    */
-  async commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
+  async #commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
     const { pool, store, cache, factories, sources, status, schema, lock, final } = this.#w;
     const m = moves(c, this.#watermark);
     const parts = { tables: 0, cache: 0 };
@@ -121,48 +165,56 @@ export class Position {
     };
     let undone = 0;
     const started = performance.now();
-    await transaction(pool, async (tx) => {
-      await lock.check(tx);
-      switch (c.kind) {
-        case "children":
-          await timed("cache", () => cache?.persist(tx, c.through));
-          await insertChildren(tx, c.children);
-          break;
-        case "batch":
-          await timed("tables", () => store.flush(tx));
-          await timed("cache", () => cache?.persist(tx, c.through));
-          break;
-        case "follow":
-          await saveHash(tx, c.head);
-          break;
-        case "block": {
-          const n = c.block.number;
-          await timed("tables", () => store.flush(tx, n));
-          await timed("cache", () => cache?.persist(tx, -1));
-          await insertChildren(tx, c.children);
-          await saveHash(tx, c.block);
-          await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [final()]);
-          await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [final()]);
-          break;
+    const rows = c.kind === "batch" || c.kind === "block";
+    if (rows) store.take();
+    if (c.kind === "children" || c.kind === "batch") cache?.take(c.through);
+    else if (c.kind === "block") cache?.take(-1);
+    try {
+      await transaction(pool, async (tx) => {
+        await lock.check(tx);
+        switch (c.kind) {
+          case "children":
+            await timed("cache", () => cache?.persist(tx));
+            await insertChildren(tx, c.children);
+            break;
+          case "batch":
+            await timed("tables", () => store.flush(tx));
+            await timed("cache", () => cache?.persist(tx));
+            break;
+          case "follow":
+            await saveHash(tx, c.head);
+            break;
+          case "block": {
+            const n = c.block.number;
+            await timed("tables", () => store.flush(tx, n));
+            await timed("cache", () => cache?.persist(tx));
+            await insertChildren(tx, c.children);
+            await saveHash(tx, c.block);
+            await tx.query(`DELETE FROM _kasbah_blocks WHERE number < $1`, [final()]);
+            await tx.query(`DELETE FROM _kasbah_journal WHERE block < $1`, [final()]);
+            break;
+          }
+          case "revert":
+            await timed("tables", async () => (undone = await store.revert(tx, c.to.number)));
+            await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [c.to.number]);
+            await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [c.to.number]);
+            break;
         }
-        case "revert":
-          await timed("tables", async () => (undone = await store.revert(tx, c.to.number)));
-          await tx.query(`DELETE FROM _kasbah_blocks WHERE number > $1`, [c.to.number]);
-          await tx.query(`DELETE FROM _kasbah_children WHERE block > $1`, [c.to.number]);
-          break;
-      }
-      if (m.watermark !== undefined)
-        for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
-      if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
-      if (m.checkpoint !== undefined) {
-        await setMeta(tx, "checkpoint", m.checkpoint);
-        // Delivered at COMMIT: API servers re-run live queries.
-        await tx.query(`SELECT pg_notify($1, $2)`, [
-          liveChannel(schema),
-          JSON.stringify({ checkpoint: m.checkpoint }),
-        ]);
-      }
-    });
+        if (m.watermark !== undefined)
+          for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
+        if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
+        if (m.checkpoint !== undefined) {
+          await setMeta(tx, "checkpoint", m.checkpoint);
+          // Delivered at COMMIT: API servers re-run live queries.
+          await tx.query(`SELECT pg_notify($1, $2)`, [
+            liveChannel(schema),
+            JSON.stringify({ checkpoint: m.checkpoint }),
+          ]);
+        }
+      });
+    } finally {
+      if (rows) store.written();
+    }
     const ms = performance.now() - started;
     if (m.checkpoint !== undefined) this.#checkpoint = m.checkpoint;
     if (m.watermark !== undefined) this.#watermark = m.watermark;

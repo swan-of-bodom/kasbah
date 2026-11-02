@@ -158,7 +158,7 @@ export class Status {
   readonly handlers = new Map<string, { count: number; ms: number }>();
   /**
    * Milliseconds spent waiting for events (`fetch`), for their headers, transactions and receipts (`extras`), in
-   * handlers and committing (backfill and live).
+   * handlers, and for commits (`Position` counts it: a backfill commit runs while the next batch is handled).
    */
   readonly time = { fetch: 0, extras: 0, handlers: 0, commit: 0 };
   lastCommit = { ms: 0, tables: 0, cache: 0 };
@@ -266,9 +266,8 @@ export class Status {
     }
   }
 
-  /** Moves the checkpoint, the commit times and the live block, and notes a progress line when one is due. */
+  /** Moves the checkpoint, the last commit's times and the live block, and notes a progress line when one is due. */
   committed(r: CommitReport): void {
-    this.time.commit += r.ms;
     if (r.checkpoint !== undefined) this.checkpoint = r.checkpoint;
     if (r.kind === "revert") this.live.reorgs++;
     if (r.kind === "batch") {

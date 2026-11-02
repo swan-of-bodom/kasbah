@@ -103,9 +103,10 @@ test.skipIf(url === undefined)(
     }
     cache.track(["0xa", "0xb"], ["0x51"], 100);
     cache.add(events);
+    cache.take(399);
     const c = await pool.connect();
     await c.query("BEGIN");
-    await cache.persist(c, 399);
+    await cache.persist(c);
     await c.query("COMMIT");
     c.release();
 
@@ -142,15 +143,60 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
+  "a range tracked while a commit writes the cache is covered from its own start only",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    const event = (address: string, block: number): EmittedEvent => ({
+      from_address: address,
+      keys: ["0x51"],
+      data: [],
+      block_number: block,
+      block_hash: "0x1",
+      transaction_hash: `0x${block.toString(16)}`,
+      transaction_index: 0,
+      event_index: 0,
+    });
+    const commit = async (through: number, meanwhile = () => {}) => {
+      cache.take(through);
+      const c = await pool!.connect();
+      await c.query("BEGIN");
+      const persisting = cache.persist(c);
+      meanwhile();
+      await persisting;
+      await c.query("COMMIT");
+      c.release();
+    };
+    cache.track(["0xa"], ["0x51"], 100);
+    cache.add([event("0xa", 150)]);
+    // 0xb starts at block 300: its range is fetched while blocks 100–199 are being written.
+    await commit(199, () => {
+      cache.track(["0xa", "0xb"], ["0x51"], 300);
+      cache.add([event("0xa", 310), event("0xb", 320)]);
+    });
+    await commit(349);
+    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(200);
+    expect(await cache.coveredUntil(["0xb"], ["0x51"], 200)).toBe(200);
+    expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 300)).toBe(350);
+    const read: number[] = [];
+    for await (const b of cache.read(["0xa", "0xb"], ["0x51"], 300, 349))
+      for (const e of b.events) read.push(e.block_number!);
+    expect(read).toEqual([310, 320]);
+  },
+);
+
+test.skipIf(url === undefined)(
   "call results: kept up to the cap, oldest dropped first; info and clear",
   async () => {
     pool ??= new pg.Pool({ connectionString: url, max: 2 });
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     let cache = await EventCache.open(pool, CHAIN, { maxCalls: 10 });
     const persist = async () => {
+      cache.take(-1);
       const c = await pool!.connect();
       await c.query("BEGIN");
-      await cache.persist(c, -1);
+      await cache.persist(c);
       await c.query("COMMIT");
       c.release();
     };

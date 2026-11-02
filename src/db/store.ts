@@ -16,6 +16,9 @@ const CACHE_KEPT = 0.8;
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
+/** One table's share of a commit: its buffered changes and, in journal mode, their pre-images. */
+type Taken = { pending: Map<string, Pending>; before: Map<string, Row | null> };
+
 type State = {
   info: TableInfo;
   cache: Map<string, Row | null>;
@@ -84,6 +87,8 @@ export class Store {
   readonly #maxCachedBytes: number;
   /** Record pre-images for the undo journal (blocks inside the reorg window). */
   journal = false;
+  /** What `take` moved out for the commit in flight, and how to wake whoever waits for it, until `written`. */
+  #taken: { tables: Map<State, Taken>; written: () => void; settled: Promise<void> } | undefined;
 
   constructor(orm: NodePgDatabase, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
@@ -119,6 +124,8 @@ export class Store {
       return cached;
     }
     if (s.complete) return null;
+    // The commit in flight may be adding this key in its transaction: both would add it.
+    if (!s.keyed) await this.#taken?.settled;
     await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
@@ -250,28 +257,51 @@ export class Store {
   }
 
   /**
-   * Writes every buffered change with `client`, inside the caller's transaction. In journal mode, `block` tags the
+   * Moves every buffered change out for one commit, before its first await: writes from here on go to the next
+   * commit, so handlers can go on while this one runs. `flush` writes them, `written` follows the transaction.
+   */
+  take(): void {
+    if (this.#taken !== undefined) throw new Error("a commit is already in flight");
+    const tables = new Map<State, Taken>();
+    for (const s of this.#tables.values()) {
+      if (s.pending.size === 0 && s.before.size === 0) continue;
+      tables.set(s, { pending: s.pending, before: s.before });
+      s.pending = new Map();
+      s.pendingBytes = 0;
+      s.before = new Map();
+    }
+    let written!: () => void;
+    const settled = new Promise<void>((done) => (written = done));
+    this.#taken = { tables, written, settled };
+  }
+
+  /**
+   * Writes what `take` moved out with `client`, inside the caller's transaction. In journal mode, `block` tags the
    * pre-images written to the undo journal.
    */
   async flush(client: PoolClient, block?: number): Promise<void> {
+    const taken = this.#taken;
+    if (taken === undefined) throw new Error("flush without take");
     if (this.journal) {
       if (block === undefined) throw new Error("journal mode needs the block being flushed");
-      await this.#writeJournal(client, block);
+      await this.#writeJournal(client, taken.tables, block);
     }
-    for (const s of this.#tables.values()) {
-      if (s.pending.size === 0) continue;
-      await this.#writeTable(client, s);
-      s.pending.clear();
-      s.pendingBytes = 0;
-    }
+    for (const [s, t] of taken.tables)
+      if (t.pending.size > 0) await this.#writeTable(client, s, t.pending);
+  }
+
+  /** After the commit's transaction ends: Postgres has its rows, so the cache may drop them. */
+  written(): void {
+    this.#taken?.written();
+    this.#taken = undefined;
     this.#evict();
   }
 
-  async #writeTable(client: PoolClient, s: State) {
+  async #writeTable(client: PoolClient, s: State, pending: Map<string, Pending>) {
     const inserts: Row[] = [];
     const upserts: Row[] = [];
     const deletes: Row[] = [];
-    for (const p of s.pending.values())
+    for (const p of pending.values())
       (p.op === "insert" ? inserts : p.op === "upsert" ? upserts : deletes).push(p.row);
     const table = quote(s.info.name);
 
@@ -314,6 +344,8 @@ export class Store {
     for (const s of tables.sort((a, b) => a.hits - b.hits)) {
       for (const [k, row] of s.cache) {
         if (total <= target) break;
+        // Not in Postgres yet: a read would miss it.
+        if (s.pending.has(k)) continue;
         const n = approxBytes(k) + approxBytes(row);
         s.cache.delete(k);
         s.cachedBytes -= n;
@@ -354,19 +386,19 @@ export class Store {
     return true;
   }
 
-  async #writeJournal(client: PoolClient, block: number) {
+  async #writeJournal(client: PoolClient, taken: Map<State, Taken>, block: number) {
     const tables: string[] = [];
     const keys: string[] = [];
     const befores: (string | null)[] = [];
-    for (const s of this.#tables.values()) {
-      for (const [k, before] of s.before) {
-        const row = before ?? s.cache.get(k);
-        if (row === null || row === undefined) continue;
+    for (const [s, t] of taken) {
+      for (const [k, before] of t.before) {
+        // A row inserted in this block is keyed by its pending write; none left: it was deleted again.
+        const row = before ?? t.pending.get(k)?.row;
+        if (row === undefined) continue;
         tables.push(s.info.name);
         keys.push(JSON.stringify(driverValues(row, s.info.primaryKey)));
         befores.push(before === null ? null : JSON.stringify(driverValues(before, s.info.columns)));
       }
-      s.before.clear();
     }
     if (tables.length === 0) return;
     await client.query(

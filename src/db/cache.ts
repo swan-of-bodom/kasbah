@@ -1,7 +1,4 @@
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import type pg from "pg";
-import { from as copyFrom } from "pg-copy-streams";
 import { DEFAULTS } from "../config/resolve.ts";
 import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
@@ -9,6 +6,7 @@ import type { Batch } from "../sync/fetch.ts";
 import { type Block, blockOf } from "../types/block.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
+import { copyLines } from "./copy.ts";
 import { quote } from "./table.ts";
 
 export function feltHex(felt: string): string {
@@ -72,6 +70,30 @@ const SCHEMA_SQL = (s: string) => [
 
 const bytea = (hex: string) => `\\\\x${hex}`;
 
+const eventLine = (e: EmittedEvent) =>
+  `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltHex(e.from_address))}\t${bytea(feltHex(e.keys[0] ?? "0x0"))}\t${bytea(feltHex(e.block_hash ?? "0x0"))}\t${bytea(feltHex(e.transaction_hash))}\t${bytea(packFeltsHex(e.keys))}\t${bytea(packFeltsHex(e.data))}\n`;
+
+type Pairs = { addresses: string[]; selectors: string[] };
+type CachedTransaction = {
+  hash: Buffer;
+  block: number;
+  transaction: string | null;
+  receipt: string | null;
+};
+type CachedCall = {
+  address: Buffer;
+  entrypoint: Buffer;
+  calldata: Buffer;
+  block: number;
+  result: Buffer;
+};
+/** One commit's share: what was fetched until it started, and the tracked events of its blocks. */
+type Taken = {
+  transactions: CachedTransaction[];
+  calls: CachedCall[];
+  events?: { list: EmittedEvent[]; from: number; through: number; pairs: Pairs };
+};
+
 /**
  * Final events (below the reorg window) kept in Postgres, shared by every app on the same database and chain.
  * `coverage` says which blocks are complete for each (address, selector at key 0); a re-index reads those from
@@ -82,22 +104,13 @@ export class EventCache {
   readonly #schema: string;
   #pending: EmittedEvent[] = [];
   #pendingFrom: number | undefined;
-  #pendingPairs: { addresses: string[]; selectors: string[] } | undefined;
-  #transactions: {
-    hash: Buffer;
-    block: number;
-    transaction: string | null;
-    receipt: string | null;
-  }[] = [];
-  #calls: {
-    address: Buffer;
-    entrypoint: Buffer;
-    calldata: Buffer;
-    block: number;
-    result: Buffer;
-  }[] = [];
+  #pendingPairs: Pairs | undefined;
+  #transactions: CachedTransaction[] = [];
+  #calls: CachedCall[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
   #pendingBytes = 0;
+  /** What `take` moved out for the commit in flight, until its `persist`. */
+  #taken: Taken | undefined;
   readonly #maxCalls: number;
   #callRows = 0;
 
@@ -355,12 +368,30 @@ export class EventCache {
     });
   }
 
-  /** Writes the tracked events and calls, and marks `[from, through]` covered, inside the caller's transaction. */
-  async persist(tx: pg.PoolClient, through: number) {
-    const all = this.#transactions;
+  /**
+   * Moves out what the next `persist` writes, before the commit's first await: transactions, receipts and calls
+   * fetched so far, and the tracked events with `[from, through]` to mark covered (`through` -1: none). What's
+   * fetched or tracked from here on is the next commit's.
+   */
+  take(through: number): void {
+    const from = this.#pendingFrom;
+    const pairs = this.#pendingPairs;
+    this.#taken = { transactions: this.#transactions, calls: this.#calls };
     this.#transactions = [];
+    this.#calls = [];
     this.#pendingBytes = 0;
-    for (const t of chunks(all, ROWS_PER_INSERT)) {
+    if (from === undefined || pairs === undefined || through < from) return;
+    this.#taken.events = { list: this.#pending, from, through, pairs };
+    this.#pending = [];
+    this.#pendingFrom = through + 1;
+  }
+
+  /** Writes what `take` moved out, and marks its blocks covered, inside the caller's transaction. */
+  async persist(tx: pg.PoolClient): Promise<void> {
+    const taken = this.#taken;
+    if (taken === undefined) throw new Error("persist without take");
+    this.#taken = undefined;
+    for (const t of chunks(taken.transactions, ROWS_PER_INSERT)) {
       await tx.query(
         `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
          ON CONFLICT (hash) DO UPDATE SET transaction = coalesce(EXCLUDED.transaction, transactions.transaction), receipt = coalesce(EXCLUDED.receipt, transactions.receipt)`,
@@ -372,9 +403,8 @@ export class EventCache {
         ],
       );
     }
-    if (this.#calls.length > 0) {
-      const c = this.#calls;
-      this.#calls = [];
+    if (taken.calls.length > 0) {
+      const c = taken.calls;
       const r = await tx.query(
         `INSERT INTO ${this.#schema}.calls (address, entrypoint, calldata, block, result)
          SELECT * FROM unnest($1::bytea[], $2::bytea[], $3::bytea[], $4::int[], $5::bytea[]) ON CONFLICT DO NOTHING`,
@@ -389,25 +419,13 @@ export class EventCache {
       this.#callRows += r.rowCount ?? 0;
       await this.#pruneCalls(tx);
     }
-    const from = this.#pendingFrom;
-    const pairs = this.#pendingPairs;
-    if (from === undefined || pairs === undefined || through < from) return;
-    if (this.#pending.length > 0) {
+    if (taken.events === undefined) return;
+    const { list, from, through, pairs } = taken.events;
+    if (list.length > 0) {
       await tx.query(
         `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
       );
-      const lines = (function* (events: EmittedEvent[]) {
-        let chunk = "";
-        for (const e of events) {
-          chunk += `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltHex(e.from_address))}\t${bytea(feltHex(e.keys[0] ?? "0x0"))}\t${bytea(feltHex(e.block_hash ?? "0x0"))}\t${bytea(feltHex(e.transaction_hash))}\t${bytea(packFeltsHex(e.keys))}\t${bytea(packFeltsHex(e.data))}\n`;
-          if (chunk.length > 1 << 16) {
-            yield chunk;
-            chunk = "";
-          }
-        }
-        if (chunk !== "") yield chunk;
-      })(this.#pending);
-      await pipeline(Readable.from(lines), tx.query(copyFrom(`COPY _kasbah_cache_in FROM STDIN`)));
+      await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, list, eventLine);
       await tx.query(
         `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
       );
@@ -425,8 +443,6 @@ export class EventCache {
        ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
       [from, through + 1, a, s],
     );
-    this.#pending = [];
-    this.#pendingFrom = through + 1;
   }
 
   /** Stops tracking (the rest of the range is live, or the run stopped). */

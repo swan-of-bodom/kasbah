@@ -117,9 +117,7 @@ test("Status: commits move the gauges and note progress when due; a throwing lis
   } finally {
     console.error = error;
   }
-  expect([status.checkpoint, status.live.block, status.live.reorgs, status.time.commit]).toEqual([
-    5, 8, 1, 8,
-  ]);
+  expect([status.checkpoint, status.live.block, status.live.reorgs]).toEqual([5, 8, 1]);
   expect(notices.map((n) => n.text)).toEqual([
     expect.stringMatching(/^block 8: 2 events, 1 new children, \d+\.\ds after its timestamp$/),
   ]);
