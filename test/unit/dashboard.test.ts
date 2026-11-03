@@ -99,12 +99,13 @@ test("colors don't change the layout", () => {
   s.enter("backfill");
   s.setRange(0, 10, 5);
   s.record("A:b", 1);
-  // One clock for both: under load a second render a tick later showed another uptime.
+  // One clock for both, and the process's memory masked: it moves between two renders (84 MB, then 83 MB).
   const now = performance.now();
+  const same = (l: string) => l.replace(/\d+ MB/, "N MB");
   const colored = render(s, { width: 80, color: true, now });
   expect(colored.some((l) => l.includes("\x1b["))).toBe(true);
-  expect(colored.map(plain)).toEqual(
-    render(s, { width: 80, now }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")),
+  expect(colored.map((l) => same(plain(l)))).toEqual(
+    render(s, { width: 80, now }).map((l) => same(l.replace("[BACKFILL]", " BACKFILL "))),
   );
 });
 
