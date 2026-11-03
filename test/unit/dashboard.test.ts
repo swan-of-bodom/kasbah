@@ -99,10 +99,12 @@ test("colors don't change the layout", () => {
   s.enter("backfill");
   s.setRange(0, 10, 5);
   s.record("A:b", 1);
-  const colored = render(s, { width: 80, color: true });
+  // One clock for both: under load a second render a tick later showed another uptime.
+  const now = performance.now();
+  const colored = render(s, { width: 80, color: true, now });
   expect(colored.some((l) => l.includes("\x1b["))).toBe(true);
   expect(colored.map(plain)).toEqual(
-    render(s, { width: 80 }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")),
+    render(s, { width: 80, now }).map((l) => l.replace("[BACKFILL]", " BACKFILL ")),
   );
 });
 
