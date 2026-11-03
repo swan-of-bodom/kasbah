@@ -10,6 +10,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   The fetcher's in-memory buffer and its budget are gone; batches read back from the cache are capped in bytes as
   well as in events, so large events stay within a small heap (a 256 MB test). `/metrics`' `fetch_buffer*` gauges
   now count what waits to be written to the cache.
+  An existing cache gains a `filter` column the first time this version opens it, and an older version can't
+  write to it after that: going back means `kasbah clean` (or dropping its `kasbah_cache_*` schema).
 - Reading events back from the cache asks Postgres for about a batch's blocks at a time: a query reaching to
   everything the fetch thread had written took 7.7 s instead of milliseconds, and handling stalled. A stop now ends
   the fetch thread at once. `--debug` shows the read-back queries' slowest time.
