@@ -8,7 +8,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   everything the fetch thread had written took 7.7 s instead of milliseconds, and handling stalled. A stop now ends
   the fetch thread at once. `--debug` shows the read-back queries' slowest time.
 - A first sync fetches in a thread of its own: reading RPC answers and writing them to the event cache no longer
-  waits for handlers on the main thread, nor they for it. At a 512 MB heap on blocks 620k–630k, the main thread used
+  waits for handlers on the main thread, nor they for it. On Ekubo over Alchemy, block 652k came at 3m08s instead
+  of 3m56s (main: 4m13s), handlers ran at 37–42k events/s instead of 24–30k in its dense stretch, and the event
+  loop's longest stop stayed at about 300 ms (2026-11-03). At a 512 MB heap on blocks 620k–630k, the main thread used
   a third less CPU and its longest stop went from 289 ms to 137 ms (peak RSS 827 → 945 MB: the thread's heap, a
   quarter of the indexer's, comes on top).
 - `--debug` shows how long the RPC took to answer, to its headers and with the body read: the gap is time the
