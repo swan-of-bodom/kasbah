@@ -90,4 +90,6 @@ test.skipIf(url === undefined)(
     expect(asked).toContain(JSON.stringify([[rawSelector("Pinged")]]));
     expect(asked.some((k) => k.includes(rawSelector("Moved")) && !k.includes('"0x2"'))).toBe(false);
   },
+  // Two fetch threads start, one per stream: under ~1 s alone, past the default 5 s with every file running.
+  30_000,
 );
