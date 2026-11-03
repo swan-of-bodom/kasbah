@@ -1,6 +1,7 @@
 // A simulated Starknet node for benchmarks: `starknet_getEvents` answered from kasbah's event cache with hosted
 // Pathfinder's limits (Alchemy's), after a fixed delay; any other call recorded from KASBAH_RPC_URL once, then
 // replayed. Every run sees the same node, so a fetcher change is measured without the provider's moods.
+// It answers its own chain id, `SN_BENCH`, so an app's event cache on it is a schema of its own, never mainnet's.
 //   node --env-file=.env test/bench/node.ts --port 42170 --latency 120
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -17,6 +18,9 @@ const { values: a } = parseArgs({
     schema: { type: "string", default: "kasbah_cache_0x534e5f4d41494e" },
   },
 });
+
+/** `SN_BENCH` as a felt: the chain id the simulated node answers. */
+const BENCH_CHAIN = "0x534e5f42454e4348";
 
 const MAX_CHUNK = 1_024;
 const SCAN_LIMIT = 81_920;
@@ -165,6 +169,7 @@ async function answer(c: Call) {
   try {
     if (c.method === "starknet_getEvents")
       return { jsonrpc: "2.0", id: c.id, result: await getEvents(c.params as { filter: Filter }) };
+    if (c.method === "starknet_chainId") return { jsonrpc: "2.0", id: c.id, result: BENCH_CHAIN };
     if (c.method === "pathfinder_version" || c.method === "juno_version")
       throw new RpcError(METHOD_NOT_FOUND, "Method not found");
     return { jsonrpc: "2.0", id: c.id, result: await replay(c.method, c.params) };

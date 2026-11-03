@@ -62,10 +62,12 @@ A performance change is kept only if it beats the noise, measured end to end, as
   the event cache with hosted Pathfinder's limits after a fixed `--latency`, and replays other calls recorded once
   from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
   same node. Give it a hosted provider's latency, `--latency 700`: Alchemy answered `getEvents` in ~650–900 ms
-  (2026-11-02), and at 120 ms a window fetched page after page looked 6× cheaper than it is. The verdict is the
-  median of each pair's B/A ratio; pairs whose RPC latency moved over 25% are left out. A run during which the
-  laptop went on battery or the CPU's turbo turned off (on this laptop, a low battery) is discarded and stops the
-  benchmark, and neither starts one.
+  (2026-11-02), and at 120 ms a window fetched page after page looked 6× cheaper than it is. It answers its own
+  chain id (`SN_BENCH`), so the app's event cache on it is a schema of its own, emptied before every run:
+  `--cache on` (the default) measures the cache's writes too, `--cache off` doesn't. The verdict is the median of
+  each pair's B/A ratio; pairs whose RPC latency moved over 25% are left out. A run during which the laptop went on
+  battery or the CPU's turbo turned off (on this laptop, a low battery) is discarded and stops the benchmark, and
+  neither starts one.
 - On a CPU with fast and slow cores, kasbah runs pinned to the fastest (`taskset`; `--pin off` to let it float,
   `--pin 4-11` to name the CPUs): a run Linux moved to a slow core used up to ~60% more CPU. Each run also reports
   kasbah's own totals from `/metrics` (in commits, in handlers, waiting for events), its GC time, and its main

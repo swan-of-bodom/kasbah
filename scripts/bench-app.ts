@@ -45,7 +45,6 @@ const { values: a } = parseArgs({
     "env-b": { type: "string", default: "" },
   },
 });
-if (a.rpc === "sim") a.cache = "off";
 
 const repo = resolve(import.meta.dirname, "..");
 const appDir = join(repo, "test/bench/apps", a.app);
@@ -78,6 +77,8 @@ type Run = {
 };
 
 const SCHEMA = "bench_run";
+/** The event cache of an app on the simulated node, which answers chain id `SN_BENCH`: emptied before every run. */
+const SIM_CACHE = "kasbah_cache_0x534e5f42454e4348";
 
 async function rowCounts(): Promise<string> {
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
@@ -194,7 +195,7 @@ function slowedBy(): string | undefined {
 async function preflight() {
   if (!existsSync(appDir)) throw new Error(`no app at test/bench/apps/${a.app}`);
   if (process.env.DATABASE_URL === undefined) throw new Error("DATABASE_URL is not set (.env)");
-  if (a.cache === "off" && process.env.KASBAH_RPC_URL === undefined)
+  if ((a.cache === "off" || a.rpc === "sim") && process.env.KASBAH_RPC_URL === undefined)
     throw new Error("KASBAH_RPC_URL is not set (.env)");
   const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
   try {
@@ -206,7 +207,7 @@ async function preflight() {
     `SELECT 1 FROM information_schema.schemata WHERE schema_name LIKE 'kasbah_cache_%'`,
   );
   await client.end();
-  if (a.cache === "on" && cached.rowCount === 0)
+  if (a.cache === "on" && a.rpc !== "sim" && cached.rowCount === 0)
     console.warn("no kasbah_cache_* schema: the first run will fetch");
   const slow = slowedBy();
   if (slow !== undefined) throw new Error(slow);
@@ -262,9 +263,21 @@ function simulatedNode(): Promise<ReturnType<typeof spawn>> {
   });
 }
 
-function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefined> {
+/** Drops the simulated chain's event cache, so each run fetches everything from the simulated node. */
+async function emptySimCache() {
+  const client = new pg.Client({ connectionString: process.env.DATABASE_URL });
+  await client.connect();
+  try {
+    await client.query(`DROP SCHEMA IF EXISTS ${SIM_CACHE} CASCADE`);
+  } finally {
+    await client.end();
+  }
+}
+
+async function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefined> {
   const slow = slowedBy();
   if (slow !== undefined) throw new Error(slow);
+  if (a.rpc === "sim") await emptySimCache();
   const log = join(results, `${side}-${pair}.log`);
   const out = join(results, `${side}-${pair}.json`);
   const flags = (side === "A" ? a["node-a"] : a["node-b"])!.split(" ").filter((f) => f !== "");
@@ -300,6 +313,7 @@ function once(side: "A" | "B", pair: number, cwd: string): Promise<Run | undefin
       PORT: a.port,
       KASBAH_BENCH_OUT: out,
       KASBAH_BENCH_CACHE: a.cache,
+      KASBAH_BENCH_SIM: a.rpc === "sim" ? "1" : "",
       KASBAH_BENCH_FROM: a.from,
       ...Object.fromEntries(
         (side === "A" ? a["env-a"] : a["env-b"])!

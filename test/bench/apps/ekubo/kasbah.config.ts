@@ -3,7 +3,8 @@ import coreAbi from "./abis/Core.ts";
 
 /** Ekubo Core's swaps, positions and fees into pools and candles: the workload behind the numbers in DESIGN.md. */
 export default kasbah({
-  network: "mainnet",
+  // The simulated node answers its own chain id (test/bench/node.ts).
+  network: process.env.KASBAH_BENCH_SIM === "1" ? undefined : "mainnet",
   rpc: process.env.KASBAH_RPC_URL!,
   ws: false,
   contracts: {
