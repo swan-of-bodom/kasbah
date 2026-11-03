@@ -124,7 +124,7 @@ function retryable(status: number | undefined, code?: number): boolean {
 class Endpoint {
   readonly url: string;
   readonly host: string;
-  readonly maxRate: number;
+  maxRate: number;
   rate: number;
   slowStart = true;
   succeeded = 0;
@@ -269,6 +269,29 @@ export class RpcClient {
     this.#maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
     this.#maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
     this.#signal = options.signal;
+  }
+
+  /**
+   * The endpoints for another client, each with `share` of its ceiling, which this client gives up until `repay`:
+   * together they keep to an endpoint's `maxRequestsPerSecond` (but for a call per second each, at the least).
+   */
+  lend(share: number): { endpoints: RpcEndpoint[]; repay: () => void } {
+    const lent = this.#endpoints.map((e) => {
+      const n = Math.max(1, Math.floor(e.maxRate * share));
+      e.maxRate = Math.max(1, e.maxRate - n);
+      e.rate = Math.min(e.rate, e.maxRate);
+      e.tokens = Math.min(e.tokens, e.rate);
+      return n;
+    });
+    let repaid = false;
+    return {
+      endpoints: this.#endpoints.map((e, i) => ({ url: e.url, maxRequestsPerSecond: lent[i]! })),
+      repay: () => {
+        if (repaid) return;
+        repaid = true;
+        for (const [i, e] of this.#endpoints.entries()) e.maxRate += lent[i]!;
+      },
+    };
   }
 
   /** The current limit over every endpoint, in calls per second. */

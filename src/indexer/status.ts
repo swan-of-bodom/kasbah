@@ -175,7 +175,7 @@ export class Status {
   api = "";
   rpc?: RpcStats;
   rate = () => 0;
-  /** Each RPC endpoint's rate, calls and failures, when there are several. */
+  /** Each RPC endpoint's rate, calls, failures and answer times. */
   endpoints = (): EndpointStats[] => [];
   cache?: { cachedEvents: number; fetchedEvents: number };
   calls?: { calls: number; cached: number };

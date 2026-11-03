@@ -4,6 +4,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A first sync fetches in a thread of its own: reading RPC answers and writing them to the event cache no longer
+  waits for handlers on the main thread, nor they for it. At a 512 MB heap on blocks 620k–630k, the main thread used
+  a third less CPU and its longest stop went from 289 ms to 137 ms (peak RSS 827 → 945 MB: the thread's heap, a
+  quarter of the indexer's, comes on top).
 - `--debug` shows how long the RPC took to answer, to its headers and with the body read: the gap is time the
   main thread was too busy to read it. `/metrics` reports `endpoint_*` with one endpoint too, no longer only with
   several.

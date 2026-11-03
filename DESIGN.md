@@ -89,7 +89,7 @@ backlog. The fetcher keeps the block through which every block is written (the f
 cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
 catches up. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
 the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
-(`WRITE_SHARE`): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
+(`WRITE_SHARE`, a fifth of the fetch thread's): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
 memory. Fetching still stays near the front, though not for memory: handlers read only up to it, and with
 nothing paused, every worker stayed in the windows the first cuts made far ahead (at a sparse start's density they
 halve the range) while the front moved one page at a time (Ekubo, 2026-11-03: 13.8M events fetched, 2.1M handled
@@ -98,6 +98,16 @@ at 5 min). So windows with more than 8 pages per worker fetched before them, pas
 likewise syncs one interval ahead. A page's last block may be partial: its events stay with the window until the next page completes it. A
 crash leaves only complete blocks covered, and a restart fetches only the blocks not covered (`EventCache.missing`),
 gaps between windows that finished included.
+
+**The fetcher runs in a thread of its own** (`fetchThread`, `src/sync/fetch-worker.ts`). Reading and parsing each RPC
+answer and writing its events to Postgres is about as much work as reading them back and running handlers, and on
+one thread each waited for the other: on Ekubo's dense stretch Alchemy sent a page in 0.3 s (`curl`), while kasbah
+took 1.5–4.2 s to read it, the answer waiting for the busy main thread (2026-11-03). Events going through Postgres
+make the split cheap: the thread tells the main thread only how far the cache has every block, never the events. It
+has its own RPC client, lent three quarters of each endpoint's rate ceiling (`RpcClient.lend`), so both stay under
+it, its own Postgres connection, and a heap of a quarter of the indexer's (`FETCH_HEAP_SHARE`). It reports its RPC
+counts and gauges every 250 ms, added to the main thread's for the dashboard and `/metrics`. Stopping terminates it:
+a write cut short rolls back with its coverage. Ponder fetches on its main thread; this goes past it.
 
 ## 4. Endpoint layer
 

@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { constants, PerformanceObserver } from "node:perf_hooks";
+import { isMainThread } from "node:worker_threads";
 
 const out = process.env.KASBAH_BENCH_OUT!;
 const TICK_MS = 10;
@@ -40,7 +41,17 @@ new PerformanceObserver((list) => {
 
 const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[Math.floor(xs.length / 2)] ?? 0;
 
+// The fetch thread loads this probe too: it leaves its RPC times for the main thread's report, and nothing else.
+const threadTimes = `${out}.rpc`;
+if (isMainThread) rmSync(threadTimes, { force: true });
 process.on("exit", () => {
+  if (!isMainThread) {
+    appendFileSync(threadTimes, `${JSON.stringify(rpcMs)}\n`);
+    return;
+  }
+  if (existsSync(threadTimes))
+    for (const line of readFileSync(threadTimes, "utf8").split("\n").filter(Boolean))
+      rpcMs.push(...(JSON.parse(line) as number[]));
   writeFileSync(
     out,
     JSON.stringify({

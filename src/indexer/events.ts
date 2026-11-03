@@ -1,5 +1,6 @@
 import type { EmittedEvent } from "../rpc/methods.ts";
 import { type Batch, eventStream, type FetchGauges } from "../sync/fetch.ts";
+import { fetchThread } from "../sync/fetch-thread.ts";
 import { canonical } from "../types/felt.ts";
 import type { Run } from "./open.ts";
 
@@ -11,7 +12,7 @@ export type Child = { address: string; contract: string; block: number };
 
 /**
  * Ordered batches of `addresses` × `keys` in `[from, to]`. Final ranges, with the cache: what it lacks is fetched into
- * it, and every batch is read back from it as far as it holds every block (Ponder's sync store). Live ranges, and
+ * it by a thread of its own, and every batch is read back from it as far as it holds every block (Ponder's sync store). Live ranges, and
  * key filters (coverage records address and selector only): RPC only, held in memory.
  */
 export async function* events(
@@ -44,13 +45,10 @@ export async function* events(
   const written =
     missing.length === 0
       ? undefined
-      : eventStream({
-          ...fetch,
-          concurrency,
-          ranges: missing,
-          store: cache.writer(addresses, selectors),
-          gauges,
-        });
+      : fetchThread(
+          { rpc, status, cache, database: config.database },
+          { addresses, keys, from, to, ranges: missing, chunkSize: endpoint.maxChunk, concurrency },
+        );
   let next = from;
   try {
     for await (const { through } of written ?? whole(to)) {

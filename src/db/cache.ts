@@ -62,9 +62,10 @@ export function unpackHex(h: string): string[] {
 const ROWS_PER_INSERT = 1_000;
 /**
  * Share of the heap for fetched events waiting for Postgres, the write in flight included: past it, fetching waits.
- * Writes keep up on any disk that keeps up with the RPC, so it's reached only on a slow one.
+ * It's the fetch thread's heap, a quarter of the indexer's (`FETCH_HEAP_SHARE`): a twentieth of that. Writes keep up
+ * on any disk that keeps up with the RPC, so it's reached only on a slow one.
  */
-const WRITE_SHARE = 1 / 20;
+const WRITE_SHARE = 1 / 5;
 const MIN_WRITE_BYTES = 8 << 20;
 /** Events per batch read back for the handlers. */
 const READ_LIMIT = 12_000;
@@ -188,9 +189,12 @@ export class EventCache {
   #writing: Promise<void> | undefined;
   #roomWakers: (() => void)[] = [];
 
-  private constructor(pool: pg.Pool, schema: string, maxCalls: number) {
+  readonly chainId: string;
+
+  private constructor(pool: pg.Pool, chainId: string, maxCalls: number) {
+    this.chainId = chainId;
     this.#pool = pool;
-    this.#schema = schema;
+    this.#schema = quote(`kasbah_cache_${chainId.toLowerCase()}`);
     this.#maxCalls = maxCalls;
   }
 
@@ -200,14 +204,19 @@ export class EventCache {
     chainId: string,
     o: { maxCalls?: number } = {},
   ): Promise<EventCache> {
-    const schema = quote(`kasbah_cache_${chainId.toLowerCase()}`);
-    for (const sql of SCHEMA_SQL(schema)) await pool.query(sql);
-    const cache = new EventCache(pool, schema, o.maxCalls ?? DEFAULTS.maxCalls);
+    const cache = new EventCache(pool, chainId, o.maxCalls ?? DEFAULTS.maxCalls);
+    for (const sql of SCHEMA_SQL(cache.#schema)) await pool.query(sql);
     cache.#callRows = Number(
-      (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${schema}.calls`)).rows[0]!.n,
+      (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${cache.#schema}.calls`)).rows[0]!
+        .n,
     );
     await cache.#pruneCalls(pool);
     return cache;
+  }
+
+  /** The cache `open` made, for its writer in another thread: nothing created, counted or pruned. */
+  static attach(pool: pg.Pool, chainId: string): EventCache {
+    return new EventCache(pool, chainId, DEFAULTS.maxCalls);
   }
 
   async #pruneCalls(q: pg.Pool | pg.PoolClient) {
