@@ -4,6 +4,12 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- The event cache is always on, as every final block's events now go through it: `cache: false` is refused with a
+  message saying so (`cache: true` and `cache: { maxCalls }` work as before). Events filtered by key (`filter`)
+  are cached too, so a re-index of such an app fetches nothing either, and an existing cache keeps what it has.
+  The fetcher's in-memory buffer and its budget are gone; batches read back from the cache are capped in bytes as
+  well as in events, so large events stay within a small heap (a 256 MB test). `/metrics`' `fetch_buffer*` gauges
+  now count what waits to be written to the cache.
 - Reading events back from the cache asks Postgres for about a batch's blocks at a time: a query reaching to
   everything the fetch thread had written took 7.7 s instead of milliseconds, and handling stalled. A stop now ends
   the fetch thread at once. `--debug` shows the read-back queries' slowest time.
@@ -17,8 +23,7 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   main thread was too busy to read it. `/metrics` reports `endpoint_*` with one endpoint too, no longer only with
   several.
 - The raw-event cache is on by default, as Ponder always keeps what it fetched: a re-index fetches nothing again.
-  It costs disk, about 400 bytes per event (tens of GB for a busy contract's whole history); `cache: false` turns
-  it off.
+  It costs disk, about 400 bytes per event (tens of GB for a busy contract's whole history).
 - A first sync writes each fetched page to the event cache as it arrives and handlers read events back from it, as
   Ponder does, so fetching no longer pauses for an in-memory buffer: on Ekubo at a 512 MB heap, blocks 620k–630k
   took 24 s instead of 293 s, with the same rows written (peak RSS 645 → 827 MB). A restart fetches only the

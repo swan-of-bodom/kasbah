@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum, kasbah, loadBalance } from "../../src/index.ts";
 import { Status } from "../../src/indexer/status.ts";
+import { testChain } from "../fixtures/chain.ts";
 import { counterAbi, counterNode } from "../fixtures/counter.ts";
 
 const url = process.env.DATABASE_URL;
@@ -15,7 +16,8 @@ const listen = async (s: Server) => {
   await new Promise<void>((r) => s.listen(0, "127.0.0.1", r));
   return `http://127.0.0.1:${(s.address() as { port: number }).port}`;
 };
-const nodes = [counterNode(BLOCKS), counterNode(BLOCKS)];
+const chainId = testChain();
+const nodes = [counterNode(BLOCKS, { chainId }), counterNode(BLOCKS, { chainId })];
 let urls: string[];
 /** The first node, except that it says it's on mainnet. */
 let mainnet: { server: Server; url: string };
@@ -46,7 +48,6 @@ afterAll(async () => {
 
 const app = (rpc: Parameters<typeof kasbah>[0]["rpc"]) => {
   const a = kasbah({
-    cache: false,
     rpc,
     database: url,
     schema,
@@ -85,6 +86,6 @@ test.skipIf(url === undefined)("loadBalance: one run over two nodes, both used",
 
 test.skipIf(url === undefined)("loadBalance: nodes on different chains are refused", async () => {
   await expect(app([urls[1]!, mainnet.url]).run({ to: BLOCKS - 5 })).rejects.toThrow(
-    /the endpoints are on different chains \(127\.0\.0\.1:\d+: 0xc0c0, 127\.0\.0\.1:\d+: mainnet\)/,
+    /the endpoints are on different chains \(127\.0\.0\.1:\d+: 0x7e57[0-9a-f]+, 127\.0\.0\.1:\d+: mainnet\)/,
   );
 });

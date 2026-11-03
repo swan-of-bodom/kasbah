@@ -69,25 +69,20 @@ in core, the `ponder dev` drop-everything mode.
                 Postgres: user tables · undo journal · raw-event cache · checkpoint
 ```
 
-One process, three stages: fetch → decode → index. With the event cache (final blocks), fetching writes into
-Postgres and runs ahead of indexing as far as it can, as Ponder's sync does; handlers read events back from there.
-Without it (live blocks, key filters, `cache: false`), fetching runs ahead of indexing up to a memory cap.
-
-The cap (`src/sync/fetch.ts`) is in bytes, each event's size estimated as Ponder estimates its cached rows
-(`src/utils/memory.ts`), and follows the heap: `maxBufferedBytes` defaults to a fifteenth of it, split between
-streams that run at once. Windows behind the front pause at `perWindow` bytes each. Under `maxBuffered` held, any
-window may fetch; under twice that, only a window holding less than `maxBuffered` together with the windows before
-it (including itself), so the front never waits on the back; past that, only the front, while it holds less than
-`maxBuffered`, and the consumer drains it. So the buffer stays under three times `maxBuffered`: a fifth of the
-heap. A window with half of `maxBuffered` held before it (itself included) fetches only while the buffer is under
-that half: the other half is kept for the blocks handled next. Counting events instead crashed a 2 GB heap on Ekubo's events, about 1.2 kB each.
+One process, three stages: fetch → decode → index. Every final block's events go through the event cache:
+fetching writes into Postgres and runs ahead of indexing as far as it can, as Ponder's sync does, and handlers read
+events back from there. The cache is always on (`cache: false` was removed, 2026-11-03): one path instead of two,
+and memory bounded by design rather than by a fetch buffer's budget. Only a live tick's few blocks, which may still
+reorg, are fetched straight into memory (`src/sync/live.ts`).
 
 **On a first run, events go through Postgres, as Ponder's do.** Each page the fetcher gets is written to the cache
 (`EventCache.writer`) with the coverage of its complete blocks, in one transaction, so coverage never claims a block
 whose events aren't written. Pages waiting while one write runs go together in the next, so a write grows with the
 backlog. The fetcher keeps the block through which every block is written (the front window's, Ponder's sync
 cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
-catches up. Each query spans the blocks that held about a batch just before (`READ_FIRST_BLOCKS` to start), never
+catches up. A batch is also capped in bytes, a 64th of the heap (`READ_SHARE`), from the size of the events just
+read: about four are alive at once (the next one's rows, one decoding, one prepared, one handled), and 12k events
+of 30 felts each ran a 256 MB heap out of memory. Ekubo's 12k fit under the cap from a 1 GB heap up. Each query spans the blocks that held about a batch just before (`READ_FIRST_BLOCKS` to start), never
 everything written: with the fetch thread 600k blocks ahead, a query to the front ran 7.7 s instead of milliseconds
 (Postgres collected the whole range before sorting it), and handlers stalled. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
 the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
@@ -155,31 +150,21 @@ a write cut short rolls back with its coverage. Ponder fetches on its main threa
   Without it, a contract starting near the tip next to one from 2023 was fetched, and dropped, from 2023.
 - **Filters by argument** (`filter`): an event whose filter names fixed-width key members gets a stream of its own,
   `keys: [[selector], [values…], [], …]` over its contract's addresses, left out of the shared one; the streams are
-  merged in chain order (block, transaction, event index) up to the lowest `through`. They skip the raw-event
-  cache, whose coverage is by address and selector. Every filter is also checked after decoding, so data members
-  work too and a node's superset match never reaches a handler.
+  merged in chain order (block, transaction, event index) up to the lowest `through`. They go through the event
+  cache too: coverage records each stream's key filter beside its address and selector (`filterBytes`: canonical,
+  sorted, trailing wildcards dropped), the unfiltered stream's coverage counts for every filter, and reading back
+  keeps only the events whose keys match. Every filter is also checked after decoding, so data members work too and
+  a node's superset match never reaches a handler.
 - **`endBlock`**: a contract with one has its own stream too (its addresses and selectors, cached as usual) that
   ends at it; its filter streams end there as well.
 - **Windows aligned to 8,192 blocks** (the nodes' bloom aggregate size), at most 81,920 blocks (Pathfinder's scan
   cap). Windows run in parallel; inside a window, follow the token sequentially.
-- **Idle workers cut the front, not the whole range.** A window paused by the memory budget isn't work an idle
-  worker can take, so it doesn't count as some; cutting stops at the first window past which a new piece could not
+- **Idle workers cut the front, not the whole range.** A paused window (past the ahead limit, before it the memory
+  budget) isn't work an idle worker can take, so it doesn't count as some; cutting stops at the first window past which a new piece could not
   fetch either. Counting paused windows as work left one worker on the window being read (Ekubo without the
   cache: 339 s → 304 s to block 700k, median of 5 interleaved pairs, 3 won by 10–13%, the others within 1%). Not
   stopping the cut there split every window on each page: 6,000 windows, and the pass over them stalled the
-  event loop for seconds. Every pass over the windows is one, with the bytes held so far carried along.
-  At a 512 MB heap (a ~34 MB buffer) it was 4% faster too (2 of 2 pairs, 747 s → 716 s mean), peak RSS 720 → 835 MB:
-  more pages in flight, which the budget didn't count (32 workers × ~1.5 MB per Ekubo page).
-- **Pages in flight count toward the budget.** Each request reserves the recent page size (seeded by the first
-  page) until its page arrives, so the 3× ceiling holds for what is downloading too: in the unit test, held plus
-  downloading reached 8.7× the budget without it. On Ekubo it costs ~1% at a 512 MB heap (3 of 3 pairs, 686 →
-  696 s, peak RSS 810 → 789 MB) and nothing measurable at 4 GB (5 pairs, 323 → 327 s, inside the spread): the
-  bound is kept for a machine whose pages are larger than Ekubo's, as "Runs anywhere" asks.
-- **Half the budget is kept for the front** (`FRONT_RESERVE`). Without it, windows far ahead could fill the
-  budget with events handled last. On the simulated node (Ekubo without the cache, to block 700k): at 4 GB, 5%
-  faster, 7% less CPU, 6% lower peak RSS (median of 5 pairs, 404 → 392 s, 4 won); at 512 MB, where the run waits
-  on the node, the same time and 4% less CPU (3 of 3 pairs). Synthetic histories in the unit tests were mixed
-  (±4%), so no test pins it.
+  event loop for seconds. Every pass over the windows is one, with the events fetched ahead carried along.
 - **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
   peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
@@ -549,13 +534,14 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 
 ## 9. Storage and caches
 
-**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, on unless `cache: false` (`src/db/cache.ts`):
+**Raw-event cache** (for re-index without RPC), schema `kasbah_cache_<chain id>`, always on (`src/db/cache.ts`):
 - `events(block, tx, idx, address, selector, block_hash, tx_hash, keys, data)`, primary key = the three ints.
   `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
   small numbers).
 - `headers(block, hash, parent, timestamp)` for the blocks whose headers were fetched (block handlers).
-- `coverage(address, selector, ranges int8multirange)`: which (address, selector) pairs are complete for which
-  blocks. Ponder's fragment idea, without its EVM topic cross-products.
+- `coverage(address, selector, filter, ranges int8multirange)`: which (address, selector) pairs are complete for
+  which blocks, for a key filter or (`filter` empty) for all their events. Ponder's fragment idea, without its EVM
+  topic cross-products. A cache from before filters gains the column on open, its coverage counted as unfiltered.
 - Only data below the safety window is cached, so the cache never needs reorg handling.
 - A backfill fetches the parts of its range not covered for every (address, selector) pair into the cache, and
   reads all of it back from there (§3). Coverage is written with the events, ahead of the app's checkpoint: a
@@ -581,7 +567,7 @@ Built (`src/indexer/client.ts`, `src/abi/functions.ts`):
 - `context.client.readContracts({ contracts, allowFailure?, block? })`, shaped like viem's `multicall`: the reads not
   cached go out as one JSON-RPC batch. Starknet has no Multicall3, so it saves round trips, not billed calls (a
   provider bills each call in a batch). With `allowFailure` (default) each entry is `{ status, result | error }`.
-- Final blocks: cached in memory (100k results, oldest dropped) and, with `cache: true`, in the cache schema's
+- Final blocks: cached in memory (100k results, oldest dropped) and in the cache schema's
   `calls` table, written in the commit transactions. Recent blocks: never cached, and pinned by block hash so a
   lagging or reorged node can't answer for another block at that height.
 - Checked on mainnet: Ekubo `get_pool_liquidity` / `get_pool_price` at block 700k equal what the indexer computed

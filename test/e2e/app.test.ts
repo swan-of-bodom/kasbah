@@ -6,6 +6,7 @@ import { rawSelector as selector } from "../../src/abi/selector.ts";
 import { liveChannel } from "../../src/api/server.ts";
 import { bignum, kasbah, Status } from "../../src/index.ts";
 import type { EmittedEvent } from "../../src/rpc/methods.ts";
+import { testChain } from "../fixtures/chain.ts";
 import { header } from "../fixtures/header.ts";
 import { faultyProxy } from "./faulty.ts";
 
@@ -66,6 +67,7 @@ type Block = { number: number; hash: string; parent: string; events: EmittedEven
 
 /** A JSON-RPC Starknet node over HTTP: a chain that grows and forks, and a contract that upgrades its class. */
 function fakeNode() {
+  const chainId = testChain();
   let s = 3;
   const rand = (n: number) => Math.floor(((s = (s * 1103515245 + 12345) % 2 ** 31) / 2 ** 31) * n);
   let fork = 0;
@@ -96,7 +98,7 @@ function fakeNode() {
         data: ["0xb"],
         block_number: number,
         block_hash: hash,
-        transaction_hash: `0x${number}u`,
+        transaction_hash: `0x${number}f`,
         transaction_index: 9,
         event_index: 0,
       });
@@ -127,7 +129,7 @@ function fakeNode() {
       case "pathfinder_version":
         return "fake";
       case "starknet_chainId":
-        return "0x1";
+        return chainId;
       case "starknet_blockNumber":
         return blocks.length - 1;
       case "starknet_blockHashAndNumber":
@@ -214,7 +216,6 @@ afterAll(async () => {
 
 function app(s = schema, rpc = rpcUrl) {
   const a = kasbah({
-    cache: false,
     rpc,
     database: url!,
     schema: s,

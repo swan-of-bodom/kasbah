@@ -50,7 +50,7 @@ export type Run = {
   pool: pg.Pool;
   rpc: RpcClient;
   endpoint: Endpoint;
-  cache: EventCache | undefined;
+  cache: EventCache;
   store: Store;
   /** Shared by reference with the fetchers and `follow`: changed in place, never replaced. */
   sources: Sources;
@@ -132,7 +132,7 @@ export async function open(
       tip,
       rule: finality.rule,
     });
-  const cache = config.cache ? await EventCache.open(pool, chainId!, config.cache) : undefined;
+  const cache = await EventCache.open(pool, chainId, config.cache);
   const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n));
   const factories = await factoriesOf(config, rpc, sources, plan.classTo);
   await Promise.all(
@@ -199,16 +199,14 @@ export async function open(
   return run;
 }
 
-async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<string | undefined> {
-  if (config.network === undefined && config.cache === undefined && config.rpc.length === 1)
-    return undefined;
+async function chainOf(rpc: RpcClient, config: Resolved<StartBlock>): Promise<string> {
   const ids = await rpc.requestEach<string>("starknet_chainId", []);
   const names = [...new Set(ids.map((id) => networkName(id)))];
   if (names.length > 1)
     throw new ConfigError(
       `rpc: the endpoints are on different chains (${config.rpc.map((e, i) => `${new URL(e.url).host}: ${networkName(ids[i]!)}`).join(", ")})`,
     );
-  return ids[0];
+  return ids[0]!;
 }
 
 async function openSchema(
@@ -305,7 +303,7 @@ function reportEndpoint(
     endpoint: Endpoint;
     tip: number;
     rpc: RpcClient;
-    cache: EventCache | undefined;
+    cache: EventCache;
     sources: Sources;
     factories: Factory[];
     blockSources: BlockSource[];
@@ -319,8 +317,8 @@ function reportEndpoint(
     rpc: r.rpc.stats,
     rate: () => r.rpc.rate,
     endpoints: () => r.rpc.endpoints,
-    cache: r.cache?.stats,
-    reads: r.cache && (() => r.cache!.recentReads()),
+    cache: r.cache.stats,
+    reads: () => r.cache.recentReads(),
   });
   status.note({
     kind: "endpoint",

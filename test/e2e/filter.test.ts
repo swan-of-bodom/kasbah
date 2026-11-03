@@ -34,7 +34,6 @@ test.skipIf(url === undefined)(
   async () => {
     let at = 0;
     const app = kasbah({
-      cache: false,
       rpc,
       database: url,
       schema,

@@ -4,6 +4,7 @@ import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
 import type { Batch, PageStore } from "../sync/fetch.ts";
 import { type Block, blockOf } from "../types/block.ts";
+import { canonical } from "../types/felt.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
 import { heapLimit } from "../utils/memory.ts";
@@ -67,8 +68,16 @@ const ROWS_PER_INSERT = 1_000;
  */
 const WRITE_SHARE = 1 / 5;
 const MIN_WRITE_BYTES = 8 << 20;
-/** Events per batch read back for the handlers. */
+/** Most events per batch read back for the handlers. */
 const READ_LIMIT = 12_000;
+/**
+ * Share of the heap one read-back batch may take, decoded: about four are alive at once (the next one's rows, the one
+ * being decoded, the one prepared, the one handled), each with the rows its handlers write. Large events fill it
+ * before `READ_LIMIT` does: 30-felt events ran a 256 MB heap out of memory at 12k per batch.
+ */
+const READ_SHARE = 1 / 64;
+/** Events in the first read-back batch, before their size is known. */
+const READ_FIRST_EVENTS = 1_000;
 /**
  * Blocks the first read-back query spans; each next one spans what held about `READ_LIMIT` events. A query over all
  * that is written ran 7.7 s instead of milliseconds while the fetch thread was 600k blocks ahead (Ekubo, 2026-11-03):
@@ -86,7 +95,18 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE SCHEMA IF NOT EXISTS ${s}`,
   `CREATE TABLE IF NOT EXISTS ${s}.events (block integer NOT NULL, tx integer NOT NULL, idx integer NOT NULL, address bytea NOT NULL,
      selector bytea NOT NULL, block_hash bytea NOT NULL, tx_hash bytea NOT NULL, keys bytea NOT NULL, data bytea NOT NULL, PRIMARY KEY (block, tx, idx))`,
-  `CREATE TABLE IF NOT EXISTS ${s}.coverage (address bytea NOT NULL, selector bytea NOT NULL, ranges int8multirange NOT NULL, PRIMARY KEY (address, selector))`,
+  `CREATE TABLE IF NOT EXISTS ${s}.coverage (address bytea NOT NULL, selector bytea NOT NULL, filter bytea NOT NULL DEFAULT '',
+     ranges int8multirange NOT NULL, CONSTRAINT coverage_by_filter PRIMARY KEY (address, selector, filter))`,
+  // Caches from before key filters: coverage gains its filter, empty for what was there. Locked, as several indexers
+  // may open the same cache at once.
+  `DO $$ BEGIN
+     PERFORM pg_advisory_xact_lock(hashtext('${s}.coverage'));
+     IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'coverage_by_filter' AND conrelid = '${s}.coverage'::regclass) THEN
+       ALTER TABLE ${s}.coverage ADD COLUMN IF NOT EXISTS filter bytea NOT NULL DEFAULT '';
+       ALTER TABLE ${s}.coverage DROP CONSTRAINT IF EXISTS coverage_pkey;
+       ALTER TABLE ${s}.coverage ADD CONSTRAINT coverage_by_filter PRIMARY KEY (address, selector, filter);
+     END IF;
+   END $$`,
   `CREATE TABLE IF NOT EXISTS ${s}.calls (address bytea NOT NULL, entrypoint bytea NOT NULL, calldata bytea NOT NULL, block integer NOT NULL,
      result bytea NOT NULL, seq bigserial, PRIMARY KEY (address, entrypoint, calldata, block))`,
   `ALTER TABLE ${s}.calls ADD COLUMN IF NOT EXISTS seq bigserial`,
@@ -145,7 +165,33 @@ function eventBytes(e: EmittedEvent): number {
 /** Postgres' code for a duplicate key. */
 const UNIQUE_VIOLATION = "23505";
 
-type Pairs = { addresses: string[]; selectors: string[] };
+/** Addresses × selectors, and the key filter after the selector as `filterBytes` encodes it (empty for none). */
+type Pairs = { addresses: string[]; selectors: string[]; filter: Buffer };
+
+/**
+ * A key filter's identity in coverage: each position's values, canonical, deduplicated and sorted, with trailing
+ * wildcards dropped. Empty for none, so a filter of only wildcards is the unfiltered stream.
+ */
+export function filterBytes(filter: readonly (readonly string[])[]): Buffer {
+  const positions = filter.map((p) => [...new Set(p.map(canonical))].sort());
+  while (positions.length > 0 && positions.at(-1)!.length === 0) positions.pop();
+  return positions.length === 0 ? Buffer.alloc(0) : Buffer.from(JSON.stringify(positions));
+}
+
+/** Coverage that counts for `filter`: the unfiltered stream's, and the filter's own. */
+const countsFor = (filter: Buffer): Buffer[] =>
+  filter.length === 0 ? [filter] : [Buffer.alloc(0), filter];
+
+/** Whether an event's keys after the selector pass `filter` (`getEvents` semantics: each position one of, or any). */
+function keysPass(sets: Set<string>[], keys: readonly string[]): boolean {
+  for (let i = 0; i < sets.length; i++) {
+    const set = sets[i]!;
+    if (set.size === 0) continue;
+    const k = keys[i + 1];
+    if (k === undefined || !set.has(canonical(k))) return false;
+  }
+  return true;
+}
 type CachedTransaction = {
   hash: Buffer;
   block: number;
@@ -303,14 +349,20 @@ export class EventCache {
   }
 
   /** First block from `from` not covered for every (address, selector) pair. */
-  async coveredUntil(addresses: string[], selectors: string[], from: number): Promise<number> {
+  async coveredUntil(
+    addresses: string[],
+    selectors: string[],
+    from: number,
+    filter: string[][] = [],
+  ): Promise<number> {
     if (addresses.length === 0 || selectors.length === 0) return from;
-    const { a, s } = this.#pairs({ addresses, selectors });
+    const { a, s } = this.#pairs({ addresses, selectors, filter: filterBytes(filter) });
     const { rows } = await this.#pool.query<{ end: string }>(
       `SELECT min(coalesce(x.up, $1::int8))::text AS end FROM unnest($2::bytea[], $3::bytea[]) AS p(address, selector)
-       LEFT JOIN LATERAL (SELECT upper(r) AS up FROM ${this.#schema}.coverage c, unnest(c.ranges) r
-                          WHERE c.address = p.address AND c.selector = p.selector AND r @> $1::int8) x ON true`,
-      [from, a, s],
+       LEFT JOIN LATERAL (SELECT upper(r) AS up FROM unnest((SELECT range_agg(c.ranges) FROM ${this.#schema}.coverage c
+                            WHERE c.address = p.address AND c.selector = p.selector AND c.filter = ANY($4::bytea[]))) r
+                          WHERE r @> $1::int8) x ON true`,
+      [from, a, s, countsFor(filterBytes(filter))],
     );
     return Number(rows[0]!.end);
   }
@@ -321,14 +373,16 @@ export class EventCache {
     selectors: string[],
     from: number,
     to: number,
+    filter: string[][] = [],
   ): Promise<[number, number][]> {
-    const { a, s } = this.#pairs({ addresses, selectors });
+    const { a, s } = this.#pairs({ addresses, selectors, filter: filterBytes(filter) });
     const { rows } = await this.#pool.query<{ lo: string; hi: string }>(
       `SELECT lower(m)::text AS lo, (upper(m) - 1)::text AS hi FROM unnest(int8multirange(int8range($1, $2)) - (
-         SELECT CASE WHEN count(c.address) = count(*) THEN coalesce(range_intersect_agg(c.ranges), '{}') ELSE '{}' END
+         SELECT CASE WHEN count(x.ranges) = count(*) THEN coalesce(range_intersect_agg(x.ranges), '{}') ELSE '{}' END
          FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
-         LEFT JOIN ${this.#schema}.coverage c ON c.address = p.address AND c.selector = p.selector)) AS m ORDER BY 1`,
-      [from, to + 1, a, s],
+         LEFT JOIN LATERAL (SELECT range_agg(c.ranges) AS ranges FROM ${this.#schema}.coverage c
+           WHERE c.address = p.address AND c.selector = p.selector AND c.filter = ANY($5::bytea[])) x ON true)) AS m ORDER BY 1`,
+      [from, to + 1, a, s, countsFor(filterBytes(filter))],
     );
     return rows.map((r) => [Number(r.lo), Number(r.hi)]);
   }
@@ -345,9 +399,10 @@ export class EventCache {
   }
 
   /**
-   * Cached events of `addresses` × `selectors` in `[from, to]`, in chain order, at most about `limit` per batch:
-   * paged by position, and a batch never ends inside a block. `cached`: counted as read from the cache, not
-   * fetched by this run.
+   * Cached events of `addresses` × `selectors` in `[from, to]`, in chain order, at most about `limit` per batch
+   * and fewer when large events pass `READ_SHARE` of the heap: paged by position, and a batch never ends inside a block. `cached`: counted as read from the cache, not
+   * fetched by this run. `filter`: the keys after the selector, as `getEvents` takes them; a range the unfiltered
+   * stream covers holds the events it drops too.
    */
   async *read(
     addresses: string[],
@@ -356,9 +411,12 @@ export class EventCache {
     to: number,
     limit = READ_LIMIT,
     cached = true,
+    filter: string[][] = [],
   ): AsyncGenerator<Batch> {
     const a = addresses.map(feltBytes);
     const s = selectors.map(feltBytes);
+    const sets =
+      filterBytes(filter).length === 0 ? [] : filter.map((p) => new Set(p.map(canonical)));
     type Row = {
       block: number;
       tx: number;
@@ -379,11 +437,14 @@ export class EventCache {
         )
       ).rows;
     let span = READ_FIRST_BLOCKS;
+    const budget = heapLimit() * READ_SHARE;
+    let most = Math.min(limit, READ_FIRST_EVENTS);
     const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
       const hi = Math.min(to, lo + span - 1);
-      const rows = await this.#timed(query(lo, hi, limit));
-      if (rows.length < limit) {
-        span = Math.ceil(span * Math.min(READ_GROWTH, limit / Math.max(1, rows.length)));
+      const n = most;
+      const rows = await this.#timed(query(lo, hi, n));
+      if (rows.length < n) {
+        span = Math.ceil(span * Math.min(READ_GROWTH, n / Math.max(1, rows.length)));
         return { rows, through: hi };
       }
       const last = rows.at(-1)!.block;
@@ -399,23 +460,30 @@ export class EventCache {
       if (through < to) next = page(through + 1);
       // A batch took up to ~170 ms to decode (Ekubo): a turn for the event loop meanwhile, as handlers give one.
       const events: EmittedEvent[] = [];
+      let bytes = 0;
       let since = performance.now();
       for (const r of rows) {
-        events.push({
+        const keys = unpackHex(r.keys);
+        if (sets.length > 0 && !keysPass(sets, keys)) continue;
+        const e: EmittedEvent = {
           from_address: feltFromMinimalBytes(r.address),
-          keys: unpackHex(r.keys),
+          keys,
           data: unpackHex(r.data),
           block_number: r.block,
           block_hash: feltFromMinimalBytes(r.block_hash),
           transaction_hash: feltFromMinimalBytes(r.tx_hash),
           transaction_index: r.tx,
           event_index: r.idx,
-        });
+        };
+        bytes += eventBytes(e);
+        events.push(e);
         if (performance.now() - since > YIELD_MS) {
           await yieldToEventLoop();
           since = performance.now();
         }
       }
+      if (events.length > 0)
+        most = Math.max(1, Math.min(limit, Math.floor(budget / (bytes / events.length))));
       if (cached) this.stats.cachedEvents += events.length;
       yield { events, through };
       if (through >= to) return;
@@ -450,8 +518,12 @@ export class EventCache {
    * transaction, so coverage never claims a block whose events aren't written. Pages are written in the order
    * they're given, together while the write before them runs, so a write grows with the backlog.
    */
-  writer(addresses: string[], selectors: string[]): PageStore {
-    const pairs = { addresses: [...addresses], selectors: [...selectors] };
+  writer(addresses: string[], selectors: string[], filter: string[][] = []): PageStore {
+    const pairs = {
+      addresses: [...addresses],
+      selectors: [...selectors],
+      filter: filterBytes(filter),
+    };
     return {
       write: (events, from, to) =>
         new Promise<void>((written, failed) => {
@@ -544,11 +616,11 @@ export class EventCache {
     for (const [pairs, { lo, hi }] of byPairs) {
       const { a, s } = this.#pairs(pairs);
       await tx.query(
-        `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
-         SELECT address, selector, (SELECT range_agg(int8range(lo, hi)) FROM unnest($3::int8[], $4::int8[]) AS r(lo, hi))
+        `INSERT INTO ${this.#schema}.coverage (address, selector, filter, ranges)
+         SELECT address, selector, $5, (SELECT range_agg(int8range(lo, hi)) FROM unnest($3::int8[], $4::int8[]) AS r(lo, hi))
          FROM unnest($1::bytea[], $2::bytea[]) AS p(address, selector)
-         ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
-        [a, s, lo, hi],
+         ON CONFLICT (address, selector, filter) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
+        [a, s, lo, hi, pairs.filter],
       );
     }
   }

@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { selector } from "../../src/abi/selector.ts";
+import { testChain } from "./chain.ts";
 import { header } from "./header.ts";
 
 /** `Moved { #[key] who, amount }` and `Pinged { n }`: who is 0x1, 0x2, 0x3 in turn. */
@@ -31,7 +32,7 @@ export const keyedAbi = [
 ] as const;
 
 /** A node with, in every block, a `Moved` then a `Pinged`; `getEvents` honors positional keys and is recorded. */
-export function keyedNode(blocks: number) {
+export function keyedNode(blocks: number, chainId = testChain()) {
   const hash = (n: number) => `0x${(n + 1).toString(16)}bb`;
   const event = (n: number, i: number, keys: string[], data: string[]) => ({
     from_address: "0xd",
@@ -66,7 +67,7 @@ export function keyedNode(blocks: number) {
           case "starknet_specVersion":
             return ok("0.10.4");
           case "starknet_chainId":
-            return ok("0xc0c0");
+            return ok(chainId);
           case "pathfinder_version":
             return ok("fake");
           case "starknet_blockNumber":

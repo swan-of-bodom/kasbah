@@ -7,8 +7,11 @@ import { rawSelector as selector } from "../../src/abi/selector.ts";
 import { bignum, kasbah, Status } from "../../src/index.ts";
 import type { EmittedEvent } from "../../src/rpc/methods.ts";
 import { felt } from "../../src/types/felt.ts";
+import { testChain } from "../fixtures/chain.ts";
 import { header } from "../fixtures/header.ts";
 import { invokeReceipt, invokeV3 } from "../fixtures/transaction.ts";
+
+const CHAIN = testChain();
 
 const url = process.env.DATABASE_URL;
 const FACTORY = "0xfac";
@@ -162,7 +165,7 @@ function fakeNode() {
       case "pathfinder_version":
         return "fake";
       case "starknet_chainId":
-        return "0x46414b45";
+        return CHAIN;
       case "starknet_blockNumber":
         return blocks.length - 1;
       case "starknet_blockHashAndNumber":
@@ -310,16 +313,12 @@ afterAll(async () => {
   if (url === undefined) return;
   const p = new pg.Pool({ connectionString: url, max: 1 });
   await p.query(
-    `DROP SCHEMA IF EXISTS kasbah_test_features CASCADE; DROP SCHEMA IF EXISTS kasbah_test_cached CASCADE; DROP SCHEMA IF EXISTS kasbah_cache_0x46414b45 CASCADE`,
+    `DROP SCHEMA IF EXISTS kasbah_test_features CASCADE; DROP SCHEMA IF EXISTS kasbah_test_cached CASCADE;`,
   );
   await p.end();
 });
 
-function app(
-  schema: string,
-  cache = false,
-  extra: { ws?: string; pollMs?: number; rpc?: string } = {},
-) {
+function app(schema: string, extra: { ws?: string; pollMs?: number; rpc?: string } = {}) {
   const a = kasbah({
     rpc: rpcUrl,
     database: url!,
@@ -337,7 +336,6 @@ function app(
     reorgWindow: 16,
     pollMs: 5,
     concurrency: 4,
-    cache,
     ...extra,
   });
   a.on("Pool:Counted", async ({ event, context }) => {
@@ -554,9 +552,7 @@ test.skipIf(url === undefined)("a run that fails ends in the failed phase, not d
   await new Promise<void>((r) => refusing.listen(0, "127.0.0.1", r));
   const status = new Status();
   const rpc = `http://127.0.0.1:${(refusing.address() as { port: number }).port}`;
-  await expect(
-    app("kasbah_test_failed", false, { rpc }).run({ reset: true, status }),
-  ).rejects.toThrow();
+  await expect(app("kasbah_test_failed", { rpc }).run({ reset: true, status })).rejects.toThrow();
   refusing.close();
   expect(status.phase).toBe("failed");
   expect(status.error).toMatch(/refused/);
@@ -570,7 +566,7 @@ test.skipIf(url === undefined)(
   async () => {
     const schema = "kasbah_test_cached";
     const to = node.blocks.length - 20;
-    await app(schema, true).run({ reset: true, to, status: new Status() });
+    await app(schema).run({ reset: true, to, status: new Status() });
     expect(await actual(schema)).toEqual(expected(to));
 
     const before = node.calls.get("starknet_getEvents") ?? 0;
@@ -582,7 +578,7 @@ test.skipIf(url === undefined)(
     const logs: string[] = [];
     const status = new Status();
     status.subscribe((n) => logs.push(n.text));
-    await app(schema, true).run({ reset: true, to, status });
+    await app(schema).run({ reset: true, to, status });
     expect(await actual(schema)).toEqual(expected(to));
     expect(node.calls.get("starknet_getEvents")).toBe(before);
     expect(node.calls.get("starknet_getBlockWithTxHashes")).toBe(headersBefore);
@@ -594,7 +590,7 @@ test.skipIf(url === undefined)(
     expect(logs.some((l) => / 0 fetched\)/.test(l))).toBe(true);
 
     const final = node.blocks.length - 1 - 16;
-    await app(schema, true).run({ to: final, status: new Status() });
+    await app(schema).run({ to: final, status: new Status() });
     expect(await actual(schema)).toEqual(expected(final));
   },
   120_000,
@@ -625,7 +621,7 @@ test.skipIf(url === undefined)(
     const logs: string[] = [];
     const status = new Status();
     status.subscribe((n) => logs.push(n.text));
-    const run = app(schema, false, {
+    const run = app(schema, {
       ws: `ws://127.0.0.1:${(wss.address() as { port: number }).port}`,
       pollMs: 60_000,
     }).run({ signal: stop.signal, status });

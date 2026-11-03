@@ -65,8 +65,9 @@ const order = (a: EmittedEvent, b: EmittedEvent) =>
   a.transaction_index - b.transaction_index ||
   a.event_index - b.event_index;
 
-async function pages(
-  o: FollowOptions,
+/** Every event of `address` × `keys` in `[from, to]`, page after page: for the few blocks of a live tick. */
+export async function pages(
+  o: { rpc: RpcClient; chunkSize: number },
   address: string | string[],
   keys: string[][] | undefined,
   from: number,

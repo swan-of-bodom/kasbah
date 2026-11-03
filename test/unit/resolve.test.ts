@@ -1,5 +1,6 @@
 import { expect, test } from "vitest";
 import type { Config } from "../../src/config/app.ts";
+import { ConfigError } from "../../src/config/errors.ts";
 import { checkNetwork, NETWORKS, networkName } from "../../src/config/network.ts";
 import { DEFAULTS, resolveConfig, schemaName } from "../../src/config/resolve.ts";
 
@@ -27,7 +28,10 @@ test("resolveConfig: `ws: true` is the RPC URL's socket, and `cache: true` keeps
   expect(r.ws).toBe("wss://node/rpc");
   expect(r.cache).toEqual({ maxCalls: DEFAULTS.maxCalls });
   expect(resolveConfig({ ...base, cache: { maxCalls: 5 } }).cache).toEqual({ maxCalls: 5 });
-  expect(resolveConfig({ ...base, cache: false }).cache).toBeUndefined();
+});
+
+test("resolveConfig: `cache: false` is refused, as events always go through the cache", () => {
+  expect(() => resolveConfig({ ...base, cache: false as never })).toThrow(ConfigError);
 });
 
 test("resolveConfig: the environment wins over the config, so one config deploys anywhere", () => {

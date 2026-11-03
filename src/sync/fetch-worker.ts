@@ -60,7 +60,7 @@ try {
     chunkSize: job.chunkSize,
     concurrency: job.concurrency,
     ranges: job.ranges,
-    store: cache.writer(job.addresses, job.keys[0]!),
+    store: cache.writer(job.addresses, job.keys[0]!, job.keys.slice(1)),
     gauges: (read) => (gauges = read),
   });
   for await (const { through } of stream) post({ kind: "through", through });

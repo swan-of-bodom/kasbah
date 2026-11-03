@@ -379,3 +379,74 @@ test.skipIf(url === undefined)(
     expect(found.get(8)!.hash).toBe(felt("0xb8"));
   },
 );
+
+test.skipIf(url === undefined)(
+  "a key filter's coverage is its own, the unfiltered stream's counts for every filter, and reads keep only matching keys",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    const event = (block: number, who: string): EmittedEvent => ({
+      from_address: "0xa",
+      keys: ["0x51", who],
+      data: ["0x1"],
+      block_number: block,
+      block_hash: `0x${block.toString(16)}1`,
+      transaction_hash: `0x${block.toString(16)}${who.slice(2)}`,
+      transaction_index: Number(who),
+      event_index: 0,
+    });
+    const filtered = Array.from({ length: 100 }, (_, b) => event(b, "0x1"));
+    await cache.writer(["0xa"], ["0x51"], [["0x1"]]).write(filtered, 0, 99);
+    const all = Array.from({ length: 100 }, (_, i) => [
+      event(100 + i, "0x1"),
+      event(100 + i, "0x2"),
+    ]).flat();
+    await cache.writer(["0xa"], ["0x51"]).write(all, 100, 199);
+
+    expect(await cache.missing(["0xa"], ["0x51"], 0, 199)).toEqual([[0, 99]]);
+    expect(await cache.missing(["0xa"], ["0x51"], 0, 199, [["0x1"]])).toEqual([]);
+    // The same filter written another way: padded felts, a trailing wildcard.
+    expect(await cache.missing(["0xa"], ["0x51"], 0, 199, [["0x01"], []])).toEqual([]);
+    expect(await cache.missing(["0xa"], ["0x51"], 0, 199, [["0x2"]])).toEqual([[0, 99]]);
+    expect(await cache.coveredUntil(["0xa"], ["0x51"], 0, [["0x1"]])).toBe(200);
+
+    const read = async (from: number, to: number, filter: string[][]) => {
+      const out: string[] = [];
+      for await (const b of cache.read(["0xa"], ["0x51"], from, to, undefined, true, filter))
+        for (const e of b.events) out.push(`${e.block_number}:${e.keys[1]}`);
+      return out;
+    };
+    expect(await read(100, 199, [["0x2"]])).toEqual(
+      all.filter((_, i) => i % 2 === 1).map((e) => `${e.block_number}:0x2`),
+    );
+    expect(await read(0, 199, [["0x1"]])).toEqual(
+      [...filtered, ...all.filter((_, i) => i % 2 === 0)].map((e) => `${e.block_number}:0x1`),
+    );
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a cache from before key filters keeps its coverage, as the unfiltered stream's",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    const chain = `${CHAIN}0d`;
+    const s = `kasbah_cache_${chain}`;
+    await pool.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+    await pool.query(`CREATE SCHEMA ${s}`);
+    await pool.query(
+      `CREATE TABLE ${s}.coverage (address bytea NOT NULL, selector bytea NOT NULL, ranges int8multirange NOT NULL, PRIMARY KEY (address, selector))`,
+    );
+    await pool.query(`INSERT INTO ${s}.coverage VALUES ('\\x0a', '\\x51', '{[0,50)}')`);
+    try {
+      await EventCache.open(pool, chain);
+      const cache = await EventCache.open(pool, chain);
+      expect(await cache.missing(["0xa"], ["0x51"], 0, 99)).toEqual([[50, 99]]);
+      expect(await cache.missing(["0xa"], ["0x51"], 0, 99, [["0x1"]])).toEqual([[50, 99]]);
+      await cache.writer(["0xa"], ["0x51"], [["0x1"]]).write([], 50, 99);
+      expect(await cache.missing(["0xa"], ["0x51"], 0, 99, [["0x1"]])).toEqual([]);
+    } finally {
+      await pool.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+    }
+  },
+);

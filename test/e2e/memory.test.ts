@@ -6,7 +6,10 @@ import { pathToFileURL } from "node:url";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { selector } from "../../src/abi/selector.ts";
+import { testChain } from "../fixtures/chain.ts";
 import { header } from "../fixtures/header.ts";
+
+const CHAIN = testChain();
 
 const url = process.env.DATABASE_URL;
 const schema = "kasbah_test_memory";
@@ -58,7 +61,7 @@ const server = createServer((req, res) => {
         case "starknet_specVersion":
           return ok("0.10.4");
         case "starknet_chainId":
-          return ok("0xbeef");
+          return ok(CHAIN);
         case "pathfinder_version":
           return ok("fake");
         case "starknet_blockNumber":
@@ -119,7 +122,7 @@ beforeAll(async () => {
 import { kasbah } from ${JSON.stringify(index)};
 const big = pgTable("big", { id: text().primaryKey(), block: integer().notNull(), values: jsonb().notNull() });
 const abi = ${JSON.stringify(abi)} as const;
-const app = kasbah({ cache: false, rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
+const app = kasbah({ rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)},
   contracts: { M: { abi, address: "0xb", startBlock: 0 } }, tables: { big }, reorgWindow: 4 });
 app.on("M:Big", async ({ event, context }) => {
   await context.db.insert(big).values({ id: event.transaction.hash, block: event.block.number, values: Object.values(event.args).map(String) });
@@ -139,7 +142,7 @@ afterAll(async () => {
 });
 
 test.skipIf(url === undefined)(
-  `a backfill of large events fits a ${HEAP_MB} MB heap: the fetch buffer and the row cache follow the heap`,
+  `a backfill of large events fits a ${HEAP_MB} MB heap: read-back batches and the row cache follow the heap`,
   async () => {
     const to = BLOCKS - 5;
     const out: string[] = [];

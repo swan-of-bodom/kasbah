@@ -1,6 +1,5 @@
 import type { RpcClient } from "../rpc/client.ts";
 import { type EmittedEvent, getEvents } from "../rpc/methods.ts";
-import { approxBytes, heapLimit } from "../utils/memory.ts";
 
 export type EventStreamOptions = {
   rpc: RpcClient;
@@ -11,8 +10,8 @@ export type EventStreamOptions = {
   to: number;
   /** The parts of the range to fetch, inclusive, in order; the rest is in `store` already. Default: all of it. */
   ranges?: [number, number][];
-  /** Writes pages here instead of holding them: the stream then yields how far `store` has every block, no events. */
-  store?: PageStore;
+  /** Where pages are written: the stream yields how far it has every block, no events. */
+  store: PageStore;
   chunkSize: number;
   /** Windows paginating at once. */
   concurrency: number;
@@ -22,27 +21,19 @@ export type EventStreamOptions = {
   minSplit?: number;
   /** Most windows at once. Default: `MAX_WINDOWS_PER_WORKER` per worker. */
   maxWindows?: number;
-  maxBufferedBytes?: number;
-  budgetShare?: number;
   /** Receives a reader of the stream's state, for `--debug`. */
   gauges?: (read: () => FetchGauges) => void;
 };
 
 /** Smallest range, in blocks, worth splitting off a window for an idle worker. */
 const MIN_SPLIT = 64;
-const MIN_BUFFERED_BYTES = 8 * 2 ** 20;
 /** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
 const DENSITY_DECAY = 0.9;
-/** Past this many times `maxBuffered` held, only the front fetches, so memory stays under 3× (DESIGN.md §3). */
-const FRONT_ONLY_PAST = 2;
-const BUFFER_SHARE = 1 / 5 / (FRONT_ONLY_PAST + 1);
-/** Windows with this share of the budget held before them fetch only while the buffer is under it: the rest stays for the front. */
-const FRONT_RESERVE = 0.5;
 /** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
 const MAX_WINDOWS_PER_WORKER = 8;
 /**
- * With a store, pages per worker fetched past the front window before the windows further on pause: the handlers
- * read only up to the front, so idle workers then split it instead. On disk, not in memory. Without it, every worker
+ * Pages per worker fetched past the front window before the windows further on pause: the handlers read only up to
+ * the front, so idle workers then split it instead. On disk, not in memory. Without it, every worker
  * stayed far ahead and the front advanced one page at a time (Ekubo, 2026-11-03: 13.8M fetched, 2.1M handled).
  */
 const AHEAD_PAGES_PER_WORKER = 8;
@@ -64,14 +55,14 @@ export type PageStore = {
 };
 
 /**
- * Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read.
- * With a store, buffered means fetched and not yet written, and `written` is the block it has everything through.
+ * Windows: running (a page in flight), paused (held back by the ahead limit), done but not yet written. Buffered
+ * means fetched and not yet written, and `written` is the block the store has everything through.
  */
 export type FetchGauges = {
   bufferedBytes: number;
   maxBufferedBytes: number;
   bufferedEvents: number;
-  written?: number;
+  written: number;
   windows: number;
   running: number;
   paused: number;
@@ -85,13 +76,7 @@ export type FetchGauges = {
 /** Events in chain order. Every block up to `through` is complete. */
 export type Batch = { events: EmittedEvent[]; through: number };
 
-export type FetchStats = {
-  events: number;
-  pages: number;
-  windows: number;
-  splits: number;
-  peakBufferedBytes: number;
-};
+export type FetchStats = { events: number; pages: number; windows: number; splits: number };
 
 type Window = {
   from: number;
@@ -99,11 +84,13 @@ type Window = {
   to: number;
   until: number;
   fetchedUntil: number;
-  /** With a store: every block before this one is written. */
+  /** Every block before this one is written. */
   written: number;
   token: string | undefined;
+  /** Fetched events of a block not yet complete, written with the page that completes it. */
   events: EmittedEvent[];
-  bytes: number;
+  /** Events fetched in all: how far ahead of the front this window is. */
+  fetched: number;
   state: "idle" | "running" | "done";
 };
 
@@ -113,14 +100,14 @@ const tokenBlock = (token: string): number | undefined => {
 };
 
 /**
- * Every matching event in a block range, in order, with bounded memory. One window starts on the whole range and
- * paginates with its token. When a worker is idle, a window cuts its range just ahead of where it is, about
- * `windowEvents` in, keeps the front part and its token, and hands the rest to a new window. Work stays near the
- * front, so the consumer, reading the lowest window as its pages arrive, rarely waits.
+ * Every matching event in a block range, written to `store`, yielding how far it has every block. One window starts
+ * on each range and paginates with its token. When a worker is idle, a window cuts its range just ahead of where it
+ * is, about `windowEvents` in, keeps the front part and its token, and hands the rest to a new window. Work stays
+ * near the front, so the reader, which reads only up to it, rarely waits.
  */
 export function eventStream(
   o: EventStreamOptions,
-  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBufferedBytes: 0 },
+  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0 },
 ): AsyncGenerator<Batch> {
   return new EventFetcher(o, stats).stream();
 }
@@ -131,15 +118,9 @@ class EventFetcher {
   readonly #minSplit: number;
   readonly #maxWindows: number;
   readonly #windowEvents: number;
-  readonly #maxBuffered: number;
-  readonly #perWindow: number;
   readonly #maxAhead: number;
   readonly #windows: Window[];
   readonly #workers: Promise<void>[];
-  #buffered = 0;
-  /** Bytes reserved for pages being downloaded, at the recent page size: the ceiling counts them too. */
-  #inFlight = 0;
-  #pageBytes = 0;
   #waiting = 0;
   /** Worker milliseconds so far: in `getEvents`, waiting for the store's room, idle. */
   #spent = { calls: 0, room: 0, idle: 0 };
@@ -157,10 +138,6 @@ class EventFetcher {
     this.#minSplit = o.minSplit ?? MIN_SPLIT;
     this.#maxWindows = o.maxWindows ?? MAX_WINDOWS_PER_WORKER * o.concurrency;
     this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
-    this.#maxBuffered =
-      o.maxBufferedBytes ??
-      Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * BUFFER_SHARE * (o.budgetShare ?? 1)));
-    this.#perWindow = Math.floor(this.#maxBuffered / o.concurrency);
     this.#maxAhead = AHEAD_PAGES_PER_WORKER * o.concurrency * o.chunkSize;
     this.#windows = (o.ranges ?? [[o.from, o.to]]).map(([from, to]) => ({
       from,
@@ -170,7 +147,7 @@ class EventFetcher {
       written: from,
       token: undefined,
       events: [],
-      bytes: 0,
+      fetched: 0,
       state: "idle",
     }));
     stats.windows = this.#windows.length;
@@ -178,12 +155,8 @@ class EventFetcher {
     o.gauges?.(() => this.#gauges());
   }
 
-  stream(): AsyncGenerator<Batch> {
-    return this.#o.store === undefined ? this.#events() : this.#frontier();
-  }
-
   /** How far the store has every block, each time it moves: no events. */
-  async *#frontier(): AsyncGenerator<Batch> {
+  async *stream(): AsyncGenerator<Batch> {
     const windows = this.#windows;
     let yielded = this.#o.from - 1;
     try {
@@ -210,45 +183,6 @@ class EventFetcher {
     }
   }
 
-  async *#events(): AsyncGenerator<Batch> {
-    const windows = this.#windows;
-    try {
-      while (windows.length > 0) {
-        if (this.#failure !== undefined) throw this.#failure.error;
-        const w = windows[0]!;
-        let events: EmittedEvent[];
-        let through: number;
-        let bytes: number;
-        if (w.state === "done") {
-          events = w.events;
-          bytes = w.bytes;
-          windows.shift();
-          through = w.until - 1;
-        } else {
-          // The last fetched block of a running window may be partial: hold its events back.
-          let n = w.events.length;
-          while (n > 0 && w.events[n - 1]!.block_number! >= w.fetchedUntil) n--;
-          if (n === 0) {
-            await this.#wait();
-            continue;
-          }
-          events = w.events.splice(0, n);
-          bytes = 0;
-          for (const e of events) bytes += approxBytes(e);
-          w.bytes -= bytes;
-          through = w.fetchedUntil - 1;
-        }
-        this.#buffered -= bytes;
-        this.#notify();
-        yield { events, through };
-      }
-      await Promise.all(this.#workers);
-    } finally {
-      this.#stopped = true;
-      this.#notify();
-    }
-  }
-
   #notify() {
     const w = this.#wakers;
     this.#wakers = [];
@@ -260,29 +194,17 @@ class EventFetcher {
   }
 
   #mayFetch(w: Window, held = this.#heldThrough(w)): boolean {
-    const front = w === this.#windows[0];
-    if (this.#o.store !== undefined) return this.#roomAt(held, front);
-    if (!front && w.bytes >= this.#perWindow) return false;
-    return this.#roomAt(held, front);
+    return this.#roomAt(held, w === this.#windows[0]);
   }
 
-  /**
-   * Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. With a store,
-   * `held` is events fetched past the front window, and only how far ahead a window is counts.
-   */
+  /** Whether a window may fetch with `held` events fetched past the front window, up to and including it. */
   #roomAt(held: number, front: boolean): boolean {
-    if (this.#o.store !== undefined) return front || held < this.#maxAhead;
-    const used = this.#buffered + this.#inFlight;
-    const reserve = FRONT_RESERVE * this.#maxBuffered;
-    if (!front && held >= reserve) return used < reserve;
-    if (used < this.#maxBuffered) return true;
-    if (!front && used >= FRONT_ONLY_PAST * this.#maxBuffered) return false;
-    return held < this.#maxBuffered;
+    return front || held < this.#maxAhead;
   }
 
-  /** What a window holds toward the budget: with a store, the front's events are the ones being read. */
+  /** What a window counts toward the ahead limit: the front's events are the ones being read. */
   #held(w: Window): number {
-    return this.#o.store !== undefined && w === this.#windows[0] ? 0 : w.bytes;
+    return w === this.#windows[0] ? 0 : w.fetched;
   }
 
   #heldThrough(w: Window): number {
@@ -325,7 +247,7 @@ class EventFetcher {
       written: cut,
       token: undefined,
       events: [],
-      bytes: 0,
+      fetched: 0,
       state: "idle",
     };
     this.#windows.splice(this.#windows.indexOf(w) + 1, 0, rest);
@@ -367,42 +289,30 @@ class EventFetcher {
       keys: o.keys,
     };
     for (;;) {
-      if (o.store !== undefined) {
-        const t = performance.now();
-        await o.store.room();
-        this.#spent.room += performance.now() - t;
-      }
+      const waited = performance.now();
+      await o.store.room();
+      this.#spent.room += performance.now() - waited;
       if (this.#stopped) return;
       if (!this.#mayFetch(w)) {
         w.state = "idle";
         return;
       }
-      const reserved = this.#pageBytes;
-      this.#inFlight += reserved;
       let page: Awaited<ReturnType<typeof getEvents>>;
       const t = performance.now();
       try {
         page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
       } finally {
-        this.#inFlight -= reserved;
         this.#spent.calls += performance.now() - t;
       }
       stats.pages++;
       let kept = 0;
-      let bytes = 0;
       for (const e of page.events) {
         if (e.block_number! >= w.until) break;
         w.events.push(e);
-        if (o.store === undefined) bytes += approxBytes(e);
         kept++;
       }
-      // With a store, a window holds events counted, not bytes: they're written, not kept.
-      w.bytes += o.store === undefined ? bytes : kept;
-      this.#buffered += bytes;
-      this.#pageBytes =
-        stats.pages === 1 ? bytes : this.#pageBytes * DENSITY_DECAY + bytes * (1 - DENSITY_DECAY);
+      w.fetched += kept;
       stats.events += kept;
-      if (this.#buffered > stats.peakBufferedBytes) stats.peakBufferedBytes = this.#buffered;
       const token = page.continuation_token;
       const at =
         token === undefined
@@ -410,7 +320,7 @@ class EventFetcher {
           : Math.min(w.until, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
       this.#recentEvents = this.#recentEvents * DENSITY_DECAY + kept;
       this.#recentBlocks = this.#recentBlocks * DENSITY_DECAY + Math.max(0, at - w.fetchedUntil);
-      if (o.store !== undefined) this.#write(o.store, w, Math.min(at, w.until));
+      this.#write(o.store, w, Math.min(at, w.until));
       if (at >= w.until) {
         w.fetchedUntil = w.until;
         w.state = "done";
@@ -469,12 +379,12 @@ class EventFetcher {
 
   #gauges(): FetchGauges {
     const count = (state: Window["state"]) => this.#windows.filter((w) => w.state === state).length;
-    const held = this.#o.store?.held();
+    const held = this.#o.store.held();
     return {
-      bufferedBytes: held?.bytes ?? this.#buffered,
-      maxBufferedBytes: held?.max ?? this.#maxBuffered,
-      bufferedEvents: held?.events ?? this.#windows.reduce((n, w) => n + w.events.length, 0),
-      ...(held && { written: (this.#windows[0]?.written ?? this.#o.to + 1) - 1 }),
+      bufferedBytes: held.bytes,
+      maxBufferedBytes: held.max,
+      bufferedEvents: held.events,
+      written: (this.#windows[0]?.written ?? this.#o.to + 1) - 1,
       windows: this.#windows.length,
       running: count("running"),
       paused: count("idle"),
@@ -499,13 +409,4 @@ class EventFetcher {
     this.#spentMark = { at: now, ...this.#spent };
     return this.#workerTime;
   }
-}
-
-/** Fetches a whole range, handing each ordered batch to `onEvents`. */
-export async function fetchEvents(
-  o: EventStreamOptions & { onEvents: (events: EmittedEvent[], through: number) => void },
-): Promise<FetchStats> {
-  const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, peakBufferedBytes: 0 };
-  for await (const batch of eventStream(o, stats)) o.onEvents(batch.events, batch.through);
-  return stats;
 }

@@ -49,8 +49,7 @@ export type Resolved<S extends StartBlock = number> = Omit<
   pollMs: number;
   /** New heads' WebSocket URL (for `ws: true`, the RPC URL's), or none: poll only. */
   ws: string | undefined;
-  /** None when the cache is off. */
-  cache: { maxCalls: number } | undefined;
+  cache: { maxCalls: number };
   blocks: Record<string, BlockConfig>;
 };
 
@@ -88,14 +87,7 @@ export function resolveConfig(
     reorgWindow: config.reorgWindow ?? DEFAULTS.reorgWindow,
     pollMs: config.pollMs ?? DEFAULTS.pollMs,
     ws: config.ws === true ? rpc[0]!.url.replace(/^http/, "ws") : config.ws,
-    cache:
-      config.cache !== false
-        ? {
-            maxCalls:
-              (typeof config.cache === "object" ? config.cache.maxCalls : undefined) ??
-              DEFAULTS.maxCalls,
-          }
-        : undefined,
+    cache: { maxCalls: cacheOf(config.cache).maxCalls ?? DEFAULTS.maxCalls },
     blocks: config.blocks ?? {},
   };
 }
@@ -109,4 +101,13 @@ export function schemaName(name: string): string {
     .replace(/^_+|_+$/g, "");
   if (s === "") return DEFAULTS.schema;
   return (/^[0-9]/.test(s) ? `_${s}` : s).slice(0, 63);
+}
+
+function cacheOf(cache: unknown): { maxCalls?: number } {
+  if (cache === undefined || cache === true) return {};
+  if (cache === false)
+    throw new ConfigError(
+      "cache: false is no longer an option: events go through the event cache. Remove it (kasbah clean empties the cache)",
+    );
+  return cache as { maxCalls?: number };
 }

@@ -4,6 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum, kasbah } from "../../src/index.ts";
 import { Status } from "../../src/indexer/status.ts";
+import { testChain } from "../fixtures/chain.ts";
 import { counterAbi, counterNode } from "../fixtures/counter.ts";
 
 const url = process.env.DATABASE_URL;
@@ -15,7 +16,8 @@ const node = counterNode(BLOCKS, { deployed: DEPLOYED });
 const L1 = 20;
 const settled = counterNode(BLOCKS, { l1: L1 });
 /** Two addresses taking turns, behind a proxy recording each `getEvents` filter. */
-const pair = counterNode(BLOCKS, { addresses: ["0xc", "0xe"] });
+const pairChain = testChain();
+const pair = counterNode(BLOCKS, { addresses: ["0xc", "0xe"], chainId: pairChain });
 const asked: {
   address?: string[];
   from_block: { block_number: number };
@@ -60,7 +62,6 @@ const app = (
   l1 = false,
 ) => {
   const a = kasbah({
-    cache: false,
     rpc: at,
     database: url,
     schema,
@@ -221,9 +222,12 @@ test.skipIf(url === undefined)(
   "start blocks: a contract starting later isn't fetched before its start",
   async () => {
     asked.length = 0;
+    // What a first sync fetches: the tests before this one cached the pair's early blocks.
+    const db = new pg.Pool({ connectionString: url, max: 1 });
+    await db.query(`DROP SCHEMA IF EXISTS kasbah_cache_${pairChain} CASCADE`);
+    await db.end();
     const START = 20;
     const a = kasbah({
-      cache: false,
       rpc: proxied,
       database: url,
       schema,

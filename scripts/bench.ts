@@ -5,9 +5,10 @@ import { parseArgs } from "node:util";
 import { classHistory, createHistoricalDecoder } from "../src/abi/history.ts";
 import { type Abi, createDecoder } from "../src/index.ts";
 import { RpcClient } from "../src/rpc/client.ts";
+import type { EmittedEvent } from "../src/rpc/methods.ts";
 import { blockNumber, getEvents, getHeaders } from "../src/rpc/methods.ts";
 import { probe } from "../src/rpc/probe.ts";
-import { fetchEvents } from "../src/sync/fetch.ts";
+import { eventStream, type FetchStats } from "../src/sync/fetch.ts";
 import { endpoints } from "./endpoints.ts";
 
 const EKUBO_CORE = "0x00000005dd3d2f4429af886cd1a3b08289dbcea99a294197e9eb43b0e0325b4b";
@@ -20,7 +21,6 @@ const { values: a } = parseArgs({
     to: { type: "string" },
     concurrency: { type: "string", default: "32" },
     window: { type: "string" },
-    buffer: { type: "string" },
     sequential: { type: "boolean", default: false },
     decode: { type: "boolean", default: true },
     headers: { type: "string", default: "0" },
@@ -87,39 +87,50 @@ let decodeErrors = 0;
 const blocks = new Set<number>();
 const counts: Record<string, number> = {};
 
+/** Counts and decodes each page as it arrives: pages come out of chain order, and nothing here depends on it. */
+function onEvents(events: EmittedEvent[]) {
+  for (const e of events) {
+    checksum +=
+      (BigInt(e.block_number!) << 40n) +
+      (BigInt(e.transaction_index) << 20n) +
+      BigInt(e.event_index);
+    blocks.add(e.block_number!);
+  }
+  if (!a.decode) return;
+  const t = performance.now();
+  for (const e of events) {
+    try {
+      const d = decode(e.block_number!, e.keys, e.data);
+      if (d) counts[d.name] = (counts[d.name] ?? 0) + 1;
+      else unknown++;
+    } catch {
+      decodeErrors++;
+    }
+  }
+  decodeMs += performance.now() - t;
+}
+
 const t0 = performance.now();
-const stats = await fetchEvents({
-  rpc,
-  address: EKUBO_CORE,
-  from,
-  to,
-  chunkSize: endpoint.maxChunk,
-  concurrency: a.sequential ? 1 : concurrency,
-  windowEvents: a.window === undefined ? undefined : Number(a.window),
-  maxBufferedBytes: a.buffer === undefined ? undefined : Number(a.buffer) * 2 ** 20,
-  minSplit: a.sequential ? Number.POSITIVE_INFINITY : 64,
-  onEvents(events) {
-    for (const e of events) {
-      checksum +=
-        (BigInt(e.block_number!) << 40n) +
-        (BigInt(e.transaction_index) << 20n) +
-        BigInt(e.event_index);
-      blocks.add(e.block_number!);
-    }
-    if (!a.decode) return;
-    const t = performance.now();
-    for (const e of events) {
-      try {
-        const d = decode(e.block_number!, e.keys, e.data);
-        if (d) counts[d.name] = (counts[d.name] ?? 0) + 1;
-        else unknown++;
-      } catch {
-        decodeErrors++;
-      }
-    }
-    decodeMs += performance.now() - t;
+const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0 };
+const stream = eventStream(
+  {
+    rpc,
+    address: EKUBO_CORE,
+    from,
+    to,
+    chunkSize: endpoint.maxChunk,
+    concurrency: a.sequential ? 1 : concurrency,
+    windowEvents: a.window === undefined ? undefined : Number(a.window),
+    minSplit: a.sequential ? Number.POSITIVE_INFINITY : 64,
+    store: {
+      write: async (events) => onEvents(events),
+      room: async () => {},
+      held: () => ({ bytes: 0, events: 0, max: 0 }),
+    },
   },
-});
+  stats,
+);
+for await (const _ of stream);
 const fetchMs = performance.now() - t0;
 
 const result: Record<string, unknown> = {
@@ -130,7 +141,6 @@ const result: Record<string, unknown> = {
   blocksWithEvents: blocks.size,
   pages: stats.pages,
   windows: stats.windows,
-  peakBufferedMB: Math.round(stats.peakBufferedBytes / 2 ** 20),
   splits: stats.splits,
   seconds: +(fetchMs / 1000).toFixed(2),
   eventsPerSecond: Math.round(stats.events / (fetchMs / 1000)),

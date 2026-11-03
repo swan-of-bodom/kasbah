@@ -1,6 +1,6 @@
 // JediSwap v1 (Cairo 0): every pair the factory created, with swaps, volume and reserves. Factory and pairs are
 // proxies, so the ABIs are their implementations'.
-//   node --env-file=.env --no-warnings examples/jediswap/index.ts [--to <block>] [--port <n>] [--cache] [--reset]
+//   node --env-file=.env --no-warnings examples/jediswap/index.ts [--to <block>] [--port <n>] [--reset]
 //   pnpm kasbah dev examples/jediswap/index.ts
 import { resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -17,7 +17,6 @@ const { values } = parseArgs({
   options: {
     to: { type: "string" },
     port: { type: "string" },
-    cache: { type: "boolean" },
     reset: { type: "boolean" },
   },
 });
@@ -39,7 +38,6 @@ const app = kasbah({
   },
   tables: schema,
   ...(values.port === undefined ? {} : { api: { port: Number(values.port) } }),
-  cache: values.cache ?? false,
 });
 
 const hexOf = (felt: bigint) => `0x${felt.toString(16).padStart(64, "0")}` as const;

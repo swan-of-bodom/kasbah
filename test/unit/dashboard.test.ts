@@ -257,6 +257,7 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
     bufferedBytes: 50 * 2 ** 20,
     maxBufferedBytes: 200 * 2 ** 20,
     bufferedEvents: 41_000,
+    written: 123_456,
     windows: 40,
     running: 30,
     paused: 6,
@@ -268,8 +269,10 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   const text = inside(render(s, { width: 110 })).join("\n");
   expect(text).toMatch(/events 10% {2}■ headers\/txs 80% {2}■ handlers 5%/);
   expect(text).toContain("bound by fetching headers and transactions");
-  expect(text).toMatch(/buffer +50 MB \/ 200 MB · 41\.0k events \(25% of the memory budget\)/);
-  expect(text).toContain("30 running · 6 paused · 4 done, not read (40) · 2 of 32 workers idle");
+  expect(text).toMatch(
+    /writing +50 MB \/ 200 MB · 41\.0k events waiting for Postgres \(25%\) · written through 123,456/,
+  );
+  expect(text).toContain("30 running · 6 paused · 4 done, not written (40) · 2 of 32 workers idle");
   expect(text).toContain(
     "25% in getEvents · 10% waiting for Postgres · 5% idle · 60% between calls (last 5 s)",
   );

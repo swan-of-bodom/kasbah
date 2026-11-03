@@ -27,7 +27,7 @@ export async function backfill(run: Run): Promise<void> {
   let through = first - 1;
   let since = 0;
   const maxPending = heapLimit() * PENDING_SHARE;
-  const batches = watchedEvents(run, first, to, true);
+  const batches = watchedEvents(run, first, to);
   const waited = (what: "events" | "extras", ms: number) =>
     what === "events" ? (status.time.fetch += ms) : (status.time.extras += ms);
   try {

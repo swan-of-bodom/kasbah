@@ -1,5 +1,6 @@
 import { createServer } from "node:http";
 import { selector } from "../../src/abi/selector.ts";
+import { testChain } from "./chain.ts";
 import { header } from "./header.ts";
 
 /** A contract emitting `Counted { amount: n + 1 }` in every block `n` of a chain of `blocks` blocks. */
@@ -20,7 +21,8 @@ export const counterAbi = [
 
 /**
  * A node serving that chain, the contract at any address from block `deployed`; block n's event comes from
- * `addresses[n % length]`; L1 accepted blocks through `l1`. Listen on it, then point `rpc` at it.
+ * `addresses[n % length]`; L1 accepted blocks through `l1`; a chain id of its own unless given one. Listen on it,
+ * then point `rpc` at it.
  */
 export function counterNode(
   blocks: number,
@@ -28,7 +30,8 @@ export function counterNode(
     deployed = 0,
     addresses = ["0xc"],
     l1 = 0,
-  }: { deployed?: number; addresses?: string[]; l1?: number } = {},
+    chainId = testChain(),
+  }: { deployed?: number; addresses?: string[]; l1?: number; chainId?: string } = {},
 ) {
   const abi = counterAbi;
   const BLOCKS = blocks;
@@ -55,7 +58,7 @@ export function counterNode(
           case "starknet_specVersion":
             return ok("0.10.4");
           case "starknet_chainId":
-            return ok("0xc0c0");
+            return ok(chainId);
           case "pathfinder_version":
             return ok("fake");
           case "starknet_blockNumber":

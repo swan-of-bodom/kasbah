@@ -54,7 +54,7 @@ A performance change is kept only if it beats the noise, measured end to end, as
 
 - `pnpm bench:app` runs an app in `test/bench/apps` (Ekubo Core, blocks 620k to 700k by default) on two builds, A
   and B, in pairs A B, then B A: by default HEAD against the working tree; `--a`/`--b` take git revs, `--cache off`
-  fetches from the RPC, `--heap 512` checks a small machine, `--node-b=<flags>` gives one side Node or V8 flags
+  fetches from the RPC (builds from before 2026-11-03: the cache is always on since, and they refuse it), `--heap 512` checks a small machine, `--node-b=<flags>` gives one side Node or V8 flags
   on the same build, `--env-b "K=V …"` environment variables (`KASBAH_BENCH_CONCURRENCY` sets the app's
   `concurrency`). It stops if Postgres is down, the laptop is on battery or the CPU's turbo is off, and writes
   each run's log and the summary to `test/bench/results` (ignored by git).
@@ -63,8 +63,8 @@ A performance change is kept only if it beats the noise, measured end to end, as
   from the real RPC (`~/.cache/kasbah-bench/rpc-recorded.json`). Use it for fetcher changes: every run then sees the
   same node. Give it a hosted provider's latency, `--latency 700`: Alchemy answered `getEvents` in ~650–900 ms
   (2026-11-02), and at 120 ms a window fetched page after page looked 6× cheaper than it is. It answers its own
-  chain id (`SN_BENCH`), so the app's event cache on it is a schema of its own, emptied before every run:
-  `--cache on` (the default) measures the cache's writes too, `--cache off` doesn't. The verdict is the median of
+  chain id (`SN_BENCH`), so the app's event cache on it is a schema of its own, emptied before every run,
+  so every run fetches and writes the cache. The verdict is the median of
   each pair's B/A ratio; pairs whose RPC latency moved over 25% are left out. A run during which the laptop went on
   battery or the CPU's turbo turned off (on this laptop, a low battery) is discarded and stops the benchmark, and
   neither starts one.

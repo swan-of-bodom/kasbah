@@ -45,8 +45,7 @@ export type ContractSource = {
 
 /**
  * A `getEvents` stream besides the shared one: a contract's addresses (changed in place) and keys, through `to`.
- * A contract with an `endBlock` has one; so does each filtered event that keys can fetch (not `cached`: the event
- * cache records coverage by address and selector, not by key filter).
+ * A contract with an `endBlock` has one; so does each filtered event that keys can fetch.
  */
 export type Stream = {
   contract: string;
@@ -55,7 +54,6 @@ export type Stream = {
   /** Its contract's start block: nothing before it is fetched. */
   from: number;
   to: number | undefined;
-  cached: boolean;
 };
 
 /** Upgrade events of the common upgradeable components (OpenZeppelin, Ekubo, StarkWare), found by name. */
@@ -119,13 +117,13 @@ export class Sources {
       this.#contracts.set(c.name, c);
       const own = { contract: c.name, from: c.startBlock, to: c.endBlock };
       if (c.endBlock !== undefined) {
-        const s = { ...own, addresses: [], keys: [[]], cached: true };
+        const s = { ...own, addresses: [], keys: [[]] };
         this.#bounded.set(c.name, s);
         this.streams.push(s);
       }
       for (const [event, f] of c.filters)
         if (f.keys !== undefined && c.handled.has(event))
-          this.streams.push({ ...own, addresses: [], keys: f.keys, cached: false });
+          this.streams.push({ ...own, addresses: [], keys: f.keys });
       this.#fallback.set(c.name, createDecoder(c.abi));
       if (c.upgrades !== undefined)
         this.#upgradeSelectors.set(

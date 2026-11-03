@@ -14,7 +14,8 @@ export default kasbah({
       startBlock: Number(process.env.KASBAH_BENCH_FROM ?? 165387),
     },
   },
-  cache: process.env.KASBAH_BENCH_CACHE !== "off",
+  // `--cache off` is for builds from before the cache was always on; a newer build refuses it.
+  ...(process.env.KASBAH_BENCH_CACHE === "off" && { cache: false as never }),
   concurrency:
     process.env.KASBAH_BENCH_CONCURRENCY === undefined
       ? undefined

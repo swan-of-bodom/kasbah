@@ -40,7 +40,6 @@ async function query(sql: string, params: unknown[] = []) {
 /** The counter app; `pause` holds the handler of that block until it resolves. */
 function app(pause?: { block: number; until: Promise<void> }) {
   const a = kasbah({
-    cache: false,
     rpc,
     database: url,
     schema,

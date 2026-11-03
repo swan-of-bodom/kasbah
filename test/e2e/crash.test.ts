@@ -23,7 +23,7 @@ beforeAll(async () => {
     `import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { bignum, kasbah } from ${JSON.stringify(pathToFileURL(resolve("src/index.ts")).href)};
 const counted = pgTable("counted", { id: text().primaryKey(), block: integer().notNull(), amount: bignum().notNull() });
-const app = kasbah({ cache: false, rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)}, api: false,
+const app = kasbah({ rpc: ${JSON.stringify(rpc)}, database: process.env.DATABASE_URL!, schema: ${JSON.stringify(schema)}, api: false,
   contracts: { C: { abi: ${JSON.stringify(counterAbi)}, address: "0xc", startBlock: 0 } }, tables: { counted } });
 app.on("C:Counted", async ({ event, context }) => {
   await context.db.insert(counted).values({ id: event.transaction.hash, block: event.block.number, amount: event.args.amount });

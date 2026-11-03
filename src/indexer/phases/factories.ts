@@ -13,7 +13,7 @@ export async function factories(run: Run): Promise<void> {
   status.setRange(from, to, from - 1);
   const found = new Map<string, Child>();
   let through = from - 1;
-  for await (const batch of children(run, from, to, true)) {
+  for await (const batch of children(run, from, to)) {
     for (const c of batch.children) if (!found.has(c.address)) found.set(c.address, c);
     through = batch.through;
     status.range.through = through;
