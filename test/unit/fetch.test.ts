@@ -1,7 +1,12 @@
 import { expect, test } from "vitest";
 import type { RpcClient } from "../../src/rpc/client.ts";
 import type { EmittedEvent, EventFilter } from "../../src/rpc/methods.ts";
-import { eventStream, type FetchGauges, fetchEvents } from "../../src/sync/fetch.ts";
+import {
+  eventStream,
+  type FetchGauges,
+  fetchEvents,
+  type PageStore,
+} from "../../src/sync/fetch.ts";
 import { approxBytes, heapLimit } from "../../src/utils/memory.ts";
 
 /** A Pathfinder-like node: pages of `chunk` events, at most `scanLimit` blocks per call, token `"<block>-<matched skipped>"`. */
@@ -317,3 +322,158 @@ test("pages in flight count toward the budget: buffered plus downloading stays u
   expect(total).toBe(events.length);
   expect(peak / budget).toBeLessThanOrEqual(3 + 2 / 4);
 }, 60_000);
+
+/** A store writing after a random delay, in the order given, with room for `max` events. */
+function fakeStore(max = Number.POSITIVE_INFINITY, delayMs = 3) {
+  const events: EmittedEvent[] = [];
+  const ranges: [number, number][] = [];
+  let held = 0;
+  let peak = 0;
+  let tail = Promise.resolve();
+  const wakers: (() => void)[] = [];
+  const store: PageStore = {
+    write(page, from, to) {
+      held += page.length;
+      peak = Math.max(peak, held);
+      tail = tail.then(async () => {
+        await new Promise((r) => setTimeout(r, Math.random() * delayMs));
+        events.push(...page);
+        ranges.push([from, to]);
+        held -= page.length;
+        if (held < max) for (const w of wakers.splice(0)) w();
+      });
+      return tail;
+    },
+    room: () => (held < max ? Promise.resolve() : new Promise<void>((r) => wakers.push(r))),
+    held: () => ({ bytes: held, events: held, max }),
+  };
+  /** Whether every block of `[from, to]` is written. */
+  const covers = (from: number, to: number) => {
+    const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+    let next = from;
+    for (const [a, b] of sorted) if (a <= next && b >= next) next = b + 1;
+    return next > to;
+  };
+  return { store, events, ranges, covers, peak: () => peak };
+}
+
+const id = (e: EmittedEvent) => `${e.block_number}:${e.transaction_index}:${e.event_index}`;
+
+test.each([1, 4, 32])(
+  "with a store, every event is written once, and no block is claimed before every block up to it is written: %i workers",
+  async (concurrency) => {
+    const events = syntheticEvents(20_000, concurrency);
+    const s = fakeStore();
+    let through = -1;
+    for await (const batch of eventStream({
+      rpc: fakeNode(events, 2_048).rpc,
+      address: "0x1",
+      from: 0,
+      to: 19_999,
+      chunkSize: 64,
+      concurrency,
+      windowEvents: 256,
+      store: s.store,
+    })) {
+      expect(batch.events).toEqual([]);
+      expect(batch.through).toBeGreaterThan(through);
+      expect(s.covers(0, batch.through)).toBe(true);
+      const early = events.filter((e) => e.block_number! <= batch.through).map(id);
+      const written = new Set(s.events.map(id));
+      expect(early.every((e) => written.has(e))).toBe(true);
+      through = batch.through;
+    }
+    expect(through).toBe(19_999);
+    expect(s.events.map(id).sort()).toEqual(events.map(id).sort());
+    for (const [a, b] of s.ranges) {
+      const inside = s.events.filter((e) => e.block_number! >= a && e.block_number! <= b);
+      expect(inside.length).toBe(
+        events.filter((e) => e.block_number! >= a && e.block_number! <= b).length,
+      );
+    }
+  },
+);
+
+test("with a store and ranges, only the ranges are fetched, and the blocks between them pass at once", async () => {
+  const events = syntheticEvents(20_000, 3);
+  const s = fakeStore();
+  const asked: [number, number][] = [];
+  const node = fakeNode(events, 2_048);
+  const rpc = {
+    request(method: string, params: { filter: EventFilter }): Promise<unknown> {
+      const f = params.filter;
+      asked.push([
+        (f.from_block as { block_number: number }).block_number,
+        (f.to_block as { block_number: number }).block_number,
+      ]);
+      return (node.rpc as unknown as { request: typeof rpc.request }).request(method, params);
+    },
+  };
+  const seen: number[] = [];
+  for await (const batch of eventStream({
+    rpc: rpc as unknown as RpcClient,
+    address: "0x1",
+    from: 0,
+    to: 19_999,
+    ranges: [
+      [5_000, 9_999],
+      [15_000, 15_999],
+    ],
+    chunkSize: 64,
+    concurrency: 4,
+    store: s.store,
+  }))
+    seen.push(batch.through);
+  expect(seen[0]).toBe(4_999);
+  expect(seen.at(-1)).toBe(19_999);
+  for (const [a, b] of asked)
+    expect((a >= 5_000 && b <= 9_999) || (a >= 15_000 && b <= 15_999)).toBe(true);
+  const inRanges = (b: number) => (b >= 5_000 && b <= 9_999) || (b >= 15_000 && b <= 15_999);
+  expect(s.events.map(id).sort()).toEqual(
+    events
+      .filter((e) => inRanges(e.block_number!))
+      .map(id)
+      .sort(),
+  );
+});
+
+test("a slow store slows fetching: what waits to be written stays near its limit", async () => {
+  const events = syntheticEvents(20_000, 9);
+  const s = fakeStore(500, 20);
+  let n = 0;
+  for await (const _ of eventStream({
+    rpc: fakeNode(events, 2_048).rpc,
+    address: "0x1",
+    from: 0,
+    to: 19_999,
+    chunkSize: 64,
+    concurrency: 16,
+    store: s.store,
+  }))
+    n++;
+  expect(n).toBeGreaterThan(0);
+  expect(s.events.length).toBe(events.length);
+  // Past the limit, each worker may add the page it was given room for, with the start of a block the page before
+  // it held back (at most 40 events here).
+  expect(s.peak()).toBeLessThanOrEqual(500 + 16 * (64 + 40));
+}, 60_000);
+
+test("with a store, a failed write fails the stream", async () => {
+  const store: PageStore = {
+    write: () => Promise.reject(new Error("disk full")),
+    room: () => Promise.resolve(),
+    held: () => ({ bytes: 0, events: 0, max: 1 }),
+  };
+  const run = async () => {
+    for await (const _ of eventStream({
+      rpc: fakeNode(syntheticEvents(5_000, 1), 2_048).rpc,
+      address: "0x1",
+      from: 0,
+      to: 4_999,
+      chunkSize: 64,
+      concurrency: 4,
+      store,
+    }));
+  };
+  await expect(run()).rejects.toThrow("disk full");
+});

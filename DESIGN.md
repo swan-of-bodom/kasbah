@@ -69,8 +69,9 @@ in core, the `ponder dev` drop-everything mode.
                 Postgres: user tables · undo journal · raw-event cache · checkpoint
 ```
 
-One process, three stages connected by bounded queues: fetch → decode → index. Fetching runs ahead of indexing up
-to a memory cap (not unbounded into the database, as Ponder does).
+One process, three stages: fetch → decode → index. With the event cache (final blocks), fetching writes into
+Postgres and runs ahead of indexing as far as it can, as Ponder's sync does; handlers read events back from there.
+Without it (live blocks, key filters, `cache: false`), fetching runs ahead of indexing up to a memory cap.
 
 The cap (`src/sync/fetch.ts`) is in bytes, each event's size estimated as Ponder estimates its cached rows
 (`src/utils/memory.ts`), and follows the heap: `maxBufferedBytes` defaults to a fifteenth of it, split between
@@ -81,9 +82,17 @@ it (including itself), so the front never waits on the back; past that, only the
 heap. A window with half of `maxBuffered` held before it (itself included) fetches only while the buffer is under
 that half: the other half is kept for the blocks handled next. Counting events instead crashed a 2 GB heap on Ekubo's events, about 1.2 kB each.
 
-**On a first run, events go straight from fetch to handlers in memory.** The raw events are written to the cache
-on the side (COPY, not awaited by indexing). Ponder instead writes everything to its sync store and reads it back
-before indexing; we skip that round trip.
+**On a first run, events go through Postgres, as Ponder's do.** Each page the fetcher gets is written to the cache
+(`EventCache.writer`) with the coverage of its complete blocks, in one transaction, so coverage never claims a block
+whose events aren't written. Pages waiting while one write runs go together in the next, so a write grows with the
+backlog. The fetcher keeps the block through which every block is written (the front window's, Ponder's sync
+cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
+catches up. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
+the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
+(`WRITE_SHARE`): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
+memory. A page's last block may be partial: its events stay with the window until the next page completes it. A
+crash leaves only complete blocks covered, and a restart fetches only the blocks not covered (`EventCache.missing`),
+gaps between windows that finished included.
 
 ## 4. Endpoint layer
 
@@ -325,14 +334,12 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - **A backfill commit is written while the next batch is handled** (`Position.start`). Waiting for each one stopped
   the event loop for up to ~0.6 s (cached Ekubo to block 700k: ~45 stops over 400 ms, ~50 s in all; inside them,
   building the COPY text 56%, GC 14%, eviction 10%). The commit takes its rows before its first await
-  (`Store.take`, `EventCache.take`), handlers write for the next one meanwhile, and the COPY text is built with a
+  (`Store.take`, and `EventCache.take` for transactions, receipts and calls; events are already written), handlers write for the next one meanwhile, and the COPY text is built with a
   turn for the event loop every 25 ms. At most one is in flight, and:
   - it holds exactly its blocks' writes, so a crash resumes from a checkpoint with nothing applied twice;
   - handlers read the rows it is writing from the cache, which keeps them until COMMIT;
   - an unkeyed table's first read from Postgres waits for it: it may be adding the same key (both at once: a
     catalog error);
-  - the event cache marks covered only the blocks it took: a range tracked meanwhile (a contract's start block)
-    is covered from its own start;
   - a failed one stops the run at the next batch, and none outlives an error;
   - the limits on rows and receipts not yet taken are halved (a twentieth of the heap, 32 MB), so memory stays
     where it was.
@@ -533,11 +540,9 @@ plain log lines, better for Docker and log files. Skipped events are reported on
 - `coverage(address, selector, ranges int8multirange)`: which (address, selector) pairs are complete for which
   blocks. Ponder's fragment idea, without its EVM topic cross-products.
 - Only data below the safety window is cached, so the cache never needs reorg handling.
-- A backfill reads the prefix of its range that every (address, selector) pair covers from the cache, then fetches
-  the rest; fetched events and coverage are written in the same transaction as the app's checkpoint. Each piece
-  between start blocks is tracked on its own until commits have passed all of its blocks: the next piece is
-  fetched before this one's last blocks are handled, and starting it used to drop them (a re-index fetched them
-  again).
+- A backfill fetches the parts of its range not covered for every (address, selector) pair into the cache, and
+  reads all of it back from there (§3). Coverage is written with the events, ahead of the app's checkpoint: a
+  restart reads back what an earlier run fetched and didn't handle.
 - Reads page by position (`LIMIT` 12k as Ponder reads, a batch never ends inside a block) and get hex text from
   Postgres (`encode(.., 'hex')`), skipping the Buffer round trip. Fewer events alive while handled is less for the
   GC to copy: 50k → 12k was 5% faster on Ekubo (5 of 5 interleaved pairs, median 88.8 s → 84.5 s), and 12k

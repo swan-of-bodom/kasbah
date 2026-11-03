@@ -2,12 +2,14 @@ import type pg from "pg";
 import { DEFAULTS } from "../config/resolve.ts";
 import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
-import type { Batch } from "../sync/fetch.ts";
+import type { Batch, PageStore } from "../sync/fetch.ts";
 import { type Block, blockOf } from "../types/block.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
+import { approxBytes, heapLimit } from "../utils/memory.ts";
 import { copyLines } from "./copy.ts";
 import { quote } from "./table.ts";
+import { transaction } from "./transaction.ts";
 
 export function feltHex(felt: string): string {
   if (!/^0x[0-9a-fA-F]{1,64}$/.test(felt)) throw new Error(`not a felt: ${felt}`);
@@ -57,6 +59,14 @@ export function unpackHex(h: string): string[] {
 
 /** Transactions per INSERT: one statement's array parameters are built as one string. */
 const ROWS_PER_INSERT = 1_000;
+/**
+ * Share of the heap for fetched events waiting for Postgres, the write in flight included: past it, fetching waits.
+ * Writes keep up on any disk that keeps up with the RPC, so it's reached only on a slow one.
+ */
+const WRITE_SHARE = 1 / 20;
+const MIN_WRITE_BYTES = 8 << 20;
+/** Events per batch read back for the handlers. */
+const READ_LIMIT = 12_000;
 /** Share of `maxCalls` left after pruning, so the next inserts don't prune again at once. */
 const CALLS_KEPT = 0.9;
 
@@ -124,24 +134,28 @@ type CachedCall = {
   block: number;
   result: Buffer;
 };
-/** Events fetched for `pairs` in blocks `[from, to]`, not yet written. */
-type Tracked = { pairs: Pairs; from: number; to: number; events: EmittedEvent[] };
-/** One commit's share: what was fetched until it started, and the tracked blocks it covers. */
-type Taken = { transactions: CachedTransaction[]; calls: CachedCall[]; ranges: Tracked[] };
+/** One commit's share: the transactions, receipts and calls fetched until it started. */
+type Taken = { transactions: CachedTransaction[]; calls: CachedCall[] };
+/** Every event of `pairs` in blocks `[from, to]`, fetched and waiting for Postgres. */
+type Write = {
+  pairs: Pairs;
+  events: EmittedEvent[];
+  from: number;
+  to: number;
+  bytes: number;
+  written: () => void;
+  failed: (error: unknown) => void;
+};
 
 /**
  * Final events (below the reorg window) kept in Postgres, shared by every app on the same database and chain.
- * `coverage` says which blocks are complete for each (address, selector at key 0); a re-index reads those from
- * here and fetches only the rest.
+ * `coverage` says which blocks are complete for each (address, selector at key 0). A backfill writes what it fetches
+ * here as it arrives (`writer`) and its handlers read events back from here, as Ponder's sync store does; a re-index
+ * fetches only the blocks not covered.
  */
 export class EventCache {
   readonly #pool: pg.Pool;
   readonly #schema: string;
-  /**
-   * Ranges being fetched, oldest first. One stays until commits have passed all of its blocks: the next range
-   * (a contract's start block) begins while its last blocks are still being handled.
-   */
-  #tracked: Tracked[] = [];
   #transactions: CachedTransaction[] = [];
   #calls: CachedCall[] = [];
   stats = { cachedEvents: 0, fetchedEvents: 0 };
@@ -152,6 +166,13 @@ export class EventCache {
   /** A write found events already cached (a range fetched again for a new selector): later ones skip duplicates. */
   #overlaps = false;
   #callRows = 0;
+  /** Fetched pages waiting for the next write, oldest first. */
+  #writes: Write[] = [];
+  #held = { bytes: 0, events: 0 };
+  readonly #maxHeld = Math.max(MIN_WRITE_BYTES, Math.floor(heapLimit() * WRITE_SHARE));
+  /** The writes under way; it never rejects (each page's promise does). */
+  #writing: Promise<void> | undefined;
+  #roomWakers: (() => void)[] = [];
 
   private constructor(pool: pg.Pool, schema: string, maxCalls: number) {
     this.#pool = pool;
@@ -249,13 +270,7 @@ export class EventCache {
   /** First block from `from` not covered for every (address, selector) pair. */
   async coveredUntil(addresses: string[], selectors: string[], from: number): Promise<number> {
     if (addresses.length === 0 || selectors.length === 0) return from;
-    const a: Buffer[] = [];
-    const s: Buffer[] = [];
-    for (const x of addresses)
-      for (const y of selectors) {
-        a.push(feltBytes(x));
-        s.push(feltBytes(y));
-      }
+    const { a, s } = this.#pairs({ addresses, selectors });
     const { rows } = await this.#pool.query<{ end: string }>(
       `SELECT min(coalesce(x.up, $1::int8))::text AS end FROM unnest($2::bytea[], $3::bytea[]) AS p(address, selector)
        LEFT JOIN LATERAL (SELECT upper(r) AS up FROM ${this.#schema}.coverage c, unnest(c.ranges) r
@@ -265,16 +280,47 @@ export class EventCache {
     return Number(rows[0]!.end);
   }
 
+  /** The parts of `[from, to]` not covered for every (address, selector) pair, inclusive, in order. */
+  async missing(
+    addresses: string[],
+    selectors: string[],
+    from: number,
+    to: number,
+  ): Promise<[number, number][]> {
+    const { a, s } = this.#pairs({ addresses, selectors });
+    const { rows } = await this.#pool.query<{ lo: string; hi: string }>(
+      `SELECT lower(m)::text AS lo, (upper(m) - 1)::text AS hi FROM unnest(int8multirange(int8range($1, $2)) - (
+         SELECT CASE WHEN count(c.address) = count(*) THEN coalesce(range_intersect_agg(c.ranges), '{}') ELSE '{}' END
+         FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
+         LEFT JOIN ${this.#schema}.coverage c ON c.address = p.address AND c.selector = p.selector)) AS m ORDER BY 1`,
+      [from, to + 1, a, s],
+    );
+    return rows.map((r) => [Number(r.lo), Number(r.hi)]);
+  }
+
+  #pairs(pairs: Pairs): { a: Buffer[]; s: Buffer[] } {
+    const a: Buffer[] = [];
+    const s: Buffer[] = [];
+    for (const x of pairs.addresses)
+      for (const y of pairs.selectors) {
+        a.push(feltBytes(x));
+        s.push(feltBytes(y));
+      }
+    return { a, s };
+  }
+
   /**
    * Cached events of `addresses` × `selectors` in `[from, to]`, in chain order, at most about `limit` per batch:
-   * paged by position, and a batch never ends inside a block.
+   * paged by position, and a batch never ends inside a block. `cached`: counted as read from the cache, not
+   * fetched by this run.
    */
   async *read(
     addresses: string[],
     selectors: string[],
     from: number,
     to: number,
-    limit = 12_000,
+    limit = READ_LIMIT,
+    cached = true,
   ): AsyncGenerator<Batch> {
     const a = addresses.map(feltBytes);
     const s = selectors.map(feltBytes);
@@ -318,24 +364,118 @@ export class EventCache {
         transaction_index: r.tx,
         event_index: r.idx,
       }));
-      this.stats.cachedEvents += events.length;
+      if (cached) this.stats.cachedEvents += events.length;
       yield { events, through };
       if (through >= to) return;
     }
   }
 
-  /** Remembers events fetched from RPC for `addresses` × `selectors` in `[from, to]`, until commits pass them. */
-  track(addresses: string[], selectors: string[], from: number, to: number) {
+  /**
+   * Where a fetch of `addresses` × `selectors` writes its pages: each page's events and its blocks' coverage in one
+   * transaction, so coverage never claims a block whose events aren't written. Pages are written in the order
+   * they're given, together while the write before them runs, so a write grows with the backlog.
+   */
+  writer(addresses: string[], selectors: string[]): PageStore {
     const pairs = { addresses: [...addresses], selectors: [...selectors] };
-    this.#tracked.push({ pairs, from, to, events: [] });
+    return {
+      write: (events, from, to) =>
+        new Promise<void>((written, failed) => {
+          let bytes = 0;
+          for (const e of events) bytes += approxBytes(e);
+          this.#writes.push({ pairs, events, from, to, bytes, written, failed });
+          this.#held.bytes += bytes;
+          this.#held.events += events.length;
+          this.stats.fetchedEvents += events.length;
+          this.#writing ??= this.#flush();
+        }),
+      room: () =>
+        this.#held.bytes < this.#maxHeld
+          ? Promise.resolve()
+          : new Promise<void>((r) => this.#roomWakers.push(r)),
+      held: () => ({ ...this.#held, max: this.#maxHeld }),
+    };
   }
 
-  /** Events of the range tracked last. */
-  add(events: EmittedEvent[]) {
-    const t = this.#tracked.at(-1);
-    if (t === undefined) return;
-    for (const e of events) t.events.push(e);
-    this.stats.fetchedEvents += events.length;
+  /** Waits for every page given to a writer to be written (or to fail). */
+  async drain(): Promise<void> {
+    while (this.#writing !== undefined) await this.#writing;
+  }
+
+  async #flush(): Promise<void> {
+    for (;;) {
+      // Cleared in the same turn the last page settles, so a page given after it starts a write of its own.
+      if (this.#writes.length === 0) {
+        this.#writing = undefined;
+        return;
+      }
+      const batch = this.#writes;
+      this.#writes = [];
+      try {
+        await transaction(this.#pool, async (tx) => {
+          await this.#copyEvents(tx, function* () {
+            for (const w of batch) yield* w.events;
+          });
+          await this.#cover(tx, batch);
+        });
+        for (const w of batch) w.written();
+      } catch (error) {
+        for (const w of batch) w.failed(error);
+      } finally {
+        for (const w of batch) {
+          this.#held.bytes -= w.bytes;
+          this.#held.events -= w.events.length;
+        }
+        if (this.#held.bytes < this.#maxHeld) {
+          const wake = this.#roomWakers;
+          this.#roomWakers = [];
+          for (const r of wake) r();
+        }
+      }
+    }
+  }
+
+  async #copyEvents(tx: pg.PoolClient, events: () => Iterable<EmittedEvent>) {
+    if (!this.#overlaps) {
+      // Straight into the table, a third cheaper than through a temp table, unless some are cached already.
+      await tx.query(`SAVEPOINT kasbah_cache_events`);
+      try {
+        await copyLines(tx, `COPY ${this.#schema}.events FROM STDIN`, events(), eventLine);
+        await tx.query(`RELEASE SAVEPOINT kasbah_cache_events`);
+        return;
+      } catch (e) {
+        if ((e as { code?: string }).code !== UNIQUE_VIOLATION) throw e;
+        await tx.query(`ROLLBACK TO SAVEPOINT kasbah_cache_events`);
+        this.#overlaps = true;
+      }
+    }
+    await tx.query(
+      `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
+    );
+    await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, events(), eventLine);
+    await tx.query(
+      `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
+    );
+  }
+
+  /** Marks each write's blocks covered for its pairs: one statement per set of pairs. */
+  async #cover(tx: pg.PoolClient, writes: Write[]) {
+    const byPairs = new Map<Pairs, { lo: number[]; hi: number[] }>();
+    for (const w of writes) {
+      let r = byPairs.get(w.pairs);
+      if (r === undefined) byPairs.set(w.pairs, (r = { lo: [], hi: [] }));
+      r.lo.push(w.from);
+      r.hi.push(w.to + 1);
+    }
+    for (const [pairs, { lo, hi }] of byPairs) {
+      const { a, s } = this.#pairs(pairs);
+      await tx.query(
+        `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
+         SELECT address, selector, (SELECT range_agg(int8range(lo, hi)) FROM unnest($3::int8[], $4::int8[]) AS r(lo, hi))
+         FROM unnest($1::bytea[], $2::bytea[]) AS p(address, selector)
+         ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
+        [a, s, lo, hi],
+      );
+    }
   }
 
   /** A cached `starknet_call` result at a final block. */
@@ -410,26 +550,16 @@ export class EventCache {
 
   /**
    * Moves out what the next `persist` writes, before the commit's first await: transactions, receipts and calls
-   * fetched so far, and the events of every tracked range the commit reaches, with its blocks through `through`
-   * to mark covered (-1: none). What's fetched or tracked from here on is the next commit's.
+   * fetched so far. What's fetched from here on is the next commit's.
    */
-  take(through: number): void {
-    const ranges: Tracked[] = [];
-    for (const t of this.#tracked) {
-      if (through < t.from) continue;
-      const to = Math.min(through, t.to);
-      ranges.push({ pairs: t.pairs, from: t.from, to, events: t.events });
-      t.from = to + 1;
-      t.events = [];
-    }
-    this.#tracked = this.#tracked.filter((t) => t.from <= t.to);
-    this.#taken = { transactions: this.#transactions, calls: this.#calls, ranges };
+  take(): void {
+    this.#taken = { transactions: this.#transactions, calls: this.#calls };
     this.#transactions = [];
     this.#calls = [];
     this.#pendingBytes = 0;
   }
 
-  /** Writes what `take` moved out, and marks its blocks covered, inside the caller's transaction. */
+  /** Writes what `take` moved out, inside the caller's transaction. */
   async persist(tx: pg.PoolClient): Promise<void> {
     const taken = this.#taken;
     if (taken === undefined) throw new Error("persist without take");
@@ -462,52 +592,6 @@ export class EventCache {
       this.#callRows += r.rowCount ?? 0;
       await this.#pruneCalls(tx);
     }
-    if (taken.ranges.some((r) => r.events.length > 0)) {
-      const events = function* () {
-        for (const r of taken.ranges) yield* r.events;
-      };
-      if (!this.#overlaps) {
-        // Straight into the table, a third cheaper than through a temp table, unless some are cached already.
-        await tx.query(`SAVEPOINT kasbah_cache_events`);
-        try {
-          await copyLines(tx, `COPY ${this.#schema}.events FROM STDIN`, events(), eventLine);
-          await tx.query(`RELEASE SAVEPOINT kasbah_cache_events`);
-        } catch (e) {
-          if ((e as { code?: string }).code !== UNIQUE_VIOLATION) throw e;
-          await tx.query(`ROLLBACK TO SAVEPOINT kasbah_cache_events`);
-          this.#overlaps = true;
-        }
-      }
-      if (this.#overlaps) {
-        await tx.query(
-          `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
-        );
-        await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, events(), eventLine);
-        await tx.query(
-          `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
-        );
-      }
-    }
-    for (const { pairs, from, to } of taken.ranges) {
-      const a: Buffer[] = [];
-      const s: Buffer[] = [];
-      for (const x of pairs.addresses)
-        for (const y of pairs.selectors) {
-          a.push(feltBytes(x));
-          s.push(feltBytes(y));
-        }
-      await tx.query(
-        `INSERT INTO ${this.#schema}.coverage (address, selector, ranges)
-         SELECT address, selector, int8multirange(int8range($1, $2)) FROM unnest($3::bytea[], $4::bytea[]) AS p(address, selector)
-         ON CONFLICT (address, selector) DO UPDATE SET ranges = coverage.ranges + EXCLUDED.ranges`,
-        [from, to + 1, a, s],
-      );
-    }
-  }
-
-  /** Stops tracking (the rest of the range is live, or the run stopped). */
-  untrack() {
-    this.#tracked = [];
   }
 
   async headers(numbers: number[]): Promise<Map<number, Block>> {

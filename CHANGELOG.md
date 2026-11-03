@@ -7,6 +7,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 - The raw-event cache is on by default, as Ponder always keeps what it fetched: a re-index fetches nothing again.
   It costs disk, about 400 bytes per event (tens of GB for a busy contract's whole history); `cache: false` turns
   it off.
+- A first sync writes each fetched page to the event cache as it arrives and handlers read events back from it, as
+  Ponder does, so fetching no longer pauses for an in-memory buffer: on Ekubo at a 512 MB heap, blocks 620k–630k
+  took 24 s instead of 293 s, with the same rows written (peak RSS 645 → 827 MB). A restart fetches only the
+  blocks the cache doesn't have, including those fetched but not yet handled. Commits write only the app's tables.
 - A first sync writes its events to the cache for less: COPY goes straight into the cache table, and felts are
   turned into bytes without a regex each. On Ekubo, commits went from 14–17% of the time to 3–5%, and the sync
   reached block 924k 12% sooner.

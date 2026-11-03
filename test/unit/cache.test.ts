@@ -119,14 +119,7 @@ test.skipIf(url === undefined)(
         });
       }
     }
-    cache.track(["0xa", "0xb"], ["0x51"], 100, 399);
-    cache.add(events);
-    cache.take(399);
-    const c = await pool.connect();
-    await c.query("BEGIN");
-    await cache.persist(c);
-    await c.query("COMMIT");
-    c.release();
+    await cache.writer(["0xa", "0xb"], ["0x51"]).write(events, 100, 399);
 
     expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 100)).toBe(400);
     expect(await cache.coveredUntil(["0xa", "0xc"], ["0x51"], 100)).toBe(100);
@@ -171,64 +164,57 @@ const event = (address: string, block: number): EmittedEvent => ({
   event_index: 0,
 });
 
-/** As a backfill commit writes the cache; `meanwhile` runs while the write is under way. */
-async function commit(cache: EventCache, through: number, meanwhile = () => {}) {
-  cache.take(through);
-  const c = await pool!.connect();
-  await c.query("BEGIN");
-  const persisting = cache.persist(c);
-  meanwhile();
-  await persisting;
-  await c.query("COMMIT");
-  c.release();
-}
-
-async function cachedBlocks(cache: EventCache, addresses: string[], from: number, to: number) {
+async function cachedBlocks(
+  cache: EventCache,
+  addresses: string[],
+  from: number,
+  to: number,
+  selectors = ["0x51"],
+) {
   const out: number[] = [];
-  for await (const b of cache.read(addresses, ["0x51"], from, to))
+  for await (const b of cache.read(addresses, selectors, from, to))
     for (const e of b.events) out.push(e.block_number!);
   return out;
 }
 
 test.skipIf(url === undefined)(
-  "a range tracked while a commit writes the cache is covered from its own start only",
+  "written pages are covered with their events, and only the blocks still missing are listed",
   async () => {
     pool ??= new pg.Pool({ connectionString: url, max: 2 });
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     const cache = await EventCache.open(pool, CHAIN);
-    cache.track(["0xa"], ["0x51"], 100, 299);
-    cache.add([event("0xa", 150)]);
-    // 0xb starts at block 300: its range is fetched while blocks 100–199 are being written.
-    await commit(cache, 199, () => {
-      cache.track(["0xa", "0xb"], ["0x51"], 300, 349);
-      cache.add([event("0xa", 310), event("0xb", 320)]);
-    });
-    await commit(cache, 349);
-    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(350);
-    expect(await cache.coveredUntil(["0xb"], ["0x51"], 200)).toBe(200);
-    expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 300)).toBe(350);
-    expect(await cachedBlocks(cache, ["0xa", "0xb"], 300, 349)).toEqual([310, 320]);
+    const w = cache.writer(["0xa", "0xb"], ["0x51"]);
+    // Out of order, as windows finish: and an empty page still covers its blocks.
+    await Promise.all([
+      w.write([event("0xa", 310), event("0xb", 320)], 300, 349),
+      w.write([event("0xa", 150)], 100, 199),
+      w.write([], 200, 249),
+    ]);
+    expect(await cache.missing(["0xa", "0xb"], ["0x51"], 100, 399)).toEqual([
+      [250, 299],
+      [350, 399],
+    ]);
+    expect(await cache.missing(["0xa", "0xc"], ["0x51"], 100, 399)).toEqual([[100, 399]]);
+    expect(await cache.missing(["0xa"], ["0x51"], 120, 230)).toEqual([]);
+    expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 100)).toBe(250);
+    expect(await cachedBlocks(cache, ["0xa", "0xb"], 100, 349)).toEqual([150, 310, 320]);
+    expect(cache.stats.fetchedEvents).toBe(3);
   },
 );
 
 test.skipIf(url === undefined)(
-  "a range that ends at a contract's start block is cached once a commit passes it, though the next began first",
+  "a page that fails to write leaves its blocks uncovered, and later pages are written",
   async () => {
     pool ??= new pg.Pool({ connectionString: url, max: 2 });
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     const cache = await EventCache.open(pool, CHAIN);
-    cache.track(["0xa"], ["0x51"], 100, 199);
-    cache.add([event("0xa", 150)]);
-    // The backfill reads a batch ahead: 0xb's range, from its start block, is fetched before block 199 commits.
-    cache.track(["0xa", "0xb"], ["0x51"], 200, 349);
-    cache.add([event("0xb", 250)]);
-    await commit(cache, 199);
-    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(200);
-    expect(await cache.coveredUntil(["0xb"], ["0x51"], 200)).toBe(200);
-    await commit(cache, 349);
-    expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(350);
-    expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 200)).toBe(350);
-    expect(await cachedBlocks(cache, ["0xa", "0xb"], 100, 349)).toEqual([150, 250]);
+    const w = cache.writer(["0xa"], ["0x51"]);
+    const bad = { ...event("0xa", 120), data: ["not a felt"] };
+    await expect(w.write([event("0xa", 110), bad], 100, 199)).rejects.toThrow(/not a felt/);
+    await w.write([event("0xa", 250)], 200, 299);
+    expect(await cache.missing(["0xa"], ["0x51"], 100, 299)).toEqual([[100, 199]]);
+    expect(await cachedBlocks(cache, ["0xa"], 100, 299)).toEqual([250]);
+    expect(w.held().bytes).toBe(0);
   },
 );
 
@@ -238,19 +224,14 @@ test.skipIf(url === undefined)(
     pool ??= new pg.Pool({ connectionString: url, max: 2 });
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     const cache = await EventCache.open(pool, CHAIN);
-    cache.track(["0xa"], ["0x51"], 100, 199);
-    cache.add([event("0xa", 120), event("0xa", 150)]);
-    await commit(cache, 199);
+    await cache.writer(["0xa"], ["0x51"]).write([event("0xa", 120), event("0xa", 150)], 100, 199);
     // A handler for 0x52 was added: the range is fetched again for both selectors.
     const added = { ...event("0xa", 130), keys: ["0x52"] };
-    cache.track(["0xa"], ["0x51", "0x52"], 100, 199);
-    cache.add([event("0xa", 120), added, event("0xa", 150)]);
-    await commit(cache, 199);
-    expect(await cache.coveredUntil(["0xa"], ["0x51", "0x52"], 100)).toBe(200);
-    const blocks: number[] = [];
-    for await (const b of cache.read(["0xa"], ["0x51", "0x52"], 100, 199))
-      for (const e of b.events) blocks.push(e.block_number!);
-    expect(blocks).toEqual([120, 130, 150]);
+    await cache
+      .writer(["0xa"], ["0x51", "0x52"])
+      .write([event("0xa", 120), added, event("0xa", 150)], 100, 199);
+    expect(await cache.missing(["0xa"], ["0x51", "0x52"], 100, 199)).toEqual([]);
+    expect(await cachedBlocks(cache, ["0xa"], 100, 199, ["0x51", "0x52"])).toEqual([120, 130, 150]);
   },
 );
 
@@ -261,7 +242,7 @@ test.skipIf(url === undefined)(
     await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
     let cache = await EventCache.open(pool, CHAIN, { maxCalls: 10 });
     const persist = async () => {
-      cache.take(-1);
+      cache.take();
       const c = await pool!.connect();
       await c.query("BEGIN");
       await cache.persist(c);

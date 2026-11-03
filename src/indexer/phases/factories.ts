@@ -26,7 +26,7 @@ export async function factories(run: Run): Promise<void> {
   );
   const watched = resolved.filter((w) => w !== undefined);
   await position.commit({ kind: "children", through, children: watched });
-  cache?.untrack();
+  await cache?.drain();
   status.note({
     kind: "factories",
     children: watched.length,

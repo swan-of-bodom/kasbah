@@ -10,8 +10,9 @@ const EMPTY_STEP = 100_000;
 export type Child = { address: string; contract: string; block: number };
 
 /**
- * Ordered batches of `addresses` × `keys` in `[from, to]`. Final ranges: the cached prefix first, then RPC, tracked
- * for the cache (the phase calls `cache.untrack` after its last commit). Live ranges: RPC only.
+ * Ordered batches of `addresses` × `keys` in `[from, to]`. Final ranges, with the cache: what it lacks is fetched into
+ * it, and every batch is read back from it as far as it holds every block (Ponder's sync store). Live ranges, and
+ * key filters (coverage records address and selector only): RPC only, held in memory.
  */
 export async function* events(
   run: Run,
@@ -30,32 +31,60 @@ export async function* events(
       yield { events: [], through: Math.min(to, lo + EMPTY_STEP - 1) };
     return;
   }
-  let start = from;
-  if (cache !== undefined) {
-    const end = Math.min(to, (await cache.coveredUntil(addresses, keys[0]!, from)) - 1);
-    if (end >= from) {
-      yield* cache.read(addresses, keys[0]!, from, end);
-      start = end + 1;
-    }
-    if (start <= to) cache.track(addresses, keys[0]!, start, to);
-  }
-  if (start > to) return;
   const gauges = (read: () => FetchGauges) => (status.fetcher = read);
-  for await (const batch of eventStream({
-    rpc,
-    address: addresses,
-    keys,
-    from: start,
-    to,
-    chunkSize: endpoint.maxChunk,
-    concurrency: config.concurrency,
-    budgetShare,
-    gauges,
-  })) {
-    cache?.add(batch.events);
-    yield batch;
+  const fetch = { rpc, address: addresses, keys, from, to, chunkSize: endpoint.maxChunk };
+  const concurrency = config.concurrency;
+  if (cache === undefined) {
+    yield* eventStream({ ...fetch, concurrency, budgetShare, gauges });
+    status.fetcher = undefined;
+    return;
   }
-  status.fetcher = undefined;
+  const selectors = keys[0]!;
+  const missing = await cache.missing(addresses, selectors, from, to);
+  const written =
+    missing.length === 0
+      ? undefined
+      : eventStream({
+          ...fetch,
+          concurrency,
+          ranges: missing,
+          store: cache.writer(addresses, selectors),
+          gauges,
+        });
+  let next = from;
+  try {
+    for await (const { through } of written ?? whole(to)) {
+      for (const [lo, hi, fetched] of pieces(next, through, missing))
+        yield* cache.read(addresses, selectors, lo, hi, undefined, !fetched);
+      next = through + 1;
+    }
+  } finally {
+    await written?.return(undefined);
+    status.fetcher = undefined;
+  }
+}
+
+async function* whole(to: number): AsyncGenerator<Batch> {
+  yield { events: [], through: to };
+}
+
+/** `[lo, hi]` cut at the edges of `ranges`, each piece saying whether it lies in one of them. */
+function* pieces(
+  lo: number,
+  hi: number,
+  ranges: [number, number][],
+): Generator<[number, number, boolean]> {
+  let at = lo;
+  for (const [a, b] of ranges) {
+    if (b < at) continue;
+    if (a > hi) break;
+    if (a > at) yield [at, a - 1, false];
+    const end = Math.min(b, hi);
+    yield [Math.max(a, at), end, true];
+    at = end + 1;
+    if (at > hi) return;
+  }
+  if (at <= hi) yield [at, hi, false];
 }
 
 /**

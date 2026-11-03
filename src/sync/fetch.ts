@@ -9,6 +9,10 @@ export type EventStreamOptions = {
   /** Inclusive block range. */
   from: number;
   to: number;
+  /** The parts of the range to fetch, inclusive, in order; the rest is in `store` already. Default: all of it. */
+  ranges?: [number, number][];
+  /** Writes pages here instead of holding them: the stream then yields how far `store` has every block, no events. */
+  store?: PageStore;
   chunkSize: number;
   /** Windows paginating at once. */
   concurrency: number;
@@ -37,11 +41,28 @@ const FRONT_RESERVE = 0.5;
 /** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
 const MAX_WINDOWS_PER_WORKER = 8;
 
-/** Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read. */
+/**
+ * Where a fetch writes its pages (the event cache). Pages of different windows arrive out of order, a window's own in
+ * order, and writes settle in the order they were given.
+ */
+export type PageStore = {
+  /** Writes `events`, every event of blocks `[from, to]`; settles once they are written. */
+  write(events: EmittedEvent[], from: number, to: number): Promise<void>;
+  /** Settles when the store takes another page: a slow store slows fetching, and memory stays bounded. */
+  room(): Promise<void>;
+  /** Fetched events waiting to be written, and the most bytes it holds. */
+  held(): { bytes: number; events: number; max: number };
+};
+
+/**
+ * Windows: running (a page in flight), paused (idle, held back by the memory budget), done but not yet read.
+ * With a store, buffered means fetched and not yet written, and `written` is the block it has everything through.
+ */
 export type FetchGauges = {
   bufferedBytes: number;
   maxBufferedBytes: number;
   bufferedEvents: number;
+  written?: number;
   windows: number;
   running: number;
   paused: number;
@@ -67,6 +88,8 @@ type Window = {
   to: number;
   until: number;
   fetchedUntil: number;
+  /** With a store: every block before this one is written. */
+  written: number;
   token: string | undefined;
   events: EmittedEvent[];
   bytes: number;
@@ -122,24 +145,50 @@ class EventFetcher {
       o.maxBufferedBytes ??
       Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * BUFFER_SHARE * (o.budgetShare ?? 1)));
     this.#perWindow = Math.floor(this.#maxBuffered / o.concurrency);
-    this.#windows = [
-      {
-        from: o.from,
-        to: o.to,
-        until: o.to + 1,
-        fetchedUntil: o.from,
-        token: undefined,
-        events: [],
-        bytes: 0,
-        state: "idle",
-      },
-    ];
-    stats.windows = 1;
+    this.#windows = (o.ranges ?? [[o.from, o.to]]).map(([from, to]) => ({
+      from,
+      to,
+      until: to + 1,
+      fetchedUntil: from,
+      written: from,
+      token: undefined,
+      events: [],
+      bytes: 0,
+      state: "idle",
+    }));
+    stats.windows = this.#windows.length;
     this.#workers = Array.from({ length: o.concurrency }, () => this.#worker());
     o.gauges?.(() => this.#gauges());
   }
 
-  async *stream(): AsyncGenerator<Batch> {
+  stream(): AsyncGenerator<Batch> {
+    return this.#o.store === undefined ? this.#events() : this.#frontier();
+  }
+
+  /** How far the store has every block, each time it moves: no events. */
+  async *#frontier(): AsyncGenerator<Batch> {
+    const windows = this.#windows;
+    let yielded = this.#o.from - 1;
+    try {
+      for (;;) {
+        if (this.#failure !== undefined) throw this.#failure.error;
+        while (windows[0] !== undefined && windows[0].written === windows[0].until) windows.shift();
+        // Blocks before the first window still being fetched or written are in the store, as are gaps between windows.
+        const through = (windows[0]?.written ?? this.#o.to + 1) - 1;
+        if (through > yielded) {
+          yielded = through;
+          yield { events: [], through };
+        } else if (windows.length === 0) break;
+        else await this.#wait();
+      }
+      await Promise.all(this.#workers);
+    } finally {
+      this.#stopped = true;
+      this.#notify();
+    }
+  }
+
+  async *#events(): AsyncGenerator<Batch> {
     const windows = this.#windows;
     try {
       while (windows.length > 0) {
@@ -189,6 +238,7 @@ class EventFetcher {
   }
 
   #mayFetch(w: Window, held = this.#heldThrough(w)): boolean {
+    if (this.#o.store !== undefined) return true;
     const front = w === this.#windows[0];
     if (!front && w.bytes >= this.#perWindow) return false;
     return this.#roomAt(held, front);
@@ -196,6 +246,7 @@ class EventFetcher {
 
   /** Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. */
   #roomAt(held: number, front: boolean): boolean {
+    if (this.#o.store !== undefined) return true;
     const used = this.#buffered + this.#inFlight;
     const reserve = FRONT_RESERVE * this.#maxBuffered;
     if (!front && held >= reserve) return used < reserve;
@@ -241,6 +292,7 @@ class EventFetcher {
       to: w.until - 1,
       until: w.until,
       fetchedUntil: cut,
+      written: cut,
       token: undefined,
       events: [],
       bytes: 0,
@@ -285,6 +337,7 @@ class EventFetcher {
       keys: o.keys,
     };
     for (;;) {
+      if (o.store !== undefined) await o.store.room();
       if (this.#stopped) return;
       if (!this.#mayFetch(w)) {
         w.state = "idle";
@@ -304,7 +357,7 @@ class EventFetcher {
       for (const e of page.events) {
         if (e.block_number! >= w.until) break;
         w.events.push(e);
-        bytes += approxBytes(e);
+        if (o.store === undefined) bytes += approxBytes(e);
         kept++;
       }
       w.bytes += bytes;
@@ -320,6 +373,7 @@ class EventFetcher {
           : Math.min(w.until, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
       this.#recentEvents = this.#recentEvents * DENSITY_DECAY + kept;
       this.#recentBlocks = this.#recentBlocks * DENSITY_DECAY + Math.max(0, at - w.fetchedUntil);
+      if (o.store !== undefined) this.#write(o.store, w, Math.min(at, w.until));
       if (at >= w.until) {
         w.fetchedUntil = w.until;
         w.state = "done";
@@ -331,6 +385,23 @@ class EventFetcher {
       if (this.#waiting > 0) this.#feed();
       this.#notify();
     }
+  }
+
+  /** Writes the window's blocks before `end`, complete now; the events of a block still being fetched stay. */
+  #write(store: PageStore, w: Window, end: number) {
+    if (end <= w.fetchedUntil) return;
+    let n = w.events.length;
+    while (n > 0 && w.events[n - 1]!.block_number! >= end) n--;
+    store.write(w.events.splice(0, n), w.fetchedUntil, end - 1).then(
+      () => {
+        w.written = end;
+        this.#notify();
+      },
+      (error: unknown) => {
+        this.#failure ??= { error };
+        this.#notify();
+      },
+    );
   }
 
   async #worker() {
@@ -359,10 +430,12 @@ class EventFetcher {
 
   #gauges(): FetchGauges {
     const count = (state: Window["state"]) => this.#windows.filter((w) => w.state === state).length;
+    const held = this.#o.store?.held();
     return {
-      bufferedBytes: this.#buffered,
-      maxBufferedBytes: this.#maxBuffered,
-      bufferedEvents: this.#windows.reduce((n, w) => n + w.events.length, 0),
+      bufferedBytes: held?.bytes ?? this.#buffered,
+      maxBufferedBytes: held?.max ?? this.#maxBuffered,
+      bufferedEvents: held?.events ?? this.#windows.reduce((n, w) => n + w.events.length, 0),
+      ...(held && { written: (this.#windows[0]?.written ?? this.#o.to + 1) - 1 }),
       windows: this.#windows.length,
       running: count("running"),
       paused: count("idle"),

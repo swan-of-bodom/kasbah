@@ -395,13 +395,20 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
   line(p.dim("DEBUG"));
   const g = status.fetcher?.();
   if (g !== undefined) {
-    label(
-      "buffer",
-      `${bytes(g.bufferedBytes)} / ${bytes(g.maxBufferedBytes)} · ${compact(g.bufferedEvents)} events ${p.dim(`(${Math.round((g.bufferedBytes / Math.max(1, g.maxBufferedBytes)) * 100)}% of the memory budget)`)}`,
-    );
+    const share = `${Math.round((g.bufferedBytes / Math.max(1, g.maxBufferedBytes)) * 100)}%`;
+    if (g.written === undefined)
+      label(
+        "buffer",
+        `${bytes(g.bufferedBytes)} / ${bytes(g.maxBufferedBytes)} · ${compact(g.bufferedEvents)} events ${p.dim(`(${share} of the memory budget)`)}`,
+      );
+    else
+      label(
+        "writing",
+        `${bytes(g.bufferedBytes)} / ${bytes(g.maxBufferedBytes)} · ${compact(g.bufferedEvents)} events waiting for Postgres ${p.dim(`(${share})`)} · written through ${thousands(g.written)}`,
+      );
     label(
       "windows",
-      `${g.running} running · ${g.paused} paused · ${g.done} done, not read ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
+      `${g.running} running · ${g.paused} paused · ${g.done} done, not ${g.written === undefined ? "read" : "written"} ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
     );
   }
   label(

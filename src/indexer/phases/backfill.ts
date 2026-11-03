@@ -61,7 +61,7 @@ export async function backfill(run: Run): Promise<void> {
   if (!signal.aborted) through = to;
   if (through !== (position.checkpoint ?? first - 1))
     await position.commit({ kind: "batch", through });
-  cache?.untrack();
+  await cache?.drain();
   if (signal.aborted) return;
   const calls = run.client.stats;
   const c = cache?.stats;

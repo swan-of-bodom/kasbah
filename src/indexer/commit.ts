@@ -167,8 +167,7 @@ export class Position {
     const started = performance.now();
     const rows = c.kind === "batch" || c.kind === "block";
     if (rows) store.take();
-    if (c.kind === "children" || c.kind === "batch") cache?.take(c.through);
-    else if (c.kind === "block") cache?.take(-1);
+    if (rows || c.kind === "children") cache?.take();
     try {
       await transaction(pool, async (tx) => {
         await lock.check(tx);

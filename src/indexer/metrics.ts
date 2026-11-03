@@ -78,13 +78,13 @@ export function metricsOf(status: Status): string {
           one(
             "fetch_buffered_bytes",
             "gauge",
-            "Events fetched, not yet handled (estimated).",
+            "Events fetched, not yet handled, or with the event cache not yet written (estimated).",
             f.bufferedBytes,
           ),
           one(
             "fetch_buffer_limit_bytes",
             "gauge",
-            "The fetch buffer's budget.",
+            "The fetch buffer's budget, or with the event cache the most waiting to be written.",
             f.maxBufferedBytes,
           ),
           one(
