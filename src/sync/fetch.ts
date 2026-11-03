@@ -40,6 +40,12 @@ const BUFFER_SHARE = 1 / 5 / (FRONT_ONLY_PAST + 1);
 const FRONT_RESERVE = 0.5;
 /** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
 const MAX_WINDOWS_PER_WORKER = 8;
+/**
+ * With a store, pages per worker fetched past the front window before the windows further on pause: the handlers
+ * read only up to the front, so idle workers then split it instead. On disk, not in memory. Without it, every worker
+ * stayed far ahead and the front advanced one page at a time (Ekubo, 2026-11-03: 13.8M fetched, 2.1M handled).
+ */
+const AHEAD_PAGES_PER_WORKER = 8;
 
 /**
  * Where a fetch writes its pages (the event cache). Pages of different windows arrive out of order, a window's own in
@@ -122,6 +128,7 @@ class EventFetcher {
   readonly #windowEvents: number;
   readonly #maxBuffered: number;
   readonly #perWindow: number;
+  readonly #maxAhead: number;
   readonly #windows: Window[];
   readonly #workers: Promise<void>[];
   #buffered = 0;
@@ -145,6 +152,7 @@ class EventFetcher {
       o.maxBufferedBytes ??
       Math.max(MIN_BUFFERED_BYTES, Math.floor(heapLimit() * BUFFER_SHARE * (o.budgetShare ?? 1)));
     this.#perWindow = Math.floor(this.#maxBuffered / o.concurrency);
+    this.#maxAhead = AHEAD_PAGES_PER_WORKER * o.concurrency * o.chunkSize;
     this.#windows = (o.ranges ?? [[o.from, o.to]]).map(([from, to]) => ({
       from,
       to,
@@ -172,7 +180,12 @@ class EventFetcher {
     try {
       for (;;) {
         if (this.#failure !== undefined) throw this.#failure.error;
-        while (windows[0] !== undefined && windows[0].written === windows[0].until) windows.shift();
+        if (windows[0] !== undefined && windows[0].written === windows[0].until) {
+          while (windows[0] !== undefined && windows[0].written === windows[0].until)
+            windows.shift();
+          // A new front: the windows after it hold less ahead of it.
+          this.#notify();
+        }
         // Blocks before the first window still being fetched or written are in the store, as are gaps between windows.
         const through = (windows[0]?.written ?? this.#o.to + 1) - 1;
         if (through > yielded) {
@@ -238,15 +251,18 @@ class EventFetcher {
   }
 
   #mayFetch(w: Window, held = this.#heldThrough(w)): boolean {
-    if (this.#o.store !== undefined) return true;
     const front = w === this.#windows[0];
+    if (this.#o.store !== undefined) return this.#roomAt(held, front);
     if (!front && w.bytes >= this.#perWindow) return false;
     return this.#roomAt(held, front);
   }
 
-  /** Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. */
+  /**
+   * Whether the budget lets a window fetch when it and the windows before it hold `held` bytes. With a store,
+   * `held` is events fetched past the front window, and only how far ahead a window is counts.
+   */
   #roomAt(held: number, front: boolean): boolean {
-    if (this.#o.store !== undefined) return true;
+    if (this.#o.store !== undefined) return front || held < this.#maxAhead;
     const used = this.#buffered + this.#inFlight;
     const reserve = FRONT_RESERVE * this.#maxBuffered;
     if (!front && held >= reserve) return used < reserve;
@@ -255,10 +271,15 @@ class EventFetcher {
     return held < this.#maxBuffered;
   }
 
+  /** What a window holds toward the budget: with a store, the front's events are the ones being read. */
+  #held(w: Window): number {
+    return this.#o.store !== undefined && w === this.#windows[0] ? 0 : w.bytes;
+  }
+
   #heldThrough(w: Window): number {
     let n = 0;
     for (const x of this.#windows) {
-      n += x.bytes;
+      n += this.#held(x);
       if (x === w) return n;
     }
     return Number.POSITIVE_INFINITY;
@@ -267,7 +288,7 @@ class EventFetcher {
   #pick(): Window | undefined {
     let held = 0;
     for (const w of this.#windows) {
-      held += w.bytes;
+      held += this.#held(w);
       if (w.state === "idle" && this.#mayFetch(w, held)) {
         w.state = "running";
         return w;
@@ -310,13 +331,13 @@ class EventFetcher {
     let held = 0;
     let idle = 0;
     for (const w of windows) {
-      held += w.bytes;
+      held += this.#held(w);
       if (w.state === "idle" && this.#mayFetch(w, held)) idle++;
     }
     held = 0;
     for (let i = 0; i < windows.length && idle < this.#waiting; i++) {
       const w = windows[i]!;
-      held += w.bytes;
+      held += this.#held(w);
       if (!this.#roomAt(held, false)) return;
       if (
         w.state !== "done" &&
@@ -360,7 +381,8 @@ class EventFetcher {
         if (o.store === undefined) bytes += approxBytes(e);
         kept++;
       }
-      w.bytes += bytes;
+      // With a store, a window holds events counted, not bytes: they're written, not kept.
+      w.bytes += o.store === undefined ? bytes : kept;
       this.#buffered += bytes;
       this.#pageBytes =
         stats.pages === 1 ? bytes : this.#pageBytes * DENSITY_DECAY + bytes * (1 - DENSITY_DECAY);

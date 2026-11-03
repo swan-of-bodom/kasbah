@@ -477,3 +477,46 @@ test("with a store, a failed write fails the stream", async () => {
   };
   await expect(run()).rejects.toThrow("disk full");
 });
+
+test("with a store, the front keeps up: halfway through the fetch, about half the events can be read", async () => {
+  // Sparse, then dense, as Ekubo's history: the first cuts, at a sparse density, halve the whole range.
+  const SPARSE = 10_000;
+  const BLOCKS = 50_000;
+  const events: EmittedEvent[] = [];
+  for (let b = 0; b < BLOCKS; b++)
+    for (let i = 0; i < (b < SPARSE ? (b % 40 === 0 ? 1 : 0) : 3); i++)
+      events.push({
+        from_address: "0x1",
+        keys: [],
+        data: [],
+        block_number: b,
+        transaction_hash: "0x0",
+        transaction_index: i,
+        event_index: 0,
+      });
+  const inner = fakeNode(events, BLOCKS).rpc as unknown as {
+    request: (method: string, params: unknown) => Promise<unknown>;
+  };
+  const rpc = {
+    async request(method: string, params: unknown): Promise<unknown> {
+      await new Promise((r) => setTimeout(r, 2));
+      return inner.request(method, params);
+    },
+  };
+  const s = fakeStore(Number.POSITIVE_INFINITY, 0);
+  let throughAtHalf: number | undefined;
+  for await (const batch of eventStream({
+    rpc: rpc as unknown as RpcClient,
+    address: "0x1",
+    from: 0,
+    to: BLOCKS - 1,
+    chunkSize: 64,
+    concurrency: 16,
+    store: s.store,
+  }))
+    if (throughAtHalf === undefined && s.events.length >= events.length / 2)
+      throughAtHalf = batch.through;
+  expect(s.events.length).toBe(events.length);
+  // Half the events lie before block 30k: with the work near the front, the front is not far behind.
+  expect(throughAtHalf).toBeGreaterThan(22_000);
+}, 60_000);

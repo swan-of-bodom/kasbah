@@ -90,7 +90,12 @@ cursor), and the backfill reads events back up to it in batches of 12k (`EventCa
 catches up. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
 the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
 (`WRITE_SHARE`): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
-memory. A page's last block may be partial: its events stay with the window until the next page completes it. A
+memory. Fetching still stays near the front, though not for memory: handlers read only up to it, and with
+nothing paused, every worker stayed in the windows the first cuts made far ahead (at a sparse start's density they
+halve the range) while the front moved one page at a time (Ekubo, 2026-11-03: 13.8M events fetched, 2.1M handled
+at 5 min). So windows with more than 8 pages per worker fetched before them, past the front window, pause
+(`AHEAD_PAGES_PER_WORKER`), and idle workers split the front, as the memory budget made them do before; Ponder
+likewise syncs one interval ahead. A page's last block may be partial: its events stay with the window until the next page completes it. A
 crash leaves only complete blocks covered, and a restart fetches only the blocks not covered (`EventCache.missing`),
 gaps between windows that finished included.
 
