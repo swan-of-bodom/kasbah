@@ -162,6 +162,26 @@ function eventBytes(e: EmittedEvent): number {
   return n;
 }
 
+/**
+ * What a row read back takes once decoded, from its hex text's lengths alone: `eventBytes` walks every felt, and on
+ * the main thread, as busy as it is during a backfill, that walk costs what it cost the writer. A packed felt's hex
+ * is about as long as its decoded text, its length byte standing for the `0x`; the third more per character covers
+ * each felt's 8 bytes in its array (more than enough for a full felt, about right for a small one).
+ */
+function rowBytes(r: {
+  address: string;
+  block_hash: string;
+  tx_hash: string;
+  keys: string;
+  data: string;
+}) {
+  return (
+    166 +
+    2 * (r.address.length + r.block_hash.length + r.tx_hash.length) +
+    3 * (r.keys.length + r.data.length)
+  );
+}
+
 /** Postgres' code for a duplicate key. */
 const UNIQUE_VIOLATION = "23505";
 
@@ -465,7 +485,7 @@ export class EventCache {
       for (const r of rows) {
         const keys = unpackHex(r.keys);
         if (sets.length > 0 && !keysPass(sets, keys)) continue;
-        const e: EmittedEvent = {
+        events.push({
           from_address: feltFromMinimalBytes(r.address),
           keys,
           data: unpackHex(r.data),
@@ -474,9 +494,8 @@ export class EventCache {
           transaction_hash: feltFromMinimalBytes(r.tx_hash),
           transaction_index: r.tx,
           event_index: r.idx,
-        };
-        bytes += eventBytes(e);
-        events.push(e);
+        });
+        bytes += rowBytes(r);
         if (performance.now() - since > YIELD_MS) {
           await yieldToEventLoop();
           since = performance.now();
