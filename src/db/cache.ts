@@ -74,10 +74,41 @@ const SCHEMA_SQL = (s: string) => [
   `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
 ];
 
-const bytea = (hex: string) => `\\\\x${hex}`;
+/** A packed felt's length byte as two hex digits, by byte count (a felt has at most 32). */
+const LENGTH_BYTE = Array.from({ length: 33 }, (_, n) => n.toString(16).padStart(2, "0"));
+
+/**
+ * `feltHex` for COPY lines, with only the prefix and length checked: Postgres rejects any other digit when it decodes
+ * the bytea. Checking every digit here took ~70% of building an event's line.
+ */
+function copyHex(felt: string): string {
+  if (
+    felt.length < 3 ||
+    felt.length > 66 ||
+    felt.charCodeAt(0) !== 48 ||
+    felt.charCodeAt(1) !== 120
+  )
+    throw new Error(`not a felt: ${felt}`);
+  let i = 2;
+  while (i < felt.length && felt.charCodeAt(i) === 48) i++;
+  return (felt.length - i) % 2 === 1 ? `0${felt.slice(i)}` : felt.slice(i);
+}
+
+/** `packFeltsHex` for COPY lines (see `copyHex`). */
+export function packCopyHex(felts: readonly string[]): string {
+  let out = "";
+  for (const f of felts) {
+    const h = copyHex(f);
+    out += LENGTH_BYTE[h.length >> 1] + h;
+  }
+  return out;
+}
 
 const eventLine = (e: EmittedEvent) =>
-  `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t${bytea(feltHex(e.from_address))}\t${bytea(feltHex(e.keys[0] ?? "0x0"))}\t${bytea(feltHex(e.block_hash ?? "0x0"))}\t${bytea(feltHex(e.transaction_hash))}\t${bytea(packFeltsHex(e.keys))}\t${bytea(packFeltsHex(e.data))}\n`;
+  `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t\\\\x${copyHex(e.from_address)}\t\\\\x${copyHex(e.keys[0] ?? "0x0")}\t\\\\x${copyHex(e.block_hash ?? "0x0")}\t\\\\x${copyHex(e.transaction_hash)}\t\\\\x${packCopyHex(e.keys)}\t\\\\x${packCopyHex(e.data)}\n`;
+
+/** Postgres' code for a duplicate key. */
+const UNIQUE_VIOLATION = "23505";
 
 type Pairs = { addresses: string[]; selectors: string[] };
 type CachedTransaction = {
@@ -118,6 +149,8 @@ export class EventCache {
   /** What `take` moved out for the commit in flight, until its `persist`. */
   #taken: Taken | undefined;
   readonly #maxCalls: number;
+  /** A write found events already cached (a range fetched again for a new selector): later ones skip duplicates. */
+  #overlaps = false;
   #callRows = 0;
 
   private constructor(pool: pg.Pool, schema: string, maxCalls: number) {
@@ -430,16 +463,30 @@ export class EventCache {
       await this.#pruneCalls(tx);
     }
     if (taken.ranges.some((r) => r.events.length > 0)) {
-      await tx.query(
-        `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
-      );
       const events = function* () {
         for (const r of taken.ranges) yield* r.events;
       };
-      await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, events(), eventLine);
-      await tx.query(
-        `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
-      );
+      if (!this.#overlaps) {
+        // Straight into the table, a third cheaper than through a temp table, unless some are cached already.
+        await tx.query(`SAVEPOINT kasbah_cache_events`);
+        try {
+          await copyLines(tx, `COPY ${this.#schema}.events FROM STDIN`, events(), eventLine);
+          await tx.query(`RELEASE SAVEPOINT kasbah_cache_events`);
+        } catch (e) {
+          if ((e as { code?: string }).code !== UNIQUE_VIOLATION) throw e;
+          await tx.query(`ROLLBACK TO SAVEPOINT kasbah_cache_events`);
+          this.#overlaps = true;
+        }
+      }
+      if (this.#overlaps) {
+        await tx.query(
+          `CREATE TEMP TABLE IF NOT EXISTS _kasbah_cache_in (LIKE ${this.#schema}.events) ON COMMIT DELETE ROWS`,
+        );
+        await copyLines(tx, `COPY _kasbah_cache_in FROM STDIN`, events(), eventLine);
+        await tx.query(
+          `INSERT INTO ${this.#schema}.events SELECT * FROM _kasbah_cache_in ON CONFLICT DO NOTHING`,
+        );
+      }
     }
     for (const { pairs, from, to } of taken.ranges) {
       const a: Buffer[] = [];

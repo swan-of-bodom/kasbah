@@ -1,6 +1,13 @@
 import pg from "pg";
 import { afterAll, expect, test } from "vitest";
-import { EventCache, feltHex, packFelts, packFeltsHex, unpackFelts } from "../../src/db/cache.ts";
+import {
+  EventCache,
+  feltHex,
+  packCopyHex,
+  packFelts,
+  packFeltsHex,
+  unpackFelts,
+} from "../../src/db/cache.ts";
 import type { BlockHeader, EmittedEvent } from "../../src/rpc/methods.ts";
 import { felt } from "../../src/types/felt.ts";
 import { header } from "../fixtures/header.ts";
@@ -71,8 +78,14 @@ test("felts encode from their hex text as they did through BigInt", () => {
     const n = 1 + (rand() % 64);
     return `0x${Array.from({ length: n }, () => "0123456789abcdefABCDEF"[rand() % 22]).join("")}`;
   });
-  for (const f of [...edge, ...random]) expect(packFeltsHex([f])).toBe(viaBigInt([f]));
+  for (const f of [...edge, ...random]) {
+    expect(packFeltsHex([f])).toBe(viaBigInt([f]));
+    expect(packCopyHex([f]).toLowerCase()).toBe(viaBigInt([f]));
+  }
   expect(packFeltsHex(random)).toBe(viaBigInt(random));
+  expect(packCopyHex(random).toLowerCase()).toBe(viaBigInt(random));
+  expect(() => packCopyHex(["12"])).toThrow(/not a felt/);
+  expect(() => packCopyHex([`0x${"1".repeat(65)}`])).toThrow(/not a felt/);
   expect(packFelts(edge).toString("hex")).toBe(viaBigInt(edge));
   expect(feltHex("0x0")).toBe("");
   expect(() => feltHex("12")).toThrow(/not a felt/);
@@ -216,6 +229,28 @@ test.skipIf(url === undefined)(
     expect(await cache.coveredUntil(["0xa"], ["0x51"], 100)).toBe(350);
     expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 200)).toBe(350);
     expect(await cachedBlocks(cache, ["0xa", "0xb"], 100, 349)).toEqual([150, 250]);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "events fetched again with a new selector are cached once, and the new selector is covered",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    cache.track(["0xa"], ["0x51"], 100, 199);
+    cache.add([event("0xa", 120), event("0xa", 150)]);
+    await commit(cache, 199);
+    // A handler for 0x52 was added: the range is fetched again for both selectors.
+    const added = { ...event("0xa", 130), keys: ["0x52"] };
+    cache.track(["0xa"], ["0x51", "0x52"], 100, 199);
+    cache.add([event("0xa", 120), added, event("0xa", 150)]);
+    await commit(cache, 199);
+    expect(await cache.coveredUntil(["0xa"], ["0x51", "0x52"], 100)).toBe(200);
+    const blocks: number[] = [];
+    for await (const b of cache.read(["0xa"], ["0x51", "0x52"], 100, 199))
+      for (const e of b.events) blocks.push(e.block_number!);
+    expect(blocks).toEqual([120, 130, 150]);
   },
 );
 
