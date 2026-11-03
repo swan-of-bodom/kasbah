@@ -318,7 +318,7 @@ function reportEndpoint(
     factories: r.factories.length,
     rpc: r.rpc.stats,
     rate: () => r.rpc.rate,
-    endpoints: () => (r.rpc.endpoints.length > 1 ? r.rpc.endpoints : []),
+    endpoints: () => r.rpc.endpoints,
     cache: r.cache?.stats,
   });
   status.note({

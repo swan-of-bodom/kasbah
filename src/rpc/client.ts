@@ -47,6 +47,8 @@ export type EndpointStats = {
   failed: number;
   /** Mean time to an answer, recent calls weighted most; 0 before the first. */
   latencyMs: number;
+  /** As `latencyMs`, to the answer's headers only: the endpoint's own time, without reading the body. */
+  headersMs: number;
 };
 
 export type RpcClientOptions = {
@@ -135,6 +137,7 @@ class Endpoint {
   active = 0;
   claimed = 0;
   latencyMs = 0;
+  headersMs = 0;
   calls = 0;
   throttled = 0;
   failed = 0;
@@ -281,6 +284,7 @@ export class RpcClient {
       throttled: e.throttled,
       failed: e.failed,
       latencyMs: Math.round(e.latencyMs),
+      headersMs: Math.round(e.headersMs),
     }));
   }
 
@@ -430,6 +434,7 @@ export class RpcClient {
     this.stats.calls += calls.length;
     endpoint.calls += calls.length;
     for (const c of calls) this.stats.methods[c.method] = (this.stats.methods[c.method] ?? 0) + 1;
+    const sent = Date.now();
     const res = await this.#fetch(endpoint.url, {
       method: "POST",
       headers: { "content-type": "application/json", "accept-encoding": "zstd, br, gzip" },
@@ -439,6 +444,11 @@ export class RpcClient {
           ? AbortSignal.timeout(this.#timeoutMs)
           : AbortSignal.any([AbortSignal.timeout(this.#timeoutMs), this.#signal]),
     });
+    const ms = Date.now() - sent;
+    endpoint.headersMs =
+      endpoint.headersMs === 0
+        ? ms
+        : endpoint.headersMs + (ms - endpoint.headersMs) * LATENCY_WEIGHT;
     onStatus(res.status);
     // fetch decodes br and gzip itself, and zstd too in newer Node 24 (still labelled zstd): the frame magic tells.
     const bytes = new Uint8Array(await res.arrayBuffer());

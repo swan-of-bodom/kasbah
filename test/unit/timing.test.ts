@@ -83,6 +83,27 @@ test("calls are paced at the starting rate: a second's worth at once, the rest a
   expect(node.at.at(-1)! - node.at[0]!).toBeGreaterThan(0);
 });
 
+test("an endpoint's time to headers leaves out reading the body; its latency doesn't", async () => {
+  const fetch = (async (_: unknown, init: RequestInit) => {
+    const { id } = JSON.parse(init.body as string) as { id: number };
+    await sleep(300);
+    const text = JSON.stringify({ jsonrpc: "2.0", id, result: "ok" });
+    const body = new ReadableStream({
+      async pull(c) {
+        await sleep(500);
+        c.enqueue(new TextEncoder().encode(text));
+        c.close();
+      },
+    });
+    return new Response(body, { status: 200 });
+  }) as typeof globalThis.fetch;
+  const rpc = new RpcClient("http://node", { fetch });
+  const done = rpc.request("starknet_chainId", []);
+  await vi.advanceTimersByTimeAsync(1000);
+  await done;
+  expect(rpc.endpoints[0]).toMatchObject({ headersMs: 300, latencyMs: 800 });
+});
+
 test("sleep resolves at its time, not before", async () => {
   let done = false;
   void sleep(1_000).then(() => (done = true));

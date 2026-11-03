@@ -347,7 +347,8 @@ function rpc({ p, label }: Box, status: Status, recent: Recent) {
       ? p.dim("last minute: no throttling, timeouts or failed requests")
       : `last minute: ${minute.map(([k, n]) => (n > 0 ? p.yellow(`${thousands(n)} ${k}`) : p.dim(`0 ${k}`))).join(p.dim(" · "))}`,
   );
-  for (const e of status.endpoints()) {
+  const endpoints = status.endpoints();
+  for (const e of endpoints.length > 1 ? endpoints : []) {
     const trouble = [
       e.throttled > 0 ? p.yellow(`${thousands(e.throttled)} throttled`) : "",
       e.failed > 0 ? p.yellow(`${thousands(e.failed)} failed`) : "",
@@ -411,6 +412,11 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
       `${g.running} running · ${g.paused} paused · ${g.done} done, not ${g.written === undefined ? "read" : "written"} ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
     );
   }
+  for (const e of status.endpoints())
+    label(
+      "answers",
+      `${e.headersMs} ms to headers · ${e.latencyMs} ms with the body read ${p.dim(`(${e.host})`)}`,
+    );
   label(
     "waiting",
     `last 5 s: ${Math.round(recent.waitingEvents * 100)}% for events · ${Math.round(recent.waitingExtras * 100)}% for headers/txs`,

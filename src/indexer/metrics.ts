@@ -166,19 +166,19 @@ export function metricsOf(status: Status): string {
     {
       name: "endpoint_calls_total",
       type: "counter",
-      help: "Calls per endpoint, with several.",
+      help: "Calls per endpoint.",
       samples: status.endpoints().map((e) => [{ endpoint: e.host }, e.calls]),
     },
     {
       name: "endpoint_failed_total",
       type: "counter",
-      help: "Failed calls per endpoint, with several.",
+      help: "Failed calls per endpoint.",
       samples: status.endpoints().map((e) => [{ endpoint: e.host }, e.failed]),
     },
     {
       name: "endpoint_latency_seconds",
       type: "gauge",
-      help: "Recent mean latency per endpoint, with several.",
+      help: "Recent mean latency per endpoint, to the answer read whole.",
       samples: status.endpoints().map((e) => [{ endpoint: e.host }, e.latencyMs / 1000]),
     },
     ...(status.calls === undefined

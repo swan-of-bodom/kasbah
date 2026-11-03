@@ -178,12 +178,49 @@ test("rpc: with several endpoints, a line each with its calls, limit, latency an
     methods: {},
   };
   s.endpoints = () => [
-    { host: "a.example", rate: 200, calls: 1_200, throttled: 0, failed: 0, latencyMs: 90 },
-    { host: "b.example", rate: 10, calls: 80, throttled: 3, failed: 1, latencyMs: 400 },
+    {
+      host: "a.example",
+      rate: 200,
+      calls: 1_200,
+      throttled: 0,
+      failed: 0,
+      latencyMs: 90,
+      headersMs: 60,
+    },
+    {
+      host: "b.example",
+      rate: 10,
+      calls: 80,
+      throttled: 3,
+      failed: 1,
+      latencyMs: 400,
+      headersMs: 380,
+    },
   ];
   const text = inside(render(s, { width: 110 })).join("\n");
   expect(text).toContain("a.example · 1,200 calls · 200/s max · 90 ms");
   expect(text).toContain("b.example · 80 calls · 10/s max · 400 ms · 3 throttled · 1 failed");
+});
+
+test("--debug shows how long the endpoint took to its headers and with the body read; one endpoint gets no host line", () => {
+  const s = new Status();
+  s.enter("backfill");
+  s.setRange(0, 1000, 0);
+  s.debug = true;
+  s.endpoints = () => [
+    {
+      host: "a.example",
+      rate: 200,
+      calls: 1_200,
+      throttled: 0,
+      failed: 0,
+      latencyMs: 2400,
+      headersMs: 750,
+    },
+  ];
+  const text = inside(render(s, { width: 110 })).join("\n");
+  expect(text).toContain("answers  750 ms to headers · 2400 ms with the body read (a.example)");
+  expect(text).not.toContain("1,200 calls · 200/s max");
 });
 
 test("the time bar splits waiting for events from waiting for headers; --debug shows the fetcher", () => {

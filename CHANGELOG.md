@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `--debug` shows how long the RPC took to answer, to its headers and with the body read: the gap is time the
+  main thread was too busy to read it. `/metrics` reports `endpoint_*` with one endpoint too, no longer only with
+  several.
 - The raw-event cache is on by default, as Ponder always keeps what it fetched: a re-index fetches nothing again.
   It costs disk, about 400 bytes per event (tens of GB for a busy contract's whole history); `cache: false` turns
   it off.
