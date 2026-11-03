@@ -1,4 +1,4 @@
-import { expect, test } from "vitest";
+import { expect, test, vi } from "vitest";
 import type { RpcClient } from "../../src/rpc/client.ts";
 import type { EmittedEvent, EventFilter } from "../../src/rpc/methods.ts";
 import {
@@ -520,3 +520,39 @@ test("with a store, the front keeps up: halfway through the fetch, about half th
   // Half the events lie before block 30k: with the work near the front, the front is not far behind.
   expect(throughAtHalf).toBeGreaterThan(22_000);
 }, 60_000);
+
+test("workers' time is split into getEvents, waiting for the store's room and idle, over the last seconds", async () => {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    const node = fakeNode(syntheticEvents(20_000, 7), 2_048);
+    const slow = {
+      async request(method: string, params: unknown) {
+        await new Promise((r) => setTimeout(r, 200));
+        return node.rpc.request(method, params);
+      },
+    } as unknown as RpcClient;
+    let gauges: (() => FetchGauges) | undefined;
+    const s = fakeStore();
+    const run = (async () => {
+      for await (const _ of eventStream({
+        rpc: slow,
+        address: "0x1",
+        from: 0,
+        to: 19_999,
+        chunkSize: 64,
+        concurrency: 2,
+        store: s.store,
+        gauges: (read) => (gauges = read),
+      }));
+    })();
+    expect(gauges!().workerTime).toEqual({ calls: 0, room: 0, idle: 0 });
+    await vi.advanceTimersByTimeAsync(6_000);
+    const t = gauges!().workerTime;
+    expect(t.calls).toBeGreaterThan(0.9);
+    expect(t.room).toBe(0);
+    await vi.advanceTimersByTimeAsync(600_000);
+    await run;
+  } finally {
+    vi.useRealTimers();
+  }
+});

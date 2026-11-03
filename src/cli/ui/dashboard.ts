@@ -407,6 +407,12 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
         "writing",
         `${bytes(g.bufferedBytes)} / ${bytes(g.maxBufferedBytes)} · ${compact(g.bufferedEvents)} events waiting for Postgres ${p.dim(`(${share})`)} · written through ${thousands(g.written)}`,
       );
+    const t = g.workerTime;
+    const pct = (x: number) => `${Math.round(x * 100)}%`;
+    label(
+      "workers",
+      `${pct(t.calls)} in getEvents · ${pct(t.room)} waiting for Postgres · ${pct(t.idle)} idle · ${pct(Math.max(0, 1 - t.calls - t.room - t.idle))} between calls ${p.dim("(last 5 s)")}`,
+    );
     label(
       "windows",
       `${g.running} running · ${g.paused} paused · ${g.done} done, not ${g.written === undefined ? "read" : "written"} ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,

@@ -47,6 +47,9 @@ const MAX_WINDOWS_PER_WORKER = 8;
  */
 const AHEAD_PAGES_PER_WORKER = 8;
 
+/** Span of `workerTime`: a few seconds, so it follows the stretch being fetched without flickering. */
+const TIME_SHARE_MS = 5_000;
+
 /**
  * Where a fetch writes its pages (the event cache). Pages of different windows arrive out of order, a window's own in
  * order, and writes settle in the order they were given.
@@ -75,6 +78,8 @@ export type FetchGauges = {
   done: number;
   workers: number;
   idleWorkers: number;
+  /** Shares of the workers' time over the last few seconds: in `getEvents` (pacing included), waiting for the store's room, idle. */
+  workerTime: { calls: number; room: number; idle: number };
 };
 
 /** Events in chain order. Every block up to `through` is complete. */
@@ -136,6 +141,10 @@ class EventFetcher {
   #inFlight = 0;
   #pageBytes = 0;
   #waiting = 0;
+  /** Worker milliseconds so far: in `getEvents`, waiting for the store's room, idle. */
+  #spent = { calls: 0, room: 0, idle: 0 };
+  #spentMark = { at: performance.now(), calls: 0, room: 0, idle: 0 };
+  #workerTime = { calls: 0, room: 0, idle: 0 };
   #recentEvents = 0;
   #recentBlocks = 0;
   #failure: { error: unknown } | undefined;
@@ -358,7 +367,11 @@ class EventFetcher {
       keys: o.keys,
     };
     for (;;) {
-      if (o.store !== undefined) await o.store.room();
+      if (o.store !== undefined) {
+        const t = performance.now();
+        await o.store.room();
+        this.#spent.room += performance.now() - t;
+      }
       if (this.#stopped) return;
       if (!this.#mayFetch(w)) {
         w.state = "idle";
@@ -367,10 +380,12 @@ class EventFetcher {
       const reserved = this.#pageBytes;
       this.#inFlight += reserved;
       let page: Awaited<ReturnType<typeof getEvents>>;
+      const t = performance.now();
       try {
         page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
       } finally {
         this.#inFlight -= reserved;
+        this.#spent.calls += performance.now() - t;
       }
       stats.pages++;
       let kept = 0;
@@ -435,7 +450,9 @@ class EventFetcher {
       const w = this.#pick();
       if (w === undefined) {
         this.#waiting++;
+        const t = performance.now();
         await this.#wait();
+        this.#spent.idle += performance.now() - t;
         this.#waiting--;
         continue;
       }
@@ -464,7 +481,23 @@ class EventFetcher {
       done: count("done"),
       workers: this.#workers.length,
       idleWorkers: this.#waiting,
+      workerTime: this.#timeShares(),
     };
+  }
+
+  /** `workerTime`, from what the workers spent since a mark at least `TIME_SHARE_MS` old. */
+  #timeShares() {
+    const now = performance.now();
+    const m = this.#spentMark;
+    if (now - m.at < TIME_SHARE_MS) return this.#workerTime;
+    const total = Math.max(1, (now - m.at) * this.#workers.length);
+    this.#workerTime = {
+      calls: (this.#spent.calls - m.calls) / total,
+      room: (this.#spent.room - m.room) / total,
+      idle: (this.#spent.idle - m.idle) / total,
+    };
+    this.#spentMark = { at: now, ...this.#spent };
+    return this.#workerTime;
   }
 }
 

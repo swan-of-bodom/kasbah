@@ -239,12 +239,16 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
     done: 4,
     workers: 32,
     idleWorkers: 2,
+    workerTime: { calls: 0.25, room: 0.1, idle: 0.05 },
   });
   const text = inside(render(s, { width: 110 })).join("\n");
   expect(text).toMatch(/events 10% {2}■ headers\/txs 80% {2}■ handlers 5%/);
   expect(text).toContain("bound by fetching headers and transactions");
   expect(text).toMatch(/buffer +50 MB \/ 200 MB · 41\.0k events \(25% of the memory budget\)/);
   expect(text).toContain("30 running · 6 paused · 4 done, not read (40) · 2 of 32 workers idle");
+  expect(text).toContain(
+    "25% in getEvents · 10% waiting for Postgres · 5% idle · 60% between calls (last 5 s)",
+  );
 });
 
 test("live: the delay behind the chain, split between the node and us", () => {
