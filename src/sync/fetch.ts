@@ -78,8 +78,8 @@ export type FetchGauges = {
   done: number;
   workers: number;
   idleWorkers: number;
-  /** Shares of the workers' time over the last few seconds: in `getEvents` (pacing included), waiting for the store's room, idle. */
-  workerTime: { calls: number; room: number; idle: number };
+  /** Shares of the workers' time over the last few seconds: in `getEvents` (pacing included), waiting for the store's room, idle; none before the first few seconds are measured. */
+  workerTime: { calls: number; room: number; idle: number } | undefined;
 };
 
 /** Events in chain order. Every block up to `through` is complete. */
@@ -144,7 +144,7 @@ class EventFetcher {
   /** Worker milliseconds so far: in `getEvents`, waiting for the store's room, idle. */
   #spent = { calls: 0, room: 0, idle: 0 };
   #spentMark = { at: performance.now(), calls: 0, room: 0, idle: 0 };
-  #workerTime = { calls: 0, room: 0, idle: 0 };
+  #workerTime: FetchGauges["workerTime"];
   #recentEvents = 0;
   #recentBlocks = 0;
   #failure: { error: unknown } | undefined;

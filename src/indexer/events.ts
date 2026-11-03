@@ -46,7 +46,7 @@ export async function* events(
     missing.length === 0
       ? undefined
       : fetchThread(
-          { rpc, status, cache, database: config.database },
+          { rpc, status, cache, database: config.database, signal: run.signal },
           { addresses, keys, from, to, ranges: missing, chunkSize: endpoint.maxChunk, concurrency },
         );
   let next = from;

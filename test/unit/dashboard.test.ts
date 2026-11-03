@@ -223,6 +223,30 @@ test("--debug shows how long the endpoint took to its headers and with the body 
   expect(text).not.toContain("1,200 calls · 200/s max");
 });
 
+test("--debug shows the recent read-back queries, and the workers' time only once it's measured", () => {
+  const s = new Status();
+  s.enter("backfill");
+  s.setRange(0, 1000, 0);
+  s.debug = true;
+  s.reads = () => ({ count: 42, slowestMs: 12.4 });
+  s.fetcher = () => ({
+    bufferedBytes: 0,
+    maxBufferedBytes: 1,
+    bufferedEvents: 0,
+    written: 10,
+    windows: 1,
+    running: 1,
+    paused: 0,
+    done: 0,
+    workers: 1,
+    idleWorkers: 0,
+    workerTime: undefined,
+  });
+  const text = inside(render(s, { width: 110 })).join("\n");
+  expect(text).toContain("reads    42 read-back queries · slowest 12 ms (last 5 s)");
+  expect(text).not.toContain("in getEvents");
+});
+
 test("the time bar splits waiting for events from waiting for headers; --debug shows the fetcher", () => {
   const s = new Status();
   s.enter("backfill");

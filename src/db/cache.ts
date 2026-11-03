@@ -69,6 +69,16 @@ const WRITE_SHARE = 1 / 5;
 const MIN_WRITE_BYTES = 8 << 20;
 /** Events per batch read back for the handlers. */
 const READ_LIMIT = 12_000;
+/**
+ * Blocks the first read-back query spans; each next one spans what held about `READ_LIMIT` events. A query over all
+ * that is written ran 7.7 s instead of milliseconds while the fetch thread was 600k blocks ahead (Ekubo, 2026-11-03):
+ * Postgres took a plan that collects the whole range before it sorts. Bounded, no plan touches far more than a batch.
+ */
+const READ_FIRST_BLOCKS = 1_000;
+/** The most a read's span grows from one query to the next, so a dense stretch after a sparse one costs one big query at most. */
+const READ_GROWTH = 4;
+/** Span of `recentReads`. */
+const READ_WINDOW_MS = 5_000;
 /** Share of `maxCalls` left after pruning, so the next inserts don't prune again at once. */
 const CALLS_KEPT = 0.9;
 
@@ -188,6 +198,8 @@ export class EventCache {
   /** The writes under way; it never rejects (each page's promise does). */
   #writing: Promise<void> | undefined;
   #roomWakers: (() => void)[] = [];
+  #reads = { at: performance.now(), count: 0, slowestMs: 0 };
+  #readsShown = { count: 0, slowestMs: 0 };
 
   readonly chainId: string;
 
@@ -366,11 +378,19 @@ export class EventCache {
           [lo, hi, a, s, n],
         )
       ).rows;
+    let span = READ_FIRST_BLOCKS;
     const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
-      const rows = await query(lo, to, limit);
-      if (rows.length < limit) return { rows, through: to };
+      const hi = Math.min(to, lo + span - 1);
+      const rows = await this.#timed(query(lo, hi, limit));
+      if (rows.length < limit) {
+        span = Math.ceil(span * Math.min(READ_GROWTH, limit / Math.max(1, rows.length)));
+        return { rows, through: hi };
+      }
       const last = rows.at(-1)!.block;
-      if (rows[0]!.block === last) return { rows: await query(last, last, null), through: last };
+      // From the density at the batch's end, where the next one starts: its start may lie in a sparse stretch.
+      span = Math.max(1, 2 * (last - rows[rows.length >> 1]!.block));
+      if (rows[0]!.block === last)
+        return { rows: await this.#timed(query(last, last, null)), through: last };
       return { rows: rows.filter((r) => r.block < last), through: last - 1 };
     };
     let next = page(from);
@@ -400,6 +420,29 @@ export class EventCache {
       yield { events, through };
       if (through >= to) return;
     }
+  }
+
+  async #timed<T>(query: Promise<T>): Promise<T> {
+    const started = performance.now();
+    const result = await query;
+    const ms = performance.now() - started;
+    this.#rollReads();
+    this.#reads.count++;
+    this.#reads.slowestMs = Math.max(this.#reads.slowestMs, ms);
+    return result;
+  }
+
+  #rollReads() {
+    const now = performance.now();
+    if (now - this.#reads.at < READ_WINDOW_MS) return;
+    this.#readsShown = { count: this.#reads.count, slowestMs: this.#reads.slowestMs };
+    this.#reads = { at: now, count: 0, slowestMs: 0 };
+  }
+
+  /** Read-back queries in the last few seconds, and the slowest's milliseconds: `--debug` shows them. */
+  recentReads(): { count: number; slowestMs: number } {
+    this.#rollReads();
+    return this.#readsShown;
   }
 
   /**

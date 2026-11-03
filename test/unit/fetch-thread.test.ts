@@ -170,3 +170,26 @@ test.skipIf(url === undefined)(
     expect(h.rpc.lend(1).endpoints[0]!.maxRequestsPerSecond).toBe(400);
   },
 );
+
+test.skipIf(url === undefined)(
+  "a stopped run ends the thread at once, and its stream ends with what was written, without an error",
+  async () => {
+    const n = await node({ delayMs: 50 });
+    const h = await host(n.url);
+    const stop = new AbortController();
+    let last = -1;
+    const started = performance.now();
+    for await (const batch of fetchThread(
+      { ...h, signal: stop.signal },
+      { ...job, ranges: [[0, BLOCKS - 1]], concurrency: 1 },
+    )) {
+      last = batch.through;
+      stop.abort();
+    }
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(last).toBeLessThan(BLOCKS - 1);
+    const calls = n.calls();
+    await new Promise((r) => setTimeout(r, 300));
+    expect(n.calls()).toBeLessThanOrEqual(calls + 1);
+  },
+);

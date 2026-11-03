@@ -320,6 +320,7 @@ function reportEndpoint(
     rate: () => r.rpc.rate,
     endpoints: () => r.rpc.endpoints,
     cache: r.cache?.stats,
+    reads: r.cache && (() => r.cache!.recentReads()),
   });
   status.note({
     kind: "endpoint",

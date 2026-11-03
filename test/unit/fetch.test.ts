@@ -545,9 +545,9 @@ test("workers' time is split into getEvents, waiting for the store's room and id
         gauges: (read) => (gauges = read),
       }));
     })();
-    expect(gauges!().workerTime).toEqual({ calls: 0, room: 0, idle: 0 });
+    expect(gauges!().workerTime).toBeUndefined();
     await vi.advanceTimersByTimeAsync(6_000);
-    const t = gauges!().workerTime;
+    const t = gauges!().workerTime!;
     expect(t.calls).toBeGreaterThan(0.9);
     expect(t.room).toBe(0);
     await vi.advanceTimersByTimeAsync(600_000);

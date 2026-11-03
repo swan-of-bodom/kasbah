@@ -154,6 +154,39 @@ test.skipIf(url === undefined)(
   },
 );
 
+test.skipIf(url === undefined)(
+  "each read-back query spans about a batch of events, not everything written past it",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const ranges: [number, number][] = [];
+    const reader = new pg.Pool({ connectionString: url, max: 1 });
+    const query = reader.query.bind(reader) as (text: string, values?: unknown[]) => unknown;
+    (reader as unknown as { query: typeof query }).query = (text, values) => {
+      if (text.includes("ORDER BY block, tx, idx LIMIT"))
+        ranges.push([values![0] as number, values![1] as number]);
+      return query(text, values);
+    };
+    const events: EmittedEvent[] = [];
+    // Sparse, dense, sparse again: a read must not span the dense stretch in every query.
+    for (let b = 0; b < 30_000; b++) {
+      const n = b >= 10_000 && b < 12_000 ? 10 : b % 100 === 0 ? 1 : 0;
+      for (let i = 0; i < n; i++) events.push({ ...event("0xa", b), transaction_index: i });
+    }
+    await (await EventCache.open(pool, CHAIN)).writer(["0xa"], ["0x51"]).write(events, 0, 29_999);
+    const cache = await EventCache.open(reader, CHAIN);
+    const seen: EmittedEvent[] = [];
+    for await (const b of cache.read(["0xa"], ["0x51"], 0, 29_999, 100)) seen.push(...b.events);
+    await reader.end();
+    expect(seen).toEqual(events);
+    const inRange = ([lo, hi]: [number, number]) =>
+      events.filter((e) => e.block_number! >= lo && e.block_number! <= hi).length;
+    // Spanning to the end each time, the queries would cover ~100× the events.
+    expect(ranges.reduce((n, r) => n + inRange(r), 0)).toBeLessThan(3 * events.length);
+    expect(cache.recentReads().count + ranges.length).toBeGreaterThan(0);
+  },
+);
+
 const event = (address: string, block: number): EmittedEvent => ({
   from_address: address,
   keys: ["0x51"],

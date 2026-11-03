@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Reading events back from the cache asks Postgres for about a batch's blocks at a time: a query reaching to
+  everything the fetch thread had written took 7.7 s instead of milliseconds, and handling stalled. A stop now ends
+  the fetch thread at once. `--debug` shows the read-back queries' slowest time.
 - A first sync fetches in a thread of its own: reading RPC answers and writing them to the event cache no longer
   waits for handlers on the main thread, nor they for it. At a 512 MB heap on blocks 620k–630k, the main thread used
   a third less CPU and its longest stop went from 289 ms to 137 ms (peak RSS 827 → 945 MB: the thread's heap, a

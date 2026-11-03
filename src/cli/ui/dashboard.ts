@@ -409,10 +409,11 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
       );
     const t = g.workerTime;
     const pct = (x: number) => `${Math.round(x * 100)}%`;
-    label(
-      "workers",
-      `${pct(t.calls)} in getEvents · ${pct(t.room)} waiting for Postgres · ${pct(t.idle)} idle · ${pct(Math.max(0, 1 - t.calls - t.room - t.idle))} between calls ${p.dim("(last 5 s)")}`,
-    );
+    if (t !== undefined)
+      label(
+        "workers",
+        `${pct(t.calls)} in getEvents · ${pct(t.room)} waiting for Postgres · ${pct(t.idle)} idle · ${pct(Math.max(0, 1 - t.calls - t.room - t.idle))} between calls ${p.dim("(last 5 s)")}`,
+      );
     label(
       "windows",
       `${g.running} running · ${g.paused} paused · ${g.done} done, not ${g.written === undefined ? "read" : "written"} ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
@@ -422,6 +423,12 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
     label(
       "answers",
       `${e.headersMs} ms to headers · ${e.latencyMs} ms with the body read ${p.dim(`(${e.host})`)}`,
+    );
+  const reads = status.reads?.();
+  if (reads !== undefined && (reads.count > 0 || status.fetcher !== undefined))
+    label(
+      "reads",
+      `${reads.count} read-back queries · slowest ${Math.round(reads.slowestMs)} ms ${p.dim("(last 5 s)")}`,
     );
   label(
     "waiting",

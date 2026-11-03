@@ -60,7 +60,14 @@ const WORKER = new URL(
  * the main client's, so the dashboard and `/metrics` show both.
  */
 export async function* fetchThread(
-  host: { rpc: RpcClient; status: Status; cache: EventCache; database: string },
+  host: {
+    rpc: RpcClient;
+    status: Status;
+    cache: EventCache;
+    database: string;
+    /** Ends the thread at once, its writes cut short: the stream ends with what's written. */
+    signal?: AbortSignal;
+  },
   job: Omit<ThreadJob, "endpoints" | "database" | "chainId">,
 ): AsyncGenerator<Batch> {
   const { rpc, status, cache } = host;
@@ -99,6 +106,13 @@ export async function* fetchThread(
       };
     });
   status.rate = () => rpc.rate + (theirs?.rate ?? 0);
+  const stop = () => {
+    ended ??= "done";
+    void worker.terminate();
+    wake?.();
+  };
+  host.signal?.addEventListener("abort", stop, { once: true });
+  if (host.signal?.aborted) stop();
   worker.on("message", (m: ThreadMessage) => {
     if (m.kind === "through") through = m.through;
     else if (m.kind === "stats") {
@@ -132,6 +146,7 @@ export async function* fetchThread(
       else await new Promise<void>((r) => (wake = r));
     }
   } finally {
+    host.signal?.removeEventListener("abort", stop);
     await worker.terminate();
     lent.repay();
     status.endpoints = endpoints;

@@ -87,7 +87,9 @@ that half: the other half is kept for the blocks handled next. Counting events i
 whose events aren't written. Pages waiting while one write runs go together in the next, so a write grows with the
 backlog. The fetcher keeps the block through which every block is written (the front window's, Ponder's sync
 cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
-catches up. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
+catches up. Each query spans the blocks that held about a batch just before (`READ_FIRST_BLOCKS` to start), never
+everything written: with the fetch thread 600k blocks ahead, a query to the front ran 7.7 s instead of milliseconds
+(Postgres collected the whole range before sorting it), and handlers stalled. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
 the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
 (`WRITE_SHARE`, a fifth of the fetch thread's): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
 memory. Fetching still stays near the front, though not for memory: handlers read only up to it, and with

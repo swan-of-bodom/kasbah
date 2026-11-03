@@ -178,6 +178,8 @@ export class Status {
   /** Each RPC endpoint's rate, calls, failures and answer times. */
   endpoints = (): EndpointStats[] => [];
   cache?: { cachedEvents: number; fetchedEvents: number };
+  /** The event cache's recent read-back queries, for `--debug`. */
+  reads?: () => { count: number; slowestMs: number };
   calls?: { calls: number; cached: number };
   /** `--debug`: the fetcher's state and event loop delay on the screen. */
   debug = false;
