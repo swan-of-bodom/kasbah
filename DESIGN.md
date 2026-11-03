@@ -80,7 +80,7 @@ reorg, are fetched straight into memory (`src/sync/live.ts`).
 whose events aren't written. Pages waiting while one write runs go together in the next, so a write grows with the
 backlog. The fetcher keeps the block through which every block is written (the front window's, Ponder's sync
 cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
-catches up. A batch is also capped in bytes, a 64th of the heap (`READ_SHARE`), from the size of the events just
+catches up. A batch is also capped in bytes, a 64th of the heap (`READ_SHARE`), from the size of the events last
 read: about four are alive at once (the next one's rows, one decoding, one prepared, one handled), and 12k events
 of 30 felts each ran a 256 MB heap out of memory. Ekubo's 12k fit under the cap from a 1 GB heap up. Each query spans the blocks that held about a batch just before (`READ_FIRST_BLOCKS` to start), never
 everything written: with the fetch thread 600k blocks ahead, a query to the front ran 7.7 s instead of milliseconds

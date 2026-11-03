@@ -76,7 +76,11 @@ const READ_LIMIT = 12_000;
  * before `READ_LIMIT` does: 30-felt events ran a 256 MB heap out of memory at 12k per batch.
  */
 const READ_SHARE = 1 / 64;
-/** Events in the first read-back batch, before their size is known. */
+/**
+ * Events in the cache's first read-back batch, before their size is known. Only the first: a backfill reads from
+ * where it is to the fetch thread's front each time that moves, several times a second, and every such read starting
+ * at 1,000 cost Ekubo 7–9 s to block 652k (4%, 2 runs each, 2026-11-03).
+ */
 const READ_FIRST_EVENTS = 1_000;
 /**
  * Blocks the first read-back query spans; each next one spans what held about `READ_LIMIT` events. A query over all
@@ -266,6 +270,8 @@ export class EventCache {
   #roomWakers: (() => void)[] = [];
   #reads = { at: performance.now(), count: 0, slowestMs: 0 };
   #readsShown = { count: 0, slowestMs: 0 };
+  /** Decoded bytes per event in the last batch read back, which sizes the next read's batches. */
+  #eventSize: number | undefined;
 
   readonly chainId: string;
 
@@ -458,7 +464,9 @@ export class EventCache {
       ).rows;
     let span = READ_FIRST_BLOCKS;
     const budget = heapLimit() * READ_SHARE;
-    let most = Math.min(limit, READ_FIRST_EVENTS);
+    const sized = (perEvent: number) => Math.max(1, Math.min(limit, Math.floor(budget / perEvent)));
+    let most =
+      this.#eventSize === undefined ? Math.min(limit, READ_FIRST_EVENTS) : sized(this.#eventSize);
     const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
       const hi = Math.min(to, lo + span - 1);
       const n = most;
@@ -501,8 +509,10 @@ export class EventCache {
           since = performance.now();
         }
       }
-      if (events.length > 0)
-        most = Math.max(1, Math.min(limit, Math.floor(budget / (bytes / events.length))));
+      if (events.length > 0) {
+        this.#eventSize = bytes / events.length;
+        most = sized(this.#eventSize);
+      }
       if (cached) this.stats.cachedEvents += events.length;
       yield { events, through };
       if (through >= to) return;

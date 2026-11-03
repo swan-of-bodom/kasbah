@@ -187,6 +187,34 @@ test.skipIf(url === undefined)(
   },
 );
 
+test.skipIf(url === undefined)(
+  "only the cache's first read starts with a small batch: the next ones start at the size it measured",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const limits: number[] = [];
+    const reader = new pg.Pool({ connectionString: url, max: 1 });
+    const query = reader.query.bind(reader) as (text: string, values?: unknown[]) => unknown;
+    (reader as unknown as { query: typeof query }).query = (text, values) => {
+      if (text.includes("ORDER BY block, tx, idx LIMIT")) limits.push(values![4] as number);
+      return query(text, values);
+    };
+    const events: EmittedEvent[] = [];
+    for (let b = 0; b < 400; b++)
+      for (let i = 0; i < 10; i++) events.push({ ...event("0xa", b), transaction_index: i });
+    await (await EventCache.open(pool, CHAIN)).writer(["0xa"], ["0x51"]).write(events, 0, 399);
+    const cache = await EventCache.open(reader, CHAIN);
+    const read = async (from: number, to: number) => {
+      limits.length = 0;
+      for await (const _ of cache.read(["0xa"], ["0x51"], from, to, 2_000));
+      return [...limits];
+    };
+    expect((await read(0, 199))[0]).toBe(1_000);
+    expect((await read(200, 399))[0]).toBe(2_000);
+    await reader.end();
+  },
+);
+
 const event = (address: string, block: number): EmittedEvent => ({
   from_address: address,
   keys: ["0x51"],
