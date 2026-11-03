@@ -10,6 +10,7 @@ import {
 } from "../../src/db/cache.ts";
 import type { BlockHeader, EmittedEvent } from "../../src/rpc/methods.ts";
 import { felt } from "../../src/types/felt.ts";
+import { approxBytes } from "../../src/utils/memory.ts";
 import { header } from "../fixtures/header.ts";
 
 const url = process.env.DATABASE_URL;
@@ -199,6 +200,27 @@ test.skipIf(url === undefined)(
     expect(await cache.coveredUntil(["0xa", "0xb"], ["0x51"], 100)).toBe(250);
     expect(await cachedBlocks(cache, ["0xa", "0xb"], 100, 349)).toEqual([150, 310, 320]);
     expect(cache.stats.fetchedEvents).toBe(3);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "events waiting to be written are sized as approxBytes sizes them",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    const w = cache.writer(["0xa"], ["0x51"]);
+    const events = [
+      { ...event("0xa", 110), keys: ["0x51", "0x7e57"], data: ["0x1", `0x${"f".repeat(63)}`] },
+      { ...event("0xa", 120), block_hash: undefined },
+    ];
+    const written = w.write(events, 100, 199);
+    expect(w.held()).toMatchObject({
+      events: 2,
+      bytes: approxBytes(events[0]) + approxBytes(events[1]),
+    });
+    await written;
+    expect(w.held()).toMatchObject({ events: 0, bytes: 0 });
   },
 );
 

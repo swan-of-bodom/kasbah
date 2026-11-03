@@ -6,7 +6,8 @@ import type { Batch, PageStore } from "../sync/fetch.ts";
 import { type Block, blockOf } from "../types/block.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
-import { approxBytes, heapLimit } from "../utils/memory.ts";
+import { heapLimit } from "../utils/memory.ts";
+import { YIELD_MS, yieldToEventLoop } from "../utils/time.ts";
 import { copyLines } from "./copy.ts";
 import { quote } from "./table.ts";
 import { transaction } from "./transaction.ts";
@@ -116,6 +117,19 @@ export function packCopyHex(felts: readonly string[]): string {
 
 const eventLine = (e: EmittedEvent) =>
   `${e.block_number}\t${e.transaction_index}\t${e.event_index}\t\\\\x${copyHex(e.from_address)}\t\\\\x${copyHex(e.keys[0] ?? "0x0")}\t\\\\x${copyHex(e.block_hash ?? "0x0")}\t\\\\x${copyHex(e.transaction_hash)}\t\\\\x${packCopyHex(e.keys)}\t\\\\x${packCopyHex(e.data)}\n`;
+
+/**
+ * `approxBytes` of a fetched event, without its walk over every property: summing every page's events that way took
+ * ~8% of the main thread while it was busiest (Ekubo, 2026-11-03). Object and fields 88, three numbers 24, two
+ * arrays 48, then each string twice its length and each felt in an array 8 more.
+ */
+function eventBytes(e: EmittedEvent): number {
+  let n = 160 + 2 * (e.from_address.length + e.transaction_hash.length);
+  n += e.block_hash === undefined ? 8 : 2 * e.block_hash.length;
+  for (const k of e.keys) n += 2 * k.length + 8;
+  for (const d of e.data) n += 2 * d.length + 8;
+  return n;
+}
 
 /** Postgres' code for a duplicate key. */
 const UNIQUE_VIOLATION = "23505";
@@ -354,16 +368,25 @@ export class EventCache {
     for (;;) {
       const { rows, through } = await next;
       if (through < to) next = page(through + 1);
-      const events: EmittedEvent[] = rows.map((r) => ({
-        from_address: feltFromMinimalBytes(r.address),
-        keys: unpackHex(r.keys),
-        data: unpackHex(r.data),
-        block_number: r.block,
-        block_hash: feltFromMinimalBytes(r.block_hash),
-        transaction_hash: feltFromMinimalBytes(r.tx_hash),
-        transaction_index: r.tx,
-        event_index: r.idx,
-      }));
+      // A batch took up to ~170 ms to decode (Ekubo): a turn for the event loop meanwhile, as handlers give one.
+      const events: EmittedEvent[] = [];
+      let since = performance.now();
+      for (const r of rows) {
+        events.push({
+          from_address: feltFromMinimalBytes(r.address),
+          keys: unpackHex(r.keys),
+          data: unpackHex(r.data),
+          block_number: r.block,
+          block_hash: feltFromMinimalBytes(r.block_hash),
+          transaction_hash: feltFromMinimalBytes(r.tx_hash),
+          transaction_index: r.tx,
+          event_index: r.idx,
+        });
+        if (performance.now() - since > YIELD_MS) {
+          await yieldToEventLoop();
+          since = performance.now();
+        }
+      }
       if (cached) this.stats.cachedEvents += events.length;
       yield { events, through };
       if (through >= to) return;
@@ -381,7 +404,7 @@ export class EventCache {
       write: (events, from, to) =>
         new Promise<void>((written, failed) => {
           let bytes = 0;
-          for (const e of events) bytes += approxBytes(e);
+          for (const e of events) bytes += eventBytes(e);
           this.#writes.push({ pairs, events, from, to, bytes, written, failed });
           this.#held.bytes += bytes;
           this.#held.events += events.length;
