@@ -219,6 +219,16 @@ export function splitTopLevel(s: string): string[] {
   return parts;
 }
 
+/** A tuple's parts as members, if every part is named (`(amount: u128, fee: u64)`, Cairo 0); else undefined. */
+function namedMembers(parts: string[]): { name: string; type: string }[] | undefined {
+  if (parts.length === 0 || !parts.every((p) => p.includes(":") && !p.includes("::")))
+    return undefined;
+  return parts.map((p) => {
+    const at = p.indexOf(":");
+    return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
+  });
+}
+
 function generic(type: string, prefix: string): string | undefined {
   return type.startsWith(`${prefix}::<`) && type.endsWith(">")
     ? type.slice(prefix.length + 3, -1)
@@ -371,15 +381,8 @@ export class Codec {
 
     if (type.startsWith("(") && type.endsWith(")")) {
       const parts = splitTopLevel(type.slice(1, -1));
-      const named = parts.length > 0 && parts.every((p) => p.includes(":") && !p.includes("::"));
-      if (named) {
-        return this.membersWriter(
-          parts.map((p) => {
-            const at = p.indexOf(":");
-            return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
-          }),
-        );
-      }
+      const named = namedMembers(parts);
+      if (named !== undefined) return this.membersWriter(named);
       const items = parts.map((p) => this.writer(p));
       return (v, out) => {
         if (!Array.isArray(v) || v.length !== items.length)
@@ -432,15 +435,8 @@ export class Codec {
 
     if (type.startsWith("(") && type.endsWith(")")) {
       const parts = splitTopLevel(type.slice(1, -1));
-      const named = parts.length > 0 && parts.every((p) => p.includes(":") && !p.includes("::"));
-      if (named) {
-        return this.members(
-          parts.map((p) => {
-            const at = p.indexOf(":");
-            return { name: p.slice(0, at).trim(), type: p.slice(at + 1).trim() };
-          }),
-        );
-      }
+      const named = namedMembers(parts);
+      if (named !== undefined) return this.members(named);
       return tuple(parts.map((p) => this.reader(p)));
     }
 

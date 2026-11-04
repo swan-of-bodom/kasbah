@@ -55,6 +55,7 @@ test("every type written then read gives the value back", () => {
     ["core::option::Option::<core::integer::u16>", null],
     ["core::result::Result::<core::integer::u8, core::felt252>", { err: 4n }],
     ["(core::integer::u8, core::bool)", [3, false]],
+    ["(x : felt, y : felt)", { x: 1n, y: 2n }],
     ["t::Point", { x: -1, y: 2n ** 200n }],
     ["t::Side", "Right"],
     [
