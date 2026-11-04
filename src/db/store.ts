@@ -6,8 +6,9 @@ import { ConfigError } from "../config/errors.ts";
 import { chunks } from "../utils/chunks.ts";
 import { errorCode } from "../utils/errors.ts";
 import { approxBytes, heapLimit } from "../utils/memory.ts";
+import { quote } from "../utils/quote.ts";
 import { copyRows } from "./copy.ts";
-import { primaryKeySql, quote, type Row, storedJson, type TableInfo, tableInfo } from "./table.ts";
+import { primaryKeySql, type Row, storedJson, type TableInfo, tableInfo } from "./table.ts";
 import { transaction } from "./transaction.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */

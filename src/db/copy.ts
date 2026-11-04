@@ -4,8 +4,9 @@ import { is, SQL } from "drizzle-orm";
 import type { PoolClient } from "pg";
 import { from as copyFrom } from "pg-copy-streams";
 import { ConfigError } from "../config/errors.ts";
+import { quote } from "../utils/quote.ts";
 import { YIELD_MS, yieldToEventLoop } from "../utils/time.ts";
-import { quote, type Row, type TableInfo } from "./table.ts";
+import type { Row, TableInfo } from "./table.ts";
 
 const special = /[\\\n\r\t]/;
 /** Most values have nothing to escape: a test is cheaper than a replace that finds nothing. */

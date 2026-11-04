@@ -1,6 +1,6 @@
 import type pg from "pg";
-import { quote } from "../db/table.ts";
 import { transaction } from "../db/transaction.ts";
+import { quote } from "../utils/quote.ts";
 import { LOCK } from "./lock.ts";
 
 /** An app schema in a database, as `kasbah list` shows it and `kasbah prune` decides on it. */

@@ -10,9 +10,9 @@ import { canonical } from "../types/felt.ts";
 import type { RawReceipt, RawTransaction } from "../types/transaction.ts";
 import { chunks } from "../utils/chunks.ts";
 import { heapLimit } from "../utils/memory.ts";
+import { quote } from "../utils/quote.ts";
 import { YIELD_MS, yieldToEventLoop } from "../utils/time.ts";
 import { copyLines } from "./copy.ts";
-import { quote } from "./table.ts";
 import { transaction } from "./transaction.ts";
 
 export function feltHex(felt: string): string {

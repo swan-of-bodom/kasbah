@@ -1,6 +1,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { getTableConfig, type PgColumn, type PgTable } from "drizzle-orm/pg-core";
 import { ConfigError } from "../config/errors.ts";
+import { quote } from "../utils/quote.ts";
 
 export type Row = Record<string, unknown>;
 
@@ -15,8 +16,6 @@ export type TableInfo = {
   json: string[];
   keyOf: (row: Row) => string;
 };
-
-const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;
 
 export function tableInfo(table: PgTable): TableInfo {
   const config = getTableConfig(table);
@@ -134,5 +133,3 @@ export function indexSql(info: TableInfo): string[] {
   }
   return out;
 }
-
-export { quote };

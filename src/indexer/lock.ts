@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto";
 import type pg from "pg";
 import { ConfigError } from "../config/errors.ts";
-import { quote } from "../db/table.ts";
 import { transaction } from "../db/transaction.ts";
 import { Stopped } from "../utils/errors.ts";
+import { quote } from "../utils/quote.ts";
 import { sleep } from "../utils/sleep.ts";
 import type { Status } from "./status.ts";
 

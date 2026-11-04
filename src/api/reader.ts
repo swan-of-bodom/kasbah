@@ -2,8 +2,9 @@ import { createHmac } from "node:crypto";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import pg from "pg";
 import { RetryingPool } from "../db/pool.ts";
-import { quote, type TableInfo } from "../db/table.ts";
+import type { TableInfo } from "../db/table.ts";
 import { errorCode } from "../utils/errors.ts";
+import { quote } from "../utils/quote.ts";
 
 export type ReaderOptions = {
   /** Connection the indexer writes with; used once to set up the reader role. */
