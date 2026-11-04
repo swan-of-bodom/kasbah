@@ -13,16 +13,18 @@ import { expect, test } from "vitest";
 import { pgTable as kasbahTable } from "../../src/config/schema.ts";
 import { createTableSql, indexSql, primaryKeySql, tableInfo } from "../../src/db/table.ts";
 
-test("key columns are NOT NULL without the key too, composite keys included", () => {
+test("key columns are NOT NULL without the key too, composite keys included, and autovacuum waits for the key", () => {
   const t = pgTable("pairs", { a: text(), b: integer(), note: text() }, (t) => [
     primaryKey({ columns: [t.a, t.b] }),
   ]);
   expect(createTableSql(tableInfo(t), { primaryKey: false })).toBe(
-    `CREATE TABLE IF NOT EXISTS "pairs" ("a" text NOT NULL, "b" integer NOT NULL, "note" text)`,
+    `CREATE TABLE IF NOT EXISTS "pairs" ("a" text NOT NULL, "b" integer NOT NULL, "note" text) WITH (autovacuum_enabled = false)`,
   );
   expect(primaryKeySql(tableInfo(t))).toEqual([
     `CREATE UNIQUE INDEX IF NOT EXISTS "pairs_pkey" ON "pairs" ("a", "b")`,
     `ALTER TABLE "pairs" ADD CONSTRAINT "pairs_pkey" PRIMARY KEY USING INDEX "pairs_pkey"`,
+    `ALTER TABLE "pairs" RESET (autovacuum_enabled)`,
+    `ANALYZE "pairs"`,
   ]);
 });
 

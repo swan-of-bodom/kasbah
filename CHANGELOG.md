@@ -4,6 +4,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- During a backfill, autovacuum skips the app's tables while they only receive inserts, and their key, built at the
+  end of the backfill or at a table's first update or delete, turns it back on with fresh statistics (`ANALYZE`).
+  It had been scanning tables of tens of millions of rows mid-backfill, which made commits up to four times slower
+  for minutes.
 - Events read back from the event cache are unpacked only when a handler reads them, not while their batch waits:
   cached Ekubo backfills spend a third less time in GC, pause the event loop for over 100 ms a third as often, use
   up to 30% less memory, and run a few percent faster.

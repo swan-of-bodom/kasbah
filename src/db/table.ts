@@ -59,14 +59,18 @@ export function createTableSql(info: TableInfo, { primaryKey = true } = {}): str
     const notNull = column.notNull || keyColumns.has(column) ? " NOT NULL" : "";
     return `${quote(column.name)} ${column.getSQLType()}${notNull}`;
   });
-  if (!primaryKey) return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")})`;
+  // Without its key, the table is in a backfill that only appends: autovacuum would scan it over and over as it
+  // grows, competing with the writes, for nothing until the key comes (`primaryKeySql`).
+  if (!primaryKey)
+    return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")}) WITH (autovacuum_enabled = false)`;
   const pk = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
   return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")}, PRIMARY KEY (${pk}))`;
 }
 
 /**
  * The index first (readers can still read the table while it builds), then the constraint on it, which locks the
- * table only for a moment.
+ * table only for a moment. Then autovacuum back on, and one ANALYZE: the statistics queries are planned with, which
+ * autovacuum didn't gather while the table was keyless.
  */
 export function primaryKeySql(info: TableInfo): string[] {
   const name = quote(`${info.name}_pkey`);
@@ -74,6 +78,8 @@ export function primaryKeySql(info: TableInfo): string[] {
   return [
     `CREATE UNIQUE INDEX IF NOT EXISTS ${name} ON ${quote(info.name)} (${columns})`,
     `ALTER TABLE ${quote(info.name)} ADD CONSTRAINT ${name} PRIMARY KEY USING INDEX ${name}`,
+    `ALTER TABLE ${quote(info.name)} RESET (autovacuum_enabled)`,
+    `ANALYZE ${quote(info.name)}`,
   ];
 }
 

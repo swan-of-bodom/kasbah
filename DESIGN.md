@@ -400,6 +400,17 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   and `.unique()` are built then too (`IF NOT EXISTS`, at every start, so a new index needs no re-index). Their SQL
   is made at startup, and anything kasbah can't create as written (expressions, `where`, ordering, operator
   classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
+- A table without its key has autovacuum off (`autovacuum_enabled = false`), and the key turns it back on, then
+  runs one `ANALYZE`. Unkeyed means nothing but inserts reached it: an upsert or delete, the only writes that leave
+  dead rows, keys the table first. So autovacuum has nothing to reclaim then, yet since Postgres 13 inserts trigger
+  it, each time a table grows ~20%: on a 2026-11-04 Ekubo backfill filling the cache, it was scanning the cache's
+  `events` (52M rows), `swapped` (30M) and `position_updated` (4M) at once, commits took 8 s instead of ~2 s, and
+  events/s fell from ~40k to ~9k for minutes (the CPU was also throttling, which can't be told apart). A cached
+  re-index with this kept ~66k/s past `swapped`'s 17M rows, no autovacuum on the app's tables, and commits at
+  ~1.7 s. The price: the visibility map and freezing autovacuum would have done along the way come in one pass in
+  live mode, and API queries during the backfill run without statistics (on tables without indexes anyway).
+  Anti-wraparound vacuums run whatever the setting. The event cache keeps autovacuum: apps share it, and its reads
+  use the visibility map.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
 - One run (`src/indexer/run.ts`): setup (`open.ts`), then the phases factories → backfill → keys → live
