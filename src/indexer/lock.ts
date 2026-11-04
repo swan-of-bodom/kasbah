@@ -8,8 +8,8 @@ import { sleep } from "../utils/sleep.ts";
 import type { Status } from "./status.ts";
 
 /**
- * Ponder's schema lock (database/index.ts): a heartbeat in `_kasbah_meta`, refreshed every `intervalMs`; a
- * lock without one for `timeoutMs` belongs to a process that died. Tests shorten them.
+ * The schema lock: a heartbeat in `_kasbah_meta`, refreshed every `intervalMs`; a lock without one for `timeoutMs`
+ * belongs to a process that died. Tests shorten them.
  */
 export const LOCK = { intervalMs: 10_000, timeoutMs: 25_000 };
 
@@ -40,7 +40,7 @@ export class SchemaLock {
 
   /**
    * Claims the schema (`pool` is on it), creating it if needed and dropping it when `claim` says so. Held by a live
-   * indexer: waits once for its heartbeat to expire, as Ponder does, then refuses.
+   * indexer: waits once for its heartbeat to expire, then refuses.
    */
   static async acquire(
     pool: pg.Pool,
@@ -77,7 +77,6 @@ export class SchemaLock {
       await tx.query(
         `INSERT INTO _kasbah_meta VALUES ('lock', '{"owner": null, "heartbeat": 0, "dev": null}') ON CONFLICT (key) DO NOTHING`,
       );
-      // Locks the row, so two processes starting at once can't both claim it (Ponder reads it without).
       const row = (
         await tx.query<{ value: LockRow }>(
           `SELECT value FROM _kasbah_meta WHERE key = 'lock' FOR UPDATE`,
@@ -133,7 +132,7 @@ export class SchemaLock {
       );
   }
 
-  /** On a clean stop, as Ponder does, so the next indexer starts at once. */
+  /** On a clean stop, so the next indexer starts at once. */
   async release(): Promise<void> {
     clearInterval(this.#timer);
     await this.#pool.query(

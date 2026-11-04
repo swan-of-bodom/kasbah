@@ -225,7 +225,7 @@ type Checked<C extends Config> = {
 
 /**
  * What a project's layout gives the CLI: its directory's name, and what `kasbah.schema.ts` exports. `schemaRequired`
- * (`start`, `serve`): no schema from the directory's name, as in Ponder, so production never guesses one.
+ * (`start`, `serve`): no schema from the directory's name, so production never guesses one.
  */
 export type Project = { name: string; tables?: Tables; schemaRequired?: boolean };
 

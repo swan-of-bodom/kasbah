@@ -391,7 +391,6 @@ test.skipIf(url === undefined)(
     const proxy = await pgProxy(url!);
     const status = new Status();
     const logs: string[] = [];
-    // One of each fault, twice, 50 ms apart from the first backfill commit on: all land mid-run, then it's quiet.
     const faults = [
       () => proxy.cut(),
       () => proxy.cutCommit("after"),

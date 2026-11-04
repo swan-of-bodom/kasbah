@@ -31,7 +31,7 @@ test("canonical: one form whatever the padding or case", () => {
   expect(canonical("0x0")).toBe("0x0");
 });
 
-test("approxBytes: strings by length, numbers, bigints and nesting, as Ponder's estimate", () => {
+test("approxBytes: strings by length, numbers, bigints and nesting", () => {
   expect(approxBytes("abcd")).toBe(8);
   expect(approxBytes({ a: 1, b: [1n, "xy"], c: null, d: true })).toBe(
     24 + (8 + 8) + (24 + (48 + 8) + (4 + 8) + 8) + (8 + 8) + (4 + 8),

@@ -245,8 +245,8 @@ type Write = {
 /**
  * Final events (below the reorg window) kept in Postgres, shared by every app on the same database and chain.
  * `coverage` says which blocks are complete for each (address, selector at key 0). A backfill writes what it fetches
- * here as it arrives (`writer`) and its handlers read events back from here, as Ponder's sync store does; a re-index
- * fetches only the blocks not covered.
+ * here as it arrives (`writer`) and its handlers read events back from here; a re-index fetches only the blocks not
+ * covered.
  */
 export class EventCache {
   readonly #pool: pg.Pool;
@@ -261,7 +261,6 @@ export class EventCache {
   /** A write found events already cached (a range fetched again for a new selector): later ones skip duplicates. */
   #overlaps = false;
   #callRows = 0;
-  /** `#callRows` as of the last commit: where a retried `persist` starts counting again. */
   #committedCallRows = 0;
   /** Fetched pages waiting for the next write, oldest first. */
   #writes: Write[] = [];
@@ -773,7 +772,7 @@ export class EventCache {
     }
   }
 
-  /** After the commit's transaction ends, written or failed for good: what `take` moved out is let go. */
+  /** After the commit's transaction committed: what `take` moved out is let go, and its calls are counted. */
   written(): void {
     this.#taken = undefined;
     this.#committedCallRows = this.#callRows;

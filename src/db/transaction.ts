@@ -51,8 +51,8 @@ export async function transaction<T>(
 }
 
 /**
- * Whether transaction `xid`, whose COMMIT lost its connection, committed: Postgres keeps every transaction's outcome
- * (`txid_status`). "in progress" means its backend is still finishing the COMMIT; asked again after a wait.
+ * Whether transaction `xid`, whose COMMIT lost its connection, committed: Postgres keeps a recent transaction's
+ * outcome (`txid_status`). "in progress" means its backend hasn't ended it yet; asked again after a wait.
  */
 async function outcome(
   pool: pg.Pool,
@@ -72,7 +72,9 @@ async function outcome(
       }
     }, retry);
     if (status === "committed") return "committed";
-    if (status !== "in progress") return "aborted";
+    if (status === "aborted") return "aborted";
+    if (status === null)
+      throw new Error(`Postgres no longer knows whether transaction ${xid} committed`);
     await sleep(firstWaitMs, retry.signal);
   }
   throw new Error(

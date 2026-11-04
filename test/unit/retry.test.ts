@@ -100,15 +100,14 @@ describe.skipIf(url === undefined)("through a proxy that loses connections", () 
     await d.end();
   });
 
-  /** A table with no key, so a transaction that ran twice shows as twice the rows. */
-  async function fresh(name: string) {
+  async function keylessTable(name: string) {
     await pool.query(`CREATE TABLE ${schema}.${name} (x int)`);
     return async () =>
       Number((await pool.query(`SELECT count(*) AS n FROM ${schema}.${name}`)).rows[0].n);
   }
 
   test("a COMMIT whose answer is lost after Postgres ran it is not run again", async () => {
-    const rows = await fresh("after_commit");
+    const rows = await keylessTable("after_commit");
     const attempts: number[] = [];
     proxy.cutCommit("after");
     const out = await transaction(pool, async (tx, attempt) => {
@@ -120,7 +119,7 @@ describe.skipIf(url === undefined)("through a proxy that loses connections", () 
   });
 
   test("a COMMIT lost before Postgres saw it runs the transaction again, once", async () => {
-    const rows = await fresh("before_commit");
+    const rows = await keylessTable("before_commit");
     const attempts: number[] = [];
     proxy.cutCommit("before");
     await transaction(pool, async (tx, attempt) => {
@@ -131,7 +130,7 @@ describe.skipIf(url === undefined)("through a proxy that loses connections", () 
   });
 
   test("a connection lost in the middle of a transaction runs all of it again", async () => {
-    const rows = await fresh("midway");
+    const rows = await keylessTable("midway");
     const attempts: number[] = [];
     await transaction(pool, async (tx, attempt) => {
       attempts.push(attempt);

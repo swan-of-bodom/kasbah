@@ -1,5 +1,5 @@
-// Drizzle, as Ponder re-exports it: projects import tables and queries from here, so they share this package's one
-// copy (a second copy's tables aren't recognized).
+// Drizzle, re-exported: projects import tables and queries from here, so they share this package's one copy (a
+// second copy's tables aren't recognized).
 export {
   and,
   asc,

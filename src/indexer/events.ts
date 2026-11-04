@@ -13,8 +13,8 @@ export type Child = { address: string; contract: string; block: number };
 
 /**
  * Ordered batches of `addresses` × `keys` in `[from, to]`, final blocks: what the cache lacks is fetched into it by a
- * thread of its own, and every batch is read back from it as far as it holds every block (Ponder's sync store). Keys
- * past the selector filter: the cache records their coverage apart and filters what it reads back.
+ * thread of its own, and every batch is read back from it as far as it holds every block. Keys past the selector
+ * filter: the cache records their coverage apart and filters what it reads back.
  */
 export async function* events(
   run: Run,
@@ -100,8 +100,8 @@ export function watchedEvents(run: Run, from: number, to: number): AsyncGenerato
 }
 
 /**
- * The shared stream, cut at each configured contract's start block, as Ponder clips its filters: each piece asks only
- * for the addresses started by then, so a contract starting late isn't fetched (and dropped) from the earliest start.
+ * The shared stream, cut at each configured contract's start block: each piece asks only for the addresses started
+ * by then, so a contract starting late isn't fetched (and dropped) from the earliest start.
  * Factory children join at once: nothing is emitted before their creation.
  */
 async function* shared(run: Run, from: number, to: number): AsyncGenerator<Batch> {

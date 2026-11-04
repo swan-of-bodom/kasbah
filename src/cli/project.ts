@@ -52,7 +52,7 @@ export const CODE = /\.(ts|mts|js|mjs|cjs|json)$/;
 /** Not code: reinstalling a dependency rewrites it, and that alone mustn't re-index. */
 const NOT_HASHED = /(^|\/)package\.json$/;
 
-/** A hash of the code files under the app's directory: part of the build id, like Ponder's. */
+/** A hash of the code files under the app's directory: part of the build id. */
 export function sourceHash(file: string): string {
   const root = dirname(resolve(file));
   const h = createHash("sha256");

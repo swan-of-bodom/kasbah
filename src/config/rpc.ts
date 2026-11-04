@@ -5,8 +5,8 @@ import { ConfigError } from "./errors.ts";
 export type RpcConfig = string | RpcEndpoint | readonly (string | RpcEndpoint)[];
 
 /**
- * Several RPCs, as Ponder's `loadBalance`: each request goes to the one that can take it soonest, the fastest of
- * those, and a retry goes to another. `maxRequestsPerSecond` caps one (JSON-RPC calls; each in a batch counts).
+ * Several RPCs: each request goes to the one that can take it soonest, the fastest of those, and a retry goes to
+ * another. `maxRequestsPerSecond` caps one (JSON-RPC calls; each in a batch counts).
  */
 export const loadBalance = (endpoints: readonly (string | RpcEndpoint)[]): RpcConfig => endpoints;
 

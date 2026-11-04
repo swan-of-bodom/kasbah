@@ -84,7 +84,7 @@ const MAX_BACKOFF_MS = 10_000;
 const INITIAL_PAUSE_MS = 100;
 const MAX_PAUSE_MS = 5_000;
 const PAUSE_GROWTH = 1.5;
-/** Rate growth per step before the first throttle (slow start), and after it, as in Ponder's limiter. */
+/** Rate growth per step before the first throttle (slow start), and after it. */
 const SLOW_START_GROWTH = 2;
 const GROWTH = 1.05;
 /** Successes needed for a step, in seconds' worth at the current rate: before the first throttle, and after. */
@@ -231,8 +231,8 @@ const tokenOf = (c: Call): string | undefined =>
 /**
  * JSON-RPC over HTTP to one endpoint or several, each paced in calls per second (calls inside a batch count one by
  * one: that's what providers rate and bill). A request goes to the endpoint that can send it soonest, the fastest
- * of those when several can at once, as Ponder balances; a retry goes elsewhere when it can. A `getEvents` page with a
- * continuation token goes to the endpoint that issued the token: tokens are node-specific.
+ * of those when several can at once; a retry goes elsewhere when it can. A `getEvents` page with a continuation token
+ * goes to the endpoint that issued the token: tokens are node-specific.
  */
 export class RpcClient {
   readonly stats: RpcStats = {
