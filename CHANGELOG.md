@@ -4,6 +4,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A lost database connection no longer ends the run: kasbah retries for about a minute, waiting longer each time,
+  and says so on the screen ("database connection lost …: retry 3 of 9", then "database: connected again"). A
+  Postgres restart, a failover or a network drop used to stop it, and a connection dying while idle could crash
+  the process outright. A commit whose COMMIT lost its answer is checked with Postgres before anything is written
+  again, so no batch is written twice or lost.
 - The event cache is always on, as every final block's events now go through it: `cache: false` is refused with a
   message saying so (`cache: true` and `cache: { maxCalls }` work as before). Events filtered by key (`filter`)
   are cached too, so a re-index of such an app fetches nothing either, and an existing cache keeps what it has.

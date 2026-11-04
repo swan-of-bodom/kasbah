@@ -91,6 +91,16 @@ export type Note =
   /** Events of a contract's class that its configured ABI lacks: once per contract and event name. */
   | { kind: "skipped"; contract: string; events: string[]; classHash: string }
   | { kind: "socket"; state: "on" | "refused" | "reconnected" | "closed"; reason?: string }
+  /** A lost database connection: before each retry's wait, and once a retried statement or transaction succeeds. */
+  | {
+      kind: "database";
+      state: "lost";
+      reason: string;
+      retry: number;
+      retries: number;
+      waitMs: number;
+    }
+  | { kind: "database"; state: "back"; retries: number }
   | { kind: "factories"; children: number; through: number; seconds: number }
   | {
       kind: "backfill";
@@ -404,6 +414,10 @@ function describe(n: Note): string {
           : n.state === "reconnected"
             ? "WebSocket: reconnected"
             : "WebSocket: closed, polling until it reconnects";
+    case "database":
+      return n.state === "lost"
+        ? `database connection lost (${n.reason}): retry ${n.retry} of ${n.retries} in ${seconds(n.waitMs / 1000)}`
+        : `database: connected again after ${plural(n.retries, "retry", "retries")}`;
     case "factories":
       return `factories: ${n.children} children up to block ${n.through} in ${seconds(n.seconds)}`;
     case "backfill": {

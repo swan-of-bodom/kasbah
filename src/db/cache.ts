@@ -261,6 +261,8 @@ export class EventCache {
   /** A write found events already cached (a range fetched again for a new selector): later ones skip duplicates. */
   #overlaps = false;
   #callRows = 0;
+  /** `#callRows` as of the last commit: where a retried `persist` starts counting again. */
+  #committedCallRows = 0;
   /** Fetched pages waiting for the next write, oldest first. */
   #writes: Write[] = [];
   #held = { bytes: 0, events: 0 };
@@ -295,6 +297,7 @@ export class EventCache {
         .n,
     );
     await cache.#pruneCalls(pool);
+    cache.#committedCallRows = cache.#callRows;
     return cache;
   }
 
@@ -735,11 +738,11 @@ export class EventCache {
     this.#pendingBytes = 0;
   }
 
-  /** Writes what `take` moved out, inside the caller's transaction. */
+  /** Writes what `take` moved out, inside the caller's transaction: again if that transaction is retried. */
   async persist(tx: pg.PoolClient): Promise<void> {
     const taken = this.#taken;
     if (taken === undefined) throw new Error("persist without take");
-    this.#taken = undefined;
+    this.#callRows = this.#committedCallRows;
     for (const t of chunks(taken.transactions, ROWS_PER_INSERT)) {
       await tx.query(
         `INSERT INTO ${this.#schema}.transactions SELECT * FROM unnest($1::bytea[], $2::int[], $3::jsonb[], $4::jsonb[])
@@ -768,6 +771,12 @@ export class EventCache {
       this.#callRows += r.rowCount ?? 0;
       await this.#pruneCalls(tx);
     }
+  }
+
+  /** After the commit's transaction ends, written or failed for good: what `take` moved out is let go. */
+  written(): void {
+    this.#taken = undefined;
+    this.#committedCallRows = this.#callRows;
   }
 
   async headers(numbers: number[]): Promise<Map<number, Block>> {

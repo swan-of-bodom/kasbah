@@ -1,6 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
-import pg from "pg";
 import { EventCache } from "../db/cache.ts";
+import { RetryingPool } from "../db/pool.ts";
 import { RpcClient, type RpcStats } from "../rpc/client.ts";
 import { eventStream, type FetchGauges } from "./fetch.ts";
 import { STATS_MS, type ThreadJob, type ThreadMessage } from "./fetch-thread.ts";
@@ -12,7 +12,7 @@ const job = workerData as ThreadJob;
 const post = (m: ThreadMessage) => parentPort!.postMessage(m);
 // The main thread stops it with `terminate()`: a write cut short rolls back with its coverage.
 const rpc = new RpcClient(job.endpoints, { maxConcurrency: job.concurrency });
-const pool = new pg.Pool({ connectionString: job.database, max: POOL_SIZE });
+const pool = new RetryingPool({ connectionString: job.database, max: POOL_SIZE });
 let gauges: (() => FetchGauges) | undefined;
 let sent: RpcStats = { ...rpc.stats, methods: {} };
 let fetched = 0;

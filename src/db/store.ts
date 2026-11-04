@@ -363,6 +363,23 @@ export class Store {
     return n;
   }
 
+  /**
+   * Reads from Postgres which tables have their primary key: a transaction that added one and then lost its
+   * connection was rolled back, though memory had already counted the key.
+   */
+  async recheckKeys(client: PoolClient, tables?: PgTable[]): Promise<void> {
+    const states =
+      tables === undefined ? [...this.#tables.values()] : tables.map((t) => this.#state(t));
+    const { rows } = await client.query<{ name: string }>(
+      `SELECT c.relname AS name FROM pg_class c
+       WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = ANY($1)
+         AND EXISTS (SELECT 1 FROM pg_constraint p WHERE p.conrelid = c.oid AND p.contype = 'p')`,
+      [states.map((s) => s.info.name)],
+    );
+    const keyed = new Set(rows.map((r) => r.name));
+    for (const s of states) s.keyed = keyed.has(s.info.name);
+  }
+
   /** Gives `table` its primary key, if it has none yet (before live mode: the journal and reverts need it). */
   addKey(table: PgTable, client: PoolClient): Promise<boolean> {
     return this.#addKey(this.#state(table), (sql) => client.query(sql));

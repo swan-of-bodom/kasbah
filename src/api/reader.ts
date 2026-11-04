@@ -1,6 +1,7 @@
 import { createHmac } from "node:crypto";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import pg from "pg";
+import { RetryingPool } from "../db/pool.ts";
 import { quote, type TableInfo } from "../db/table.ts";
 import { errorCode } from "../utils/errors.ts";
 
@@ -59,7 +60,7 @@ export class Reader {
 
   private constructor(url: string, o: ReaderOptions) {
     this.#url = url;
-    this.#pool = new pg.Pool({ connectionString: url, max: 8 });
+    this.#pool = new RetryingPool({ connectionString: url, max: 8 });
     this.#schema = o.schema;
     this.timeoutMs = o.timeoutMs ?? 10_000;
     this.maxRows = o.maxRows ?? 10_000;
@@ -106,6 +107,9 @@ export class Reader {
   /** Runs `body` in a read-only transaction on the app's schema, then rolls it back. */
   async transaction<T>(body: (client: pg.PoolClient) => Promise<T>): Promise<T> {
     const client = await this.#pool.connect();
+    // pg-pool listens on idle connections only: one that dies mid-request would otherwise end the process.
+    const ignore = () => {};
+    client.on("error", ignore);
     let broken: Error | undefined;
     try {
       await client.query(
@@ -120,6 +124,7 @@ export class Reader {
         await client.query("ROLLBACK").catch((e: Error) => (broken = e));
       }
     } finally {
+      client.removeListener("error", ignore);
       client.release(broken);
     }
   }

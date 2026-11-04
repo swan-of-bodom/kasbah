@@ -413,6 +413,37 @@ handlers `event.transaction` with the transaction's RPC fields and `event.receip
   now resends only the failed calls, and throttling never uses up retry attempts (it waits out a pause instead,
   see §4).
 
+### 7.2 A lost database connection
+
+A Postgres restart, a failover or a network drop used to end the run, and could end the process outright:
+node-postgres emits `error` on a connection that dies while idle in the pool, and on one checked out between two
+queries, and an `error` nobody listens to throws. As Ponder does (`queryBuilder.ts`), kasbah retries instead.
+
+- What counts as lost: Postgres's connection exceptions (`08xxx`), a server shutting down or starting
+  (`57P01`–`57P03`), too many clients (`53300`), Node's network errors (`ECONNRESET`, `ECONNREFUSED`, …) and
+  node-postgres's "Connection terminated" errors. Anything else fails as before.
+- How long: up to 9 retries, about 125 ms and twice as long each time (~1 min), Ponder's numbers. Each wait is a
+  random half to all of its step: with fixed steps, retries fell in step with a test's outages (waits of 250, 500,
+  1,000 ms against a 240 ms cycle) and every one landed while the database was down.
+- `RetryingPool` (`src/db/pool.ts`): listens for `error`, and sends a single `query` again, so every statement
+  kasbah sends that way is a read or an idempotent write (`IF NOT EXISTS`, `ON CONFLICT`, the lock's heartbeat).
+- `transaction()` retries the whole transaction, listening on its connection meanwhile; its body gets the
+  attempt and leaves memory as it found it until COMMIT: the store and the cache let go of a batch after the
+  transaction ends (`written`), and a retried commit or key build reads which tables have keys from Postgres
+  first (`recheckKeys`). A COMMIT whose answer was lost may or may not have happened: the transaction asked
+  `txid_current()` after BEGIN, and Postgres says whether that id committed (`txid_status`), so a batch is never
+  written twice nor dropped. Ponder retries such a COMMIT blindly; its keys refuse a batch written twice, kasbah's
+  tables have none during a backfill. Measured with a real `docker restart` mid-run: refused, "the database system
+  is starting up", back after 3 retries, the transaction caught in its COMMIT found committed, 400 of 400 rows.
+- The screen says so: "database connection lost (…): retry 3 of 9 in 0.5s", then "database: connected again".
+  The API's pool only stops crashing; a request that loses its connection fails, and the client asks again.
+- Tested through `test/fixtures/pgproxy.ts`, a TCP proxy that drops every connection, refuses new ones for a
+  while, or drops the next COMMIT before Postgres sees it or after it ran it. A run with each fault twice ends on
+  the chain's state, every event stored once. With a fault every 150 ms or less, a transaction can't finish
+  between two of them and the run gives up after the last retry: a database that unusable is an outage.
+- A transaction retries from its start, so the longest is the most fragile: the key build after a backfill
+  (2.5 min for Ekubo's `swapped`) starts over after each loss. Commits take milliseconds to a few seconds.
+
 ## 8. ABIs, types and decoding
 
 starknet.js (10.8.0) is used for what it is good at: hashing (`sn_keccak`, Pedersen/Poseidon via

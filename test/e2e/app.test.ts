@@ -8,6 +8,7 @@ import { bignum, kasbah, Status } from "../../src/index.ts";
 import type { EmittedEvent } from "../../src/rpc/methods.ts";
 import { testChain } from "../fixtures/chain.ts";
 import { header } from "../fixtures/header.ts";
+import { pgProxy } from "../fixtures/pgproxy.ts";
 import { faultyProxy } from "./faulty.ts";
 
 const url = process.env.DATABASE_URL;
@@ -214,10 +215,10 @@ afterAll(async () => {
   await p.end();
 });
 
-function app(s = schema, rpc = rpcUrl) {
+function app(s = schema, rpc = rpcUrl, database = url!) {
   const a = kasbah({
     rpc,
-    database: url!,
+    database,
     schema: s,
     contracts: { C: { abi: classB, address: ADDRESS, startBlock: DEPLOYED } },
     tables: { totals, log },
@@ -379,6 +380,62 @@ test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", 
     await p.end();
   }
 });
+
+test.skipIf(url === undefined)(
+  "through a database that keeps losing connections (mid-transaction, at COMMIT before and after it ran, down for a while) every event is stored once",
+  async () => {
+    const s = "kasbah_test_app_db_faults";
+    const chain = fakeNode();
+    for (let i = 0; i < 400; i++) chain.add();
+    const rpc = await listen(chain.server);
+    const proxy = await pgProxy(url!);
+    const status = new Status();
+    const logs: string[] = [];
+    // One of each fault, twice, 50 ms apart from the first backfill commit on: all land mid-run, then it's quiet.
+    const faults = [
+      () => proxy.cut(),
+      () => proxy.cutCommit("after"),
+      () => proxy.cutCommit("before"),
+      () => proxy.down(150),
+    ];
+    const script = [...faults, ...faults];
+    let next = 0;
+    let timer: NodeJS.Timeout | undefined;
+    status.subscribe((n) => {
+      logs.push(n.text);
+      if (n.kind === "progress" && timer === undefined)
+        timer = setInterval(
+          () => (next < script.length ? script[next++]!() : clearInterval(timer)),
+          50,
+        );
+    });
+    const to = chain.blocks.length - 1 - 16;
+    try {
+      await app(s, rpc, proxy.url).run({ reset: true, to, status });
+      clearInterval(timer);
+      const p = new pg.Pool({ connectionString: url, max: 1 });
+      const { rows } = await p.query(`SELECT total::text, events FROM ${s}.totals`);
+      const logged = await p.query(`SELECT count(*)::int AS n FROM ${s}.log`);
+      await p.end();
+      const expected = expectedTotals(to, chain);
+      expect(rows).toEqual([expected]);
+      expect(logged.rows[0].n).toBe(expected.events);
+      expect([status.phase, status.checkpoint]).toEqual(["done", to]);
+      expect(next).toBe(script.length);
+      expect(proxy.counts.cuts).toBeGreaterThan(0);
+      expect(logs.some((l) => l.startsWith("database connection lost"))).toBe(true);
+      expect(logs.some((l) => l.startsWith("database: connected again"))).toBe(true);
+    } finally {
+      clearInterval(timer);
+      await proxy.close();
+      chain.server.close();
+      const p = new pg.Pool({ connectionString: url, max: 1 });
+      await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+      await p.end();
+    }
+  },
+  60_000,
+);
 
 test.skipIf(url === undefined)(
   "through a flaky endpoint (throttles, 503s, dropped connections, cut-off and partial answers) the state is the chain's",

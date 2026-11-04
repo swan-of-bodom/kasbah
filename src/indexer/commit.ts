@@ -152,7 +152,8 @@ export class Position {
   /**
    * A transaction per `Commit`, then, after COMMIT, memory follows (the position, the watched children, known
    * hashes) and `status.committed`. Store and cache hand over their buffers before the first await, so what's
-   * handled meanwhile is the next commit's; a failed commit fails the run, so nothing retries against them.
+   * handled meanwhile is the next commit's; they let go of them once the transaction ends, so a retry after a lost
+   * connection writes them again, and a commit that fails for good fails the run.
    */
   async #commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
     const { pool, store, cache, factories, sources, status, schema, lock, final } = this.#w;
@@ -169,7 +170,8 @@ export class Position {
     if (rows) store.take();
     if (rows || c.kind === "children") cache?.take();
     try {
-      await transaction(pool, async (tx) => {
+      await transaction(pool, async (tx, attempt) => {
+        if (attempt > 0) await store.recheckKeys(tx);
         await lock.check(tx);
         switch (c.kind) {
           case "children":
@@ -213,6 +215,7 @@ export class Position {
       });
     } finally {
       if (rows) store.written();
+      if (rows || c.kind === "children") cache?.written();
     }
     const ms = performance.now() - started;
     if (m.checkpoint !== undefined) this.#checkpoint = m.checkpoint;

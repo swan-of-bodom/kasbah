@@ -11,7 +11,8 @@ export async function keys(run: Run): Promise<void> {
   status.keys = { tables: store.unkeyed, indexes: count };
   const built = await Promise.all(
     tables.map((t) =>
-      transaction(pool, async (tx) => {
+      transaction(pool, async (tx, attempt) => {
+        if (attempt > 0) await store.recheckKeys(tx, [t]);
         const keyed = await store.addKey(t, tx);
         for (const statement of indexes.get(t)!) await tx.query(statement);
         return keyed;

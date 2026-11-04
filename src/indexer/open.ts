@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { is } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
-import pg from "pg";
+import type pg from "pg";
 import { classHistory, deployedAt } from "../abi/history.ts";
 import type { Route } from "../api/routes.ts";
 import { Api } from "../api/server.ts";
@@ -11,6 +11,8 @@ import { ConfigError } from "../config/errors.ts";
 import { checkNetwork, networkName } from "../config/network.ts";
 import type { Resolved } from "../config/resolve.ts";
 import { EventCache } from "../db/cache.ts";
+import { RetryingPool } from "../db/pool.ts";
+import { DB_RETRY } from "../db/retry.ts";
 import { type Db, Store } from "../db/store.ts";
 import { createTableSql, indexSql, quote, tableInfo } from "../db/table.ts";
 import { transaction } from "../db/transaction.ts";
@@ -217,11 +219,26 @@ async function openSchema(
   signal: AbortSignal,
   closers: (() => unknown)[],
 ): Promise<{ pool: pg.Pool; lock: SchemaLock }> {
-  const pool = new pg.Pool({
-    connectionString: config.database,
-    max: POOL_SIZE,
-    options: `-c search_path=${quote(config.schema)}`,
-  });
+  const pool = new RetryingPool(
+    {
+      connectionString: config.database,
+      max: POOL_SIZE,
+      options: `-c search_path=${quote(config.schema)}`,
+    },
+    {
+      signal,
+      onRetry: (e, retry, waitMs) =>
+        status.note({
+          kind: "database",
+          state: "lost",
+          reason: (e as Error).message ?? String(e),
+          retry,
+          retries: DB_RETRY.tries - 1,
+          waitMs,
+        }),
+      onBack: (retries) => status.note({ kind: "database", state: "back", retries }),
+    },
+  );
   closers.push(() => pool.end());
   const lock = await SchemaLock.acquire(
     pool,

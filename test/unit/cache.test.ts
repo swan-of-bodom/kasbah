@@ -331,6 +331,7 @@ test.skipIf(url === undefined)(
       await cache.persist(c);
       await c.query("COMMIT");
       c.release();
+      cache.written();
     };
     for (let round = 0; round < 5; round++) {
       for (let i = 0; i < 5; i++)
