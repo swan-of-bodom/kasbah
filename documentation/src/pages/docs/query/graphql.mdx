@@ -1,10 +1,12 @@
 # GraphQL [A GraphQL API generated from your tables]
 
-`POST /graphql`, with GraphiQL at [localhost:42069/graphql](http://localhost:42069/graphql) in a browser.
+`app.use("/graphql", graphql({ db, schema }))` in `src/api/index.ts` serves `POST /graphql`, with GraphiQL at
+[localhost:42069/graphql](http://localhost:42069/graphql) in a browser. The schema is Ponder's, so a Ponder client
+or query works as is.
 
 ```graphql
 {
-  pools(where: { swaps_gt: 100 }, orderBy: swaps, orderDirection: desc, limit: 10) {
+  pools(where: { swaps_gt: 100 }, orderBy: "swaps", orderDirection: "desc", limit: 10) {
     items {
       id
       swaps
@@ -13,6 +15,7 @@
       hasNextPage
       endCursor
     }
+    totalCount
   }
   pool(id: "0x…") {
     liquidity
@@ -20,38 +23,48 @@
 }
 ```
 
-Per table, two fields: one row by primary key (`pool`) and a page (`pools`).
+Per table, by its name in `kasbah.schema.ts` (`export const pool = pgTable(…)`), two fields: `pool(<primary key>)`,
+the row or `null`, and `pools`, a page. Fields are the table object's keys.
 
 | Argument | Description |
 | --- | --- |
-| `where` | `{ column: value }`, or `column_gt`, `_gte`, `_lt`, `_lte`, `_not`, `_in`, `_not_in`; `AND` and `OR` lists |
-| `orderBy`, `orderDirection` | a column, `asc` (default) or `desc` |
-| `limit` | default 100, at most 1,000 |
-| `after` | the last page's `pageInfo.endCursor` |
+| `where` | `{ column: value }`, `_not`, `_in`, `_not_in`; numbers `_gt`, `_gte`, `_lt`, `_lte`; strings `_contains`, `_starts_with`, `_ends_with`, their `_not_` forms and `_nocase` forms (not for `hex()`); arrays `_has`, `_not_has`; `AND` and `OR` lists. `null` matches `IS NULL` |
+| `orderBy`, `orderDirection` | a column's name, `"asc"` (default) or `"desc"`; the primary key breaks ties |
+| `limit` | default 50, at most 1,000 |
+| `after`, `before` | a page's `pageInfo.endCursor` or `startCursor` |
+| `offset` | rows to skip, without a cursor |
 
-Numbers past 32 bits (`u64`, `u128`, `u256`) are strings.
+`bignum()` and `int8({ mode: "bigint" })` columns are `BigInt`, written as strings (`"1000"`); `numeric()` is
+`Numeric`, a string too. `totalCount` counts every row the filter matches, and runs only when asked for.
 
 ## Paging
 
 ```graphql
 query ($after: String) {
-  pools(orderBy: swaps, orderDirection: desc, limit: 100, after: $after) {
+  pools(orderBy: "swaps", orderDirection: "desc", limit: 100, after: $after) {
     items { id swaps }
     pageInfo { hasNextPage endCursor }
   }
 }
 ```
 
-Pass `endCursor` as `after` until `hasNextPage` is false.
+Pass `endCursor` as `after` until `hasNextPage` is false; `startCursor` as `before` goes back.
+
+## Relations
+
+Drizzle `relations()` exported from `kasbah.schema.ts` become fields: a `one()` is the related row (a page's are
+loaded in one statement), a `many()` a page with the same arguments as `pools`. A `many()` needs the `one()` back.
 
 ## Indexing status
 
 ```graphql
-{ _meta { checkpoint phase } }
+{ _meta { status } }
 ```
+
+`status` is what `GET /status` returns.
 
 ## Limits
 
-A request can have at most 1,000 tokens, a depth of 20 and 30 aliases.
-
-Drizzle `relations()` exported from `kasbah.schema.ts` become fields: a to-one is the related row, a to-many a page.
+A request can have at most 1,000 tokens, a depth of 100 and 30 aliases (`graphql({ db, schema }, { maxOperationTokens,
+maxOperationDepth, maxOperationAliases })` changes them). The rows one request reads may take at most a sixteenth of
+the API's heap, and its statements the query timeout in total; past either, it gets an error instead.

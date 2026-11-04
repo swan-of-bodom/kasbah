@@ -3,15 +3,20 @@ import { join } from "node:path";
 import { maxAliasesPlugin } from "@escape.tech/graphql-armor-max-aliases";
 import { maxDepthPlugin } from "@escape.tech/graphql-armor-max-depth";
 import { maxTokensPlugin } from "@escape.tech/graphql-armor-max-tokens";
-import { is } from "drizzle-orm";
-import { PgTable } from "drizzle-orm/pg-core";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import { type GraphQLSchema, printSchema } from "graphql";
 import { createYoga } from "graphql-yoga";
 import { createMiddleware } from "hono/factory";
-import { tableInfo } from "../../db/table.ts";
 import { currentApi, type Tables } from "../context.ts";
+import type { Reader } from "../reader.ts";
+import { readStatus } from "../status.ts";
 import { graphiQLHtml } from "./graphiql.ts";
-import { createGraphqlSchema, type GraphqlContext, relationsOf } from "./schema.ts";
+import {
+  buildDataLoaderCache,
+  buildGraphQLSchema,
+  type GraphqlContext,
+  RequestBudget,
+} from "./schema.ts";
 
 /** Limits on one operation; the defaults are Apollo's, from its advice on operation size and complexity. */
 export type GraphqlLimits = {
@@ -40,10 +45,9 @@ export function graphql(
     maxOperationAliases = 30,
   }: GraphqlLimits = {},
 ) {
-  const infos = Object.fromEntries(
-    Object.entries(schema).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])),
-  );
-  const graphqlSchema = createGraphqlSchema(infos, relationsOf(schema, infos));
+  const graphqlSchema = buildGraphQLSchema({ schema });
+  // Per API (by its reader): Drizzle on the reader's pool, with this schema's tables for relational queries.
+  const dbs = new WeakMap<Reader, NodePgDatabase<Tables>>();
   writeSchema(graphqlSchema).catch(() => {});
 
   const yoga = createYoga({
@@ -52,7 +56,15 @@ export function graphql(
     schema: graphqlSchema,
     context: (): GraphqlContext => {
       const api = currentApi("graphql()");
-      return { client: api.reader.pool, timeoutMs: api.reader.timeoutMs };
+      let db = dbs.get(api.reader);
+      if (db === undefined) dbs.set(api.reader, (db = drizzle(api.reader.pool, { schema })));
+      const budget = new RequestBudget({ timeoutMs: api.reader.timeoutMs });
+      return {
+        db,
+        budget,
+        getDataLoader: buildDataLoaderCache({ db, budget }),
+        status: () => readStatus(api.reader),
+      };
     },
     maskedErrors: process.env.NODE_ENV === "production",
     logging: false,

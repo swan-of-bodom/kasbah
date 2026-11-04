@@ -654,9 +654,17 @@ Target size: under 10k lines for v1.
      transaction with a timeout (10 s), always rolled back, so nothing it sets outlives it; sent wrapped as
      `SELECT * FROM (<sql>) LIMIT $n` with the extended protocol, so only one SELECT/WITH/VALUES statement parses;
      at most 10,000 rows.
-   - `POST /graphql`: per table `pool(<primary key>)` and `pools(where, orderBy, orderDirection, limit, after)`,
-     keyset paging on non-null columns with the primary key as tiebreak; filters `x`, `x_not`, `x_in`,
-     `x_not_in`, `x_gt/gte/lt/lte`, `AND`, `OR`. Numbers past 32 bits are `BigInt` decimal strings. `_meta`.
+   - `POST /graphql` (`graphql()` from `kasbah/api`, `src/api/graphql/`): Ponder's schema builder, ported, so the
+     schema, filters, ordering, cursors, `totalCount`, relations, `_meta { status }` and errors are Ponder's; a
+     Ponder client works unchanged. Per table key `pool`: `pool(<primary key>)` and
+     `pools(where, orderBy, orderDirection, before, after, limit, offset)`. Where kasbah differs: `bignum()` is
+     Ponder's `t.bigint()` (`BigInt`) and `hex()` its `t.hex()` (no `_nocase` filters), but `hex()` keeps values
+     as written where Ponder lowercases them, so filters match as stored; no enums or views, which kasbah doesn't
+     create; `status` is `/status`'s (the chain's name as its id); two tables whose fields would collide, or a
+     relation named like a column, are refused at startup; a query's own mistakes (a bad cursor, a value Postgres
+     refuses, a limit over 1,000) are GraphQL errors that keep their message in production too. And, to run
+     anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages multiply:
+     1,000 × 1,000 × …), and all its statements the query timeout.
    - `GET /status`: checkpoint and phase (backfill or live).
    - Live queries: `GET /live` streams server-sent events. Every commit (backfill batch, live
      block, reorg revert) runs `pg_notify('kasbah_<schema>', {"checkpoint": n})` inside its transaction, so
@@ -672,16 +680,12 @@ Target size: under 10k lines for v1.
        Postgres' `EXPLAIN` when it opens. Today every open stream re-runs after every commit.
      - An API cache: a route's or query's result kept in memory until the next commit, so N visitors in one block
        cost one query.
-   - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables`
-     takes both, so `import * as schema` works, as in Ponder). A to-one field is the related row, batched: all
-     lookups of one level go out as one `WHERE (cols) IN (…)`. A to-many field is a page with the top-level
-     list's arguments (`where`, `orderBy`, `orderDirection`, `limit`, `after`), also one statement per level:
-     the page query runs per parent in a `LATERAL` subquery over `VALUES` of the parents' keys. Each
-     request has a budget: 500 statements and the query timeout in total. A relation named like a column is
-     refused at startup.
-   - GraphQL limits: before a query runs, at most 1,000 tokens (graphql-js `maxTokens`), depth
-     20 and 30 aliases, fragments counted where spread (Ponder: 1,000 / 100 / 30; depth is lower here because each
-     nested relation is a statement). GraphiQL's introspection query fits. The statement budget stays behind them.
+   - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables` takes both, so
+     `import * as schema` works). A `one()` field is the related row, through a per-request DataLoader: a page's
+     lookups go out as one statement. A `many()` field is a page with the list's arguments, one statement per
+     parent, as in Ponder (a `LATERAL` join over the parents' keys would batch them, but cursors, `before` and
+     `totalCount` per parent make it another query planner's worth of code).
+   - GraphQL limits: before a query runs, at most 1,000 tokens, depth 100 and 30 aliases (Ponder's, from Apollo).
    - The app's routes: `app.get(path, handler)` / `app.post`, `:name` path segments, matched
      after the built-in paths (which they can't take). The handler gets `db`, a Drizzle database typed with the
      app's tables (relational queries included) on the reader's read-only transaction and timeout, plus `params`,
