@@ -205,3 +205,12 @@ test.skipIf(url === undefined)(
     }
   },
 );
+
+test("in a dev container, list doesn't point at prune, and says a stopped container's schemas need it running", () => {
+  const stopped = { schema: "app", running: false, tables: 1, bytes: 1e6 };
+  expect(renderSchemas([stopped], [], "kasbah-app-1a2b3c", { prune: false }).at(-1)).toMatch(/^╰/);
+  const lines = renderList([{ container: "kasbah-app-1a2b3c", running: false }], "podman", {
+    stoppedHint: true,
+  });
+  expect(lines.at(-2)).toBe("a stopped one's schemas show while it runs (`kasbah dev` in its app)");
+});

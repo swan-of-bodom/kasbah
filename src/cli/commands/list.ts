@@ -1,32 +1,44 @@
 import { homedir } from "node:os";
 import pg from "pg";
 import { type CacheInfo, listSchemas, type SchemaInfo } from "../../indexer/schemas.ts";
-import { type DevDatabaseInfo, listDevDatabases } from "../devdb.ts";
+import { type DevDatabaseInfo, devUrl, listDevDatabases } from "../devdb.ts";
 import { ago, colors, size, table } from "../ui/table.ts";
 
 /**
- * `kasbah list`: with `DATABASE_URL` (or `--database`), the app schemas and event caches in that database; then the
- * dev databases on the machine, the containers `dev` made. Each largest first.
+ * `kasbah list`: the app schemas and event caches in `DATABASE_URL` (or `--database`), else in each running dev
+ * container; then the dev databases on the machine, the containers `dev` made. Each largest first.
  */
 export async function list(o: { database?: string }) {
   const color = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
   const database = o.database ?? process.env.DATABASE_URL;
   const out: string[] = [];
-  if (database !== undefined) {
-    const pool = new pg.Pool({ connectionString: database, max: 1 });
+  const schemasIn = async (url: string, name: string, prune: boolean) => {
+    const pool = new pg.Pool({ connectionString: url, max: 1 });
     try {
       const { schemas, caches } = await listSchemas(pool);
-      out.push(...renderSchemas(schemas, caches, where(database), { color }), "");
+      out.push(...renderSchemas(schemas, caches, name, { color, prune }), "");
     } finally {
       await pool.end();
     }
-  }
+  };
+  if (database !== undefined) await schemasIn(database, where(database), true);
   const found = listDevDatabases();
   if (found === undefined) {
     if (database === undefined)
       out.push("no DATABASE_URL, and no Docker or Podman for dev databases");
-  } else if (database === undefined || found.databases.length > 0)
-    out.push(...renderList(found.databases, found.runtime, { color, home: homedir() }));
+    return void console.log(out.join("\n").trimEnd());
+  }
+  if (database === undefined)
+    for (const d of found.databases)
+      if (d.port !== undefined) await schemasIn(devUrl(d.port), d.container, false);
+  if (database === undefined || found.databases.length > 0)
+    out.push(
+      ...renderList(found.databases, found.runtime, {
+        color,
+        home: homedir(),
+        stoppedHint: database === undefined,
+      }),
+    );
   console.log(out.join("\n").trimEnd());
 }
 
@@ -45,7 +57,16 @@ export function renderSchemas(
   schemas: readonly SchemaInfo[],
   caches: readonly CacheInfo[],
   database: string,
-  { color = false, now = Date.now() }: { color?: boolean; now?: number } = {},
+  {
+    color = false,
+    now = Date.now(),
+    prune = true,
+  }: {
+    color?: boolean;
+    now?: number;
+    /** Point at `kasbah prune` for the stopped ones: not in a dev container, which `clean` deletes. */
+    prune?: boolean;
+  } = {},
 ): string[] {
   const { dim, green } = colors(color);
   const cacheNotes = caches.map(
@@ -89,7 +110,7 @@ export function renderSchemas(
         ...cacheNotes,
       ],
     }),
-    ...(stopped === 0
+    ...(stopped === 0 || !prune
       ? []
       : [
           dim(
@@ -103,7 +124,16 @@ export function renderSchemas(
 export function renderList(
   databases: readonly DevDatabaseInfo[],
   runtime: string,
-  { color = false, home = "" }: { color?: boolean; home?: string } = {},
+  {
+    color = false,
+    home = "",
+    stoppedHint = false,
+  }: {
+    color?: boolean;
+    home?: string;
+    /** Say how to see a stopped container's schemas (only running ones are read). */
+    stoppedHint?: boolean;
+  } = {},
 ): string[] {
   const { dim, green } = colors(color);
   if (databases.length === 0)
@@ -143,6 +173,9 @@ export function renderList(
         `${databases.length} ${databases.length === 1 ? "database" : "databases"} · ${running} running · ${size(total)}`,
       ],
     }),
+    ...(stoppedHint && databases.some((d) => !d.running)
+      ? [dim("a stopped one's schemas show while it runs (`kasbah dev` in its app)")]
+      : []),
     dim("delete one with `kasbah clean` in its app directory"),
   ];
 }

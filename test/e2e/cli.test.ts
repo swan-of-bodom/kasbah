@@ -269,7 +269,7 @@ test.skipIf(url === undefined)(
 
 const hasRuntime = ["docker", "podman"].some((r) => spawnSync(r, ["version"]).status === 0);
 test.skipIf(!hasRuntime)(
-  "dev without DATABASE_URL: a Postgres container for the app, stopped with dev, data kept",
+  "dev without DATABASE_URL: a Postgres container for the app, stopped with dev even on a doubled Ctrl-C, data kept",
   async () => {
     const name = containerName(dir);
     const runtime = spawnSync("docker", ["version"]).status === 0 ? "docker" : "podman";
@@ -301,6 +301,9 @@ test.skipIf(!hasRuntime)(
         },
       );
       expect(first.out.join("")).toContain(`creating ${name}`);
+      // Twice, as under pnpm: the terminal's Ctrl-C and pnpm's copy of it (sent at once, the two would be one).
+      first.p.kill("SIGINT");
+      await new Promise((r) => setTimeout(r, 100));
       first.p.kill("SIGINT");
       expect(await first.exited).toBe(0);
       expect(

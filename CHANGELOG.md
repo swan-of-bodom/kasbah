@@ -4,11 +4,14 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
-- `kasbah list` shows, with `DATABASE_URL` (or `--database`), every app schema in that database: running or stopped,
-  made by `dev` or `start`, phase, last block, tables, size and last activity, and each event cache's size; then
+- `kasbah list` shows, with `DATABASE_URL` (or `--database`), every app schema in that database (without it, in each
+  running dev container): running or stopped, made by `dev` or `start`, phase, last block, tables, size and last
+  activity, and each event cache's size; then
   every dev database on the machine (the Postgres containers `dev` makes without `DATABASE_URL`): running or
   stopped, port, volume size and the app directory. `dev` now labels the containers it makes with their directory;
   one made before shows none until `kasbah clean` and the next `dev`.
+- `pnpm dev` stopped with Ctrl-C now stops its Postgres container: pnpm passes the Ctrl-C on, so `dev` got it twice,
+  and the second ended it before it stopped the container, which kept running.
 - The progress screen's handler table counts every run on the schema: a run resumed after a stop shows the millions
   its earlier runs handled, not only its own. Each commit saves the totals with its checkpoint. `/metrics` still
   counts the process.

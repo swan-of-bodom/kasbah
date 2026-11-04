@@ -8,6 +8,9 @@ import { sleep } from "../utils/sleep.ts";
 /** Fully qualified: Podman refuses or prompts for a short name, depending on the distro's registries. */
 export const IMAGE = "docker.io/library/postgres:17";
 
+/** A dev container's database, published on `port` of localhost. */
+export const devUrl = (port: string) => `postgresql://postgres:kasbah@127.0.0.1:${port}/kasbah`;
+
 /** The label holding the app directory a dev container belongs to, which `kasbah list` shows. */
 export const APP_LABEL = "kasbah.app";
 
@@ -91,7 +94,7 @@ export async function devDatabase(
 
   const port = /:(\d+)\s*$/m.exec(run(runtime, ["port", container, "5432/tcp"]).stdout)?.[1];
   if (port === undefined) throw new Error(`${container} publishes no port for 5432`);
-  const url = `postgresql://postgres:kasbah@127.0.0.1:${port}/kasbah`;
+  const url = devUrl(port);
   // The image runs a socket-only server while it initialises: TCP answers once the real one is up.
   const end = Date.now() + 60_000;
   for (;;) {

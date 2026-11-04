@@ -73,7 +73,8 @@ kasbah list [--database <url>]
 
 With `DATABASE_URL` (or `--database`), the app schemas in that database, largest first: whether an indexer is running
 on it, whether `dev` or `start` made it, its phase, last block, table count, size and when it was last active; then the
-size of each chain's event cache. With a schema per deploy, it shows which old ones you can drop.
+size of each chain's event cache. With a schema per deploy, it shows which old ones you can drop. Without
+`DATABASE_URL`, the same for each running dev container (a stopped one shows its schemas once `dev` starts it).
 
 Then every dev database on the machine, the Postgres containers `dev` made for apps without `DATABASE_URL`: whether
 it is running, its port, the size of its volume and the app directory it belongs to. Containers an older kasbah made

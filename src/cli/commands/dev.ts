@@ -68,8 +68,13 @@ export async function dev(
     clearTimeout(timer);
     timer = setTimeout(() => void restart(), 150);
   });
+  // Every signal is handled, once stopping: under pnpm one Ctrl-C arrives twice (from the terminal and forwarded by
+  // pnpm), and a second with no handler would kill dev before it stops the container.
+  let stopping = false;
   for (const s of ["SIGINT", "SIGTERM"] as const) {
-    process.once(s, async () => {
+    process.on(s, async () => {
+      if (stopping) return;
+      stopping = true;
       watcher.close();
       clearTimeout(timer);
       child?.kill("SIGINT");
