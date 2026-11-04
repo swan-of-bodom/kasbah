@@ -1,4 +1,10 @@
-import { customType } from "drizzle-orm/pg-core";
+import { toSnakeCase } from "drizzle-orm/casing";
+import {
+  customType,
+  pgTable as drizzlePgTable,
+  type PgColumnBuilderBase,
+  type PgTableFn,
+} from "drizzle-orm/pg-core";
 
 /** Any Cairo integer up to u256 (and i129-style signed values): `numeric(78, 0)` in Postgres, `bigint` in JS. */
 export const bignum = customType<{ data: bigint; driverData: string }>({
@@ -11,3 +17,23 @@ export const bignum = customType<{ data: bigint; driverData: string }>({
 export const hex = customType<{ data: `0x${string}`; driverData: string }>({
   dataType: () => "text",
 });
+
+type Columns = Record<string, PgColumnBuilderBase>;
+
+/** Names each column after its key in snake_case (`sqrtRatio` → `sqrt_ratio`), unless the column names itself. */
+function snakeNamed<C extends Columns>(columns: C): C {
+  for (const [key, builder] of Object.entries(columns))
+    (builder as unknown as { setName(name: string): void }).setName(toSnakeCase(key));
+  return columns;
+}
+
+/**
+ * Drizzle's `pgTable`, with columns named in snake_case in Postgres: the TypeScript keys stay as written, and SQL
+ * clients that compile queries with snake_case casing find the columns.
+ */
+export const pgTable = ((name: string, columns: Columns | ((t: never) => Columns), extra?: never) =>
+  (drizzlePgTable as (...args: unknown[]) => unknown)(
+    name,
+    typeof columns === "function" ? (t: never) => snakeNamed(columns(t)) : snakeNamed(columns),
+    extra,
+  )) as PgTableFn;

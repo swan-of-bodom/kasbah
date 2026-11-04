@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { defineConfig } from "vitest/config";
+import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
@@ -7,6 +7,8 @@ export default defineConfig({
     alias: { graphql: createRequire(import.meta.url).resolve("graphql") },
   },
   test: {
+    // Worktrees of this repo (an editor's agents) hold copies of the tests.
+    exclude: [...configDefaults.exclude, ".claude/**"],
     globalSetup: ["test/teardown.ts"],
     // Every e2e run starts a fetch thread (a V8 instance and a Postgres connection of its own), and the files run in
     // parallel: tests of ~1 s alone took past the default 5 s with all of them running, here and on CI's 4 cores.

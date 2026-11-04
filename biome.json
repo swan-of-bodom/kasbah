@@ -17,7 +17,8 @@
       "!test/bench/results",
       "!**/pnpm-lock.yaml",
       "!documentation/src/pages.gen.ts",
-      "!**/generated"
+      "!**/generated",
+      "!.claude"
     ]
   },
   "formatter": {

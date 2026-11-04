@@ -55,7 +55,6 @@ export {
   json,
   jsonb,
   numeric,
-  pgTable,
   primaryKey,
   real,
   smallint,
@@ -98,7 +97,7 @@ export {
 export { ConfigError } from "./config/errors.ts";
 export type { Network } from "./config/network.ts";
 export { loadBalance, type RpcConfig } from "./config/rpc.ts";
-export { bignum, hex } from "./config/schema.ts";
+export { bignum, hex, pgTable } from "./config/schema.ts";
 export type { Db } from "./db/store.ts";
 export type {
   CallParameters,

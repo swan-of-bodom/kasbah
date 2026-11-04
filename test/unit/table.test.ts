@@ -1,3 +1,4 @@
+import { getTableColumns } from "drizzle-orm";
 import {
   foreignKey,
   index,
@@ -9,6 +10,7 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 import { expect, test } from "vitest";
+import { pgTable as kasbahTable } from "../../src/config/schema.ts";
 import { createTableSql, indexSql, primaryKeySql, tableInfo } from "../../src/db/table.ts";
 
 test("key columns are NOT NULL without the key too, composite keys included", () => {
@@ -64,4 +66,21 @@ test("what kasbah can't create as written is refused, not dropped", () => {
   expect(refused((t) => [foreignKey({ columns: [t.name], foreignColumns: [parent.id] })])).toThrow(
     "foreign keys",
   );
+});
+
+test("kasbah's pgTable names columns after their keys in snake_case, unless a column names itself", () => {
+  const pools = kasbahTable(
+    "pools",
+    { poolId: text().primaryKey(), sqrtRatio: integer().notNull(), own: integer("OwnName") },
+    (t) => [index().on(t.sqrtRatio)],
+  );
+  expect(createTableSql(tableInfo(pools))).toBe(
+    `CREATE TABLE IF NOT EXISTS "pools" ("pool_id" text NOT NULL, "sqrt_ratio" integer NOT NULL, "OwnName" integer, PRIMARY KEY ("pool_id"))`,
+  );
+  expect(indexSql(tableInfo(pools))).toEqual([
+    `CREATE INDEX IF NOT EXISTS "pools_sqrt_ratio_index" ON "pools" ("sqrt_ratio")`,
+  ]);
+  const built = kasbahTable("built", (t) => ({ someKey: t.text().primaryKey() }));
+  expect(createTableSql(tableInfo(built))).toContain(`("some_key" text NOT NULL`);
+  expect(Object.keys(getTableColumns(pools))).toEqual(["poolId", "sqrtRatio", "own"]);
 });
