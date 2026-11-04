@@ -1,6 +1,7 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { promisify } from "node:util";
 import pg from "pg";
 import type { Abi, AbiMember } from "../../abi/abi.ts";
 import { abiEvents } from "../../abi/events.ts";
@@ -35,7 +36,14 @@ export type InitOptions = {
   dependency?: string;
   /** Start from one of `TEMPLATES` instead of a contract address. */
   template?: string;
+  /** Installs with it, and writes the project for it. Default: the one running `create`, else pnpm. */
+  packageManager?: PackageManager;
+  skipInstall?: boolean;
+  /** Without it, the project is a git repository with one commit (unless it's inside one already). */
+  skipGit?: boolean;
 };
+
+export type PackageManager = "pnpm" | "npm" | "yarn";
 
 /** What every new project has, from a contract or a template. */
 type Common = {
@@ -44,6 +52,8 @@ type Common = {
   /** `undefined`: none in `.env`, so `dev` starts a container. */
   database: string | undefined;
   dependency: string;
+  /** Default: pnpm. */
+  packageManager?: PackageManager;
 };
 
 export type Project = Common & {
@@ -212,11 +222,13 @@ export function templateFiles(template: Template, p: Common): Record<string, str
 /** The files around the app's own: package, TypeScript, environment, Docker and README, which starts with `about`. */
 function commonFiles(p: Common, about: string): Record<string, string> {
   const lines = (...l: string[]) => `${l.join("\n")}\n`;
+  const pm = p.packageManager ?? "pnpm";
+  const run = (script: string, args = "") => runCommand(pm, script, args);
   const pkg = {
     name: basename(p.dir),
     private: true,
     type: "module",
-    packageManager: "pnpm@10.12.1",
+    ...(pm === "pnpm" ? { packageManager: PNPM } : {}),
     scripts: {
       dev: "kasbah dev",
       fresh: "kasbah dev --reset",
@@ -242,6 +254,7 @@ function commonFiles(p: Common, about: string): Record<string, string> {
   };
   const env = (rpc: string, database: string | undefined) =>
     lines(
+      ...(rpc === PUBLIC_RPC ? [`# ${PUBLIC_RPC_NOTE}`] : []),
       `KASBAH_RPC_URL=${rpc}`,
       database === undefined
         ? "# DATABASE_URL=postgresql://…  (unset: `pnpm dev` runs Postgres in a Docker or Podman container)"
@@ -257,7 +270,9 @@ function commonFiles(p: Common, about: string): Record<string, string> {
     ),
     ".gitignore": "node_modules\n.env\n",
     ".dockerignore": "node_modules\n.env\n.git\n",
-    Dockerfile: DOCKERFILE,
+    Dockerfile: dockerfile(pm),
+    // Yarn 2 and later would otherwise install without node_modules, where the image runs kasbah from.
+    ...(pm === "yarn" ? { ".yarnrc.yml": "nodeLinker: node-modules\n" } : {}),
     "docker-compose.yml": compose(schemaName(basename(p.dir))),
     "README.md": lines(
       `# ${basename(p.dir)}`,
@@ -270,9 +285,9 @@ function commonFiles(p: Common, about: string): Record<string, string> {
       "- `src/api/index.ts`: the HTTP API, a Hono app: GraphQL at `/graphql`, and your own endpoints",
       "",
       "```",
-      "pnpm dev               # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql",
-      `pnpm start --schema ${schemaName(basename(p.dir))}   # the same for production, without watching (a new schema per deploy)`,
-      `pnpm serve --schema ${schemaName(basename(p.dir))}   # the API alone, over what start indexed`,
+      `${run("dev")}   # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql`,
+      `${run("start", `--schema ${schemaName(basename(p.dir))}`)}   # the same for production, without watching (a new schema per deploy)`,
+      `${run("serve", `--schema ${schemaName(basename(p.dir))}`)}   # the API alone, over what start indexed`,
       "docker compose up -d   # Postgres and the indexer, the API on 127.0.0.1:42069",
       "```",
       "",
@@ -280,21 +295,43 @@ function commonFiles(p: Common, about: string): Record<string, string> {
       ...(p.dependency.startsWith("file:")
         ? [
             "",
-            "kasbah comes from a local tarball (a checkout's): `docker compose` builds once it's `pnpm add kasbah` from npm.",
+            `kasbah comes from a local tarball (a checkout's): \`docker compose\` builds once it's \`${pm} add kasbah\` from npm.`,
           ]
         : []),
     ),
   };
 }
 
-const DOCKERFILE = `FROM node:24-slim
-RUN npm install -g pnpm@10.12.1
-WORKDIR /app
-COPY . .
-RUN pnpm install
+/**
+ * The RPC `init` offers: free and public (Juno, spec 0.10, mainnet), checked 2026-11-04, about 1.2 s for a page of 1,000
+ * events. Blast's and Lava's public endpoints, once the usual free ones, had closed by then.
+ */
+const PUBLIC_RPC = "https://starknet-rpc.publicnode.com";
+
+/** Said where the public RPC is written: fine to try kasbah, too slow and rate-limited for a long backfill. */
+const PUBLIC_RPC_NOTE =
+  "A free public RPC, to try kasbah: replace it with a provider's (Alchemy, Infura, your own node) for a long backfill.";
+
+/** The pnpm a project asks for (`packageManager`), and its image installs. */
+const PNPM = "pnpm@10.12.1";
+
+/** `script` with `args` as `pm` runs it: npm needs `run`, and `--` before arguments. */
+function runCommand(pm: PackageManager, script: string, args = ""): string {
+  if (pm === "npm") return `npm run ${script}${args === "" ? "" : ` -- ${args}`}`;
+  return `${pm} ${script}${args === "" ? "" : ` ${args}`}`;
+}
+
+const INSTALL: Record<PackageManager, string> = {
+  pnpm: `RUN npm install -g ${PNPM}\nWORKDIR /app\nCOPY . .\nRUN pnpm install`,
+  npm: "WORKDIR /app\nCOPY . .\nRUN npm install",
+  yarn: "RUN corepack enable\nWORKDIR /app\nCOPY . .\nRUN yarn install",
+};
+
+const dockerfile = (pm: PackageManager) => `FROM node:24-slim
+${INSTALL[pm]}
 ENV API_HOST=0.0.0.0
 EXPOSE 42069
-# kasbah itself, not through pnpm: it gets the SIGTERM of a stop and finishes the block it's on.
+# kasbah itself, not through the package manager: it gets the SIGTERM of a stop and finishes the block it's on.
 CMD ["node", "node_modules/kasbah/dist/cli/main.js", "start"]
 `;
 
@@ -373,13 +410,14 @@ export async function init(o: InitOptions): Promise<void> {
   ui.line(`${ui.bold("kasbah init")}  ${ui.dim("a new Starknet indexer")}`);
   ui.line();
 
-  const template = await askTemplate(a, o);
+  checkTemplate(o);
   const dir =
-    o.dir ??
-    (a.ask ? await ui.text("Directory", { initial: template ?? "my-indexer" }) : "my-indexer");
+    o.dir ?? (a.ask ? await ui.text("Project directory", { initial: "my-indexer" }) : "my-indexer");
   const target = resolve(dir);
   if (existsSync(target) && readdirSync(target).length > 0)
     throw new ConfigError(`${target} is not empty`);
+  const template = await askTemplate(a, o);
+  const packageManager = o.packageManager ?? fromUserAgent() ?? "pnpm";
   const { rpc, client, network } = await askRpc(a, o);
   if (template !== undefined) {
     if (network !== "mainnet")
@@ -388,8 +426,12 @@ export async function init(o: InitOptions): Promise<void> {
       );
     const database = await askDatabase(a, o);
     const dependency = o.dependency ?? indexerSpec();
-    write(ui, target, templateFiles(template, { dir: target, rpc, database, dependency }));
-    await nextSteps(a, dir, target);
+    write(
+      ui,
+      target,
+      templateFiles(template, { dir: target, rpc, database, dependency, packageManager }),
+    );
+    await finish(ui, o, target, packageManager, rpc);
     return;
   }
   const { address, abi } = await askContract(a, o, client);
@@ -429,9 +471,17 @@ export async function init(o: InitOptions): Promise<void> {
     timestamps,
     ws,
     dependency: o.dependency ?? indexerSpec(),
+    packageManager,
   });
   write(ui, target, files);
-  await nextSteps(a, dir, target, startBlock);
+  await finish(ui, o, target, packageManager, rpc, startBlock);
+}
+
+/** The package manager running `pnpm create` (or `npm init`, `yarn create`), from the variable it sets. */
+function fromUserAgent(): PackageManager | undefined {
+  const agent = process.env.npm_config_user_agent ?? "";
+  for (const pm of ["pnpm", "yarn", "npm"] as const) if (agent.startsWith(pm)) return pm;
+  return undefined;
 }
 
 function write(ui: Prompt, target: string, files: Record<string, string>) {
@@ -448,16 +498,19 @@ function write(ui: Prompt, target: string, files: Record<string, string>) {
   ui.line();
 }
 
+/** A bad `--template` is refused before any question. */
+function checkTemplate(o: InitOptions) {
+  if (o.template === undefined) return;
+  if (!Object.hasOwn(TEMPLATES, o.template))
+    throw new ConfigError(
+      `no template ${o.template} (there are ${Object.keys(TEMPLATES).join(", ")})`,
+    );
+  if (o.address !== undefined)
+    throw new ConfigError("--template and --address don't go together: pick one to start from");
+}
+
 async function askTemplate({ ui, ask }: Asking, o: InitOptions): Promise<Template | undefined> {
-  if (o.template !== undefined) {
-    if (!Object.hasOwn(TEMPLATES, o.template))
-      throw new ConfigError(
-        `no template ${o.template} (there are ${Object.keys(TEMPLATES).join(", ")})`,
-      );
-    if (o.address !== undefined)
-      throw new ConfigError("--template and --address don't go together: pick one to start from");
-    return o.template as Template;
-  }
+  if (o.template !== undefined) return o.template as Template;
   if (!ask || o.address !== undefined) return undefined;
   return ui.select<Template | undefined>("Start from", [
     { label: "A contract address", value: undefined, hint: "a table per event, from its ABI" },
@@ -469,12 +522,12 @@ async function askTemplate({ ui, ask }: Asking, o: InitOptions): Promise<Templat
   ]);
 }
 
-async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
-  let rpc = o.rpc ?? (ask ? undefined : (process.env.KASBAH_RPC_URL ?? need("rpc")));
+async function askRpc({ ui, ask }: Asking, o: InitOptions) {
+  let rpc = o.rpc ?? (ask ? undefined : (process.env.KASBAH_RPC_URL ?? PUBLIC_RPC));
   for (;;) {
     rpc ??= await ui.text("Starknet RPC URL", {
-      initial: process.env.KASBAH_RPC_URL,
-      hint: "spec 0.10 (pathfinder or juno), e.g. https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<key>",
+      initial: process.env.KASBAH_RPC_URL ?? PUBLIC_RPC,
+      hint: "spec 0.10 (pathfinder or juno); a free public one by default, a provider's (Alchemy: …/starknet/version/rpc/v0_10/<key>) is faster",
       check: (v) => (/^https?:\/\//.test(v) ? undefined : "an http(s) URL"),
     });
     const client = new RpcClient(rpc, { maxAttempts: 2 });
@@ -613,15 +666,72 @@ async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string 
   return database;
 }
 
-async function nextSteps({ ui, ask }: Asking, dir: string, target: string, startBlock?: number) {
-  const pm = process.env.npm_config_user_agent?.startsWith("npm") ? "npm" : "pnpm";
-  if (ask && (await ui.confirm(`Install the dependencies now (${pm} install)?`))) {
-    const r = spawnSync(pm, ["install"], { cwd: target, stdio: "inherit" });
-    if (r.status !== 0) ui.line(ui.yellow(`${pm} install failed: run it in ${dir}`));
-  } else ui.line(`  cd ${dir} && ${pm} install`);
+/** Installs the packages and makes a git repository, unless skipped, then says how to start. */
+async function finish(
+  ui: Prompt,
+  o: InitOptions,
+  target: string,
+  pm: PackageManager,
+  rpc: string,
+  startBlock?: number,
+) {
+  const exec = promisify(execFile);
+  if (!o.skipInstall)
+    try {
+      await ui.step(
+        `Installing packages with ${pm}`,
+        // pnpm skips devDependencies when NODE_ENV is production: the project's TypeScript is one.
+        () =>
+          exec(pm, ["install"], { cwd: target, env: { ...process.env, NODE_ENV: "development" } }),
+        () => "done",
+      );
+    } catch (e) {
+      ui.line(ui.yellow(`  ${pm} install failed: run it in the project`));
+      const output = (e as { stderr?: string }).stderr?.trim();
+      if (output) ui.line(ui.dim(output.split("\n").slice(-5).join("\n")));
+    }
+  if (!o.skipGit && !(await insideRepository(target)))
+    try {
+      await ui.step(
+        "Making a git repository",
+        async () => {
+          await exec("git", ["init", "--quiet"], { cwd: target });
+          await exec("git", ["add", "."], { cwd: target });
+          await exec(
+            "git",
+            ["commit", "--quiet", "--no-verify", "-m", "Initial commit from kasbah init"],
+            {
+              cwd: target,
+            },
+          );
+        },
+        () => "one commit",
+      );
+    } catch {
+      ui.line(
+        ui.yellow("  git failed (is it installed, with a user.name and user.email?): skipped"),
+      );
+    }
+  const dir = relative(process.cwd(), target) || ".";
+  ui.line();
+  ui.line(`${ui.green("Done.")} ${ui.bold(target)}`);
   ui.line();
   ui.line(
-    `Then ${ui.cyan(`${pm} dev`)} in ${dir}: it indexes from ${startBlock === undefined ? "the config's start block" : `block ${startBlock.toLocaleString("en")}`}, follows the head and restarts on every change.`,
+    `Run ${ui.cyan(`cd ${dir}`)}${o.skipInstall ? `, ${ui.cyan(`${pm} install`)}` : ""} and ${ui.cyan(runCommand(pm, "dev"))}: it indexes from ${startBlock === undefined ? "the config's start block" : `block ${startBlock.toLocaleString("en")}`}, follows the head and restarts on every change.`,
   );
   ui.line(`GraphiQL at ${ui.cyan("http://localhost:42069/graphql")} once it runs.`);
+  if (rpc === PUBLIC_RPC) {
+    ui.line();
+    ui.line(ui.yellow(`${PUBLIC_RPC_NOTE} It's KASBAH_RPC_URL in .env.`));
+  }
+}
+
+/** Whether `dir` is inside a git work tree already: a project in a monorepo stays part of it. */
+async function insideRepository(dir: string): Promise<boolean> {
+  try {
+    await promisify(execFile)("git", ["rev-parse", "--is-inside-work-tree"], { cwd: dir });
+    return true;
+  } catch {
+    return false;
+  }
 }

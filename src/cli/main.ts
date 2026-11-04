@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { inspect, parseArgs } from "node:util";
 import { errorCode } from "../utils/errors.ts";
 import { cache } from "./commands/cache.ts";
@@ -10,12 +12,7 @@ import { start } from "./commands/start.ts";
 import { target } from "./project.ts";
 
 const USAGE = `usage:
-  kasbah init [dir]              a new indexer: asks for the RPC, a contract (its ABI and deployment block
-                                        are read from the chain), events and Postgres
-    [--template erc20|ekubo|jediswap]   or start from a template: LORDS with relations, Ekubo's pools and swaps,
-                                        JediSwap's pairs from its factory (mainnet)
-    [--rpc <url>] [--address <0x…>] [--name <Name>] [--handle <A,B>] [--start <block>] [--database <url>]
-    [--timestamps] [--no-ws] [--yes]    answers as flags; --yes takes the defaults, asks nothing
+  kasbah init [dir]              a new indexer from a contract or a template (kasbah init --help)
   kasbah start [app.ts]          index, then follow the head (until --to, or Ctrl-C); without app.ts, the
     [--to <block>] [--reset]            project here: kasbah.config.ts, src/index.ts and src/api/index.ts
   kasbah dev [app.ts]            the same, restarted on every file change (a changed build re-indexes);
@@ -35,6 +32,31 @@ const USAGE = `usage:
                                         each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
 Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
+
+/** `kasbah init --help`, which `pnpm create kasbah --help` shows too. */
+const INIT_USAGE = `usage: kasbah init [dir] [options]   (or pnpm create kasbah [dir] [options])
+
+A new Starknet indexer: asks for the directory, what to start from, the RPC and Postgres, then installs the
+packages and makes a git repository.
+
+  -t, --template <name>    start from a template (mainnet):
+                             erc20     LORDS: balances, transfers and allowances, with GraphQL relations
+                             ekubo     Ekubo's Core: every pool, with its swaps
+                             jediswap  JediSwap v1: the pairs its factory creates, with their swaps and reserves
+  --address <0x…>          or from a contract: its ABI and deployment block are read from the chain
+    --name <Name>            its name in the app (handlers are <Name>:<Event>)
+    --handle <A,B>           the events to index (default: all)
+    --start <block>          the first block (default: its deployment)
+    --timestamps             store each event's block timestamp (one call per block with events)
+  --rpc <url>              a spec 0.10 RPC (default: KASBAH_RPC_URL, else a free public one)
+  --database <url>         Postgres (empty: \`dev\` runs one in a container)
+  --no-ws                  poll for new blocks instead of a WebSocket
+  --npm, --pnpm, --yarn    the package manager (default: the one running create, else pnpm)
+  --skip-install           don't install the packages
+  --skip-git               don't make a git repository
+  -y, --yes                take the defaults, ask nothing
+  -h, --help               this
+  -v, --version            kasbah's version`;
 
 // Node warns once that it strips the app's types: expected here, so only other warnings are shown.
 process.removeAllListeners("warning");
@@ -74,7 +96,13 @@ const { positionals, values } = parseArgs({
     timestamps: { type: "boolean" },
     yes: { type: "boolean", short: "y" },
     dependency: { type: "string" },
-    template: { type: "string" },
+    template: { type: "string", short: "t" },
+    npm: { type: "boolean" },
+    pnpm: { type: "boolean" },
+    yarn: { type: "boolean" },
+    "skip-install": { type: "boolean" },
+    "skip-git": { type: "boolean" },
+    version: { type: "boolean", short: "v" },
     handle: { type: "string" },
     help: { type: "boolean", short: "h" },
   },
@@ -87,8 +115,18 @@ if (command !== "init" && command !== "cache") {
   if (values.hostname !== undefined) process.env.API_HOST = values.hostname;
 }
 try {
-  if (values.help || command === undefined) console.log(USAGE);
-  else if (command === "init") await init({ ...values, dir: arg, events: values.handle });
+  if (values.version) console.log(version());
+  else if (values.help && command === "init") console.log(INIT_USAGE);
+  else if (values.help || command === undefined) console.log(USAGE);
+  else if (command === "init")
+    await init({
+      ...values,
+      dir: arg,
+      events: values.handle,
+      packageManager: values.npm ? "npm" : values.yarn ? "yarn" : values.pnpm ? "pnpm" : undefined,
+      skipInstall: values["skip-install"],
+      skipGit: values["skip-git"],
+    });
   else if (command === "start")
     await start(target(arg), {
       to: values.to === undefined ? undefined : Number(values.to),
@@ -115,4 +153,9 @@ try {
     `[kasbah] ${(e as Error)?.name === "ConfigError" ? (e as Error).message : inspect(e)}`,
   );
   process.exitCode = 1;
+}
+
+function version(): string {
+  const file = resolve(import.meta.dirname, "../../package.json");
+  return (JSON.parse(readFileSync(file, "utf8")) as { version: string }).version;
 }

@@ -46,7 +46,6 @@ export function graphql(
   }: GraphqlLimits = {},
 ) {
   const graphqlSchema = buildGraphQLSchema({ schema });
-  // Per API (by its reader): Drizzle on the reader's pool, with this schema's tables for relational queries.
   const dbs = new WeakMap<Reader, NodePgDatabase<Tables>>();
   writeSchema(graphqlSchema).catch(() => {});
 

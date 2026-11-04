@@ -119,3 +119,31 @@ test.each(Object.keys(TEMPLATES) as Template[])(
     expect(written[".env"]).toContain("KASBAH_RPC_URL=http://rpc\n# DATABASE_URL=");
   },
 );
+
+test("the project is written for its package manager: npm runs scripts with run, yarn installs into node_modules", () => {
+  const common = { dir: "/x/mine", rpc: "http://rpc", database: undefined, dependency: "^0.0.0" };
+  const pnpm = templateFiles("ekubo", common);
+  expect(JSON.parse(pnpm["package.json"]!).packageManager).toMatch(/^pnpm@/);
+  expect(pnpm.Dockerfile).toContain("RUN pnpm install");
+  expect(pnpm["README.md"]).toContain("pnpm start --schema mine");
+
+  const npm = templateFiles("ekubo", { ...common, packageManager: "npm" });
+  expect(JSON.parse(npm["package.json"]!).packageManager).toBe(undefined);
+  expect(npm.Dockerfile).toContain("RUN npm install");
+  expect(npm.Dockerfile).not.toContain("pnpm");
+  expect(npm["README.md"]).toContain("npm run start -- --schema mine");
+
+  const yarn = templateFiles("ekubo", { ...common, packageManager: "yarn" });
+  expect(yarn[".yarnrc.yml"]).toBe("nodeLinker: node-modules\n");
+  expect(yarn.Dockerfile).toContain("RUN corepack enable");
+  expect(yarn["README.md"]).toContain("yarn dev");
+});
+
+test("the public RPC comes with a note in .env to replace it; a given one doesn't", () => {
+  const common = { dir: "/x/mine", database: undefined, dependency: "^0.0.0" };
+  const env = (rpc: string) => templateFiles("erc20", { ...common, rpc })[".env"]!;
+  expect(env("https://starknet-rpc.publicnode.com")).toMatch(
+    /^# A free public RPC, to try kasbah: replace it with a provider's \(Alchemy.*\nKASBAH_RPC_URL=https:\/\/starknet-rpc\.publicnode\.com\n/,
+  );
+  expect(env("http://rpc")).toMatch(/^KASBAH_RPC_URL=http:\/\/rpc\n/);
+});

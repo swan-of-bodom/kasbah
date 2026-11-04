@@ -26,7 +26,10 @@ yarn create kasbah my-indexer
 
 :::
 
-It asks for your RPC and a contract address, then writes the project. See the [quickstart](/docs/quickstart).
+It asks what to start from (a contract address or a template), your RPC and a database, then writes the project,
+installs it and makes it a git repository. The RPC defaults to a free public one, fine to try kasbah; for a long
+backfill, use a provider's (Alchemy, Infura) or your own node. See the [quickstart](/docs/quickstart), and
+`pnpm create kasbah --help` for the flags.
 
 ## Into an existing project
 

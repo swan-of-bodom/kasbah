@@ -17,9 +17,8 @@ GraphQL and your own endpoints. If you've used [Ponder](https://ponder.sh), you 
 ## Quickstart
 
 ```bash
-pnpm create kasbah my-indexer # asks for an RPC and a contract address, writes the project
+pnpm create kasbah my-indexer # asks for a contract or a template, an RPC and Postgres; installs it
 cd my-indexer
-pnpm install
 pnpm dev                      # backfills, follows the head, restarts on every change
 ```
 
@@ -78,7 +77,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
 
 | Command | What it does |
 |---|---|
-| `kasbah init <dir>` | a new project from a contract address |
+| `kasbah init <dir>` | a new project from a contract address or a template (`--help` for its flags) |
 | `kasbah dev` | index and serve, restarting on every change |
 | `kasbah start --schema <name>` | index and serve, for production |
 | `kasbah serve --schema <name>` | the API alone, over what an indexer stored |

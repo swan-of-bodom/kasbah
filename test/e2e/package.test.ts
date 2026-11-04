@@ -16,6 +16,13 @@ import { afterAll, beforeAll, expect, test } from "vitest";
 import { counterAbi, counterNode } from "../fixtures/counter.ts";
 
 const url = process.env.DATABASE_URL;
+/** A git identity for init's first commit, which CI may not have. */
+const GIT_USER = {
+  GIT_AUTHOR_NAME: "test",
+  GIT_AUTHOR_EMAIL: "test@example.com",
+  GIT_COMMITTER_NAME: "test",
+  GIT_COMMITTER_EMAIL: "test@example.com",
+};
 const root = join(import.meta.dirname, "../..");
 const dir = mkdtempSync(join(tmpdir(), "kasbah-pkg-"));
 const node = counterNode(100);
@@ -113,10 +120,30 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
       "0",
       "--database",
       "postgres://nobody@127.0.0.1:1/x",
+      "--npm",
+      "--skip-install",
     ],
-    { cwd: create, encoding: "utf8" },
+    { cwd: create, encoding: "utf8", env: { ...process.env, ...GIT_USER } },
   );
   expect(out).toContain("kasbah init");
+  const project = join(create, "proj");
+  expect(JSON.parse(readFileSync(join(project, "package.json"), "utf8")).packageManager).toBe(
+    undefined,
+  );
+  expect(readFileSync(join(project, "Dockerfile"), "utf8")).toContain("RUN npm install");
+  expect(out).toContain("npm run dev");
+  const git = (args: string[]) => execFileSync("git", args, { cwd: project, encoding: "utf8" });
+  expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");
+  expect(git(["status", "--porcelain"])).toBe("");
+  expect(git(["ls-files"]).split("\n")).not.toContain(".env");
+  const help = execFileSync(join(create, "node_modules/.bin/create-kasbah"), ["--help"], {
+    encoding: "utf8",
+  });
+  for (const option of ["--template", "--npm", "--skip-install", "--skip-git"])
+    expect(help).toContain(option);
+  expect(
+    execFileSync(join(create, "node_modules/.bin/create-kasbah"), ["-v"], { encoding: "utf8" }),
+  ).toBe(`${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}\n`);
   expect(
     JSON.parse(readFileSync(join(create, "proj/package.json"), "utf8")).dependencies.kasbah,
   ).toBe(`^${JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version}`);
@@ -182,6 +209,8 @@ test.skipIf(url === undefined)(
         "--no-ws",
         "--dependency",
         `file:../${tarball}`,
+        "--skip-install",
+        "--skip-git",
       ],
       { cwd: dir, encoding: "utf8" },
     );
@@ -250,6 +279,7 @@ test("kasbah init --template writes each template from the installed package, an
       const name = `kasbah_test_${template}`;
       const args = ["init", name, "--template", template, "--rpc", mainnetUrl, "--yes"];
       args.push("--database", "", "--dependency", `file:../${tarball}`);
+      args.push("--skip-install", "--skip-git");
       await run(bin, args, { cwd: dir });
       const project = join(dir, name);
       const pnpm = (a: string[]) =>

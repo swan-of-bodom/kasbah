@@ -6,11 +6,13 @@
 kasbah init [dir]
 ```
 
-Creates a project. Asks for whatever isn't given as a flag.
+Creates a project, then installs its packages and makes it a git repository with one commit. Asks for whatever
+isn't given as a flag. `pnpm create kasbah` (`npm create kasbah@latest`, `yarn create kasbah`) runs it.
 
 | Flag | Description |
 | --- | --- |
-| `--rpc <url>` | the Starknet RPC |
+| `-t, --template <name>` | start from a template: `erc20`, `ekubo` or `jediswap` (see the [quickstart](/docs/quickstart)) |
+| `--rpc <url>` | the Starknet RPC (default: `KASBAH_RPC_URL`, else a free public one, fine to try kasbah; use a provider's, such as Alchemy, for a long backfill) |
 | `--address <0x…>` | the contract; its ABI and deployment block are read from the chain |
 | `--name <Name>` | its name in the config, `Core` in `Core:Swapped` |
 | `--handle <A,B>` | events to write handlers and tables for |
@@ -18,7 +20,12 @@ Creates a project. Asks for whatever isn't given as a flag.
 | `--database <url>` | a Postgres URL (default: a dev container) |
 | `--timestamps` | a `timestamp` column in each table |
 | `--no-ws` | poll only, no WebSocket |
-| `--yes` | take the defaults, ask nothing |
+| `--npm`, `--pnpm`, `--yarn` | the package manager to install with and write the project for (default: the one running `create`, else pnpm) |
+| `--skip-install` | don't install the packages |
+| `--skip-git` | don't make a git repository (inside one already, it never does) |
+| `-y, --yes` | take the defaults, ask nothing |
+| `-h, --help` | `init`'s flags |
+| `-v, --version` | kasbah's version |
 
 ## dev
 

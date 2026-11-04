@@ -161,7 +161,6 @@ export function buildGraphQLSchema({ schema }: { schema: Tables }): GraphQLSchem
         for (const [columnName, column] of Object.entries(table.columns)) {
           const type = columnToGraphQLCore(column);
 
-          // Lists: equal, not equal, has and not has an element.
           if (type instanceof GraphQLList) {
             const baseType = innerType(type);
             for (const suffix of conditionSuffixes.universal)
@@ -170,7 +169,6 @@ export function buildGraphQLSchema({ schema }: { schema: Tables }): GraphQLSchem
               filterFields[`${columnName}${suffix}`] = { type: baseType };
           }
 
-          // JSON has no filters, booleans only (not) equal and (not) in; strings and numbers have their own.
           if (type instanceof GraphQLScalarType || type instanceof GraphQLEnumType) {
             if (type.name === "JSON") continue;
             for (const suffix of conditionSuffixes.universal)
@@ -618,7 +616,6 @@ async function executePluralQuery(
     };
   }
 
-  // The page before the cursor, read backwards, then put back in order.
   const [rows, totalCount] = await Promise.all([
     budget
       .read(

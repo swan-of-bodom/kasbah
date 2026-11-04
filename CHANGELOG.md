@@ -7,6 +7,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 - Templates: `kasbah init --template erc20|ekubo|jediswap` (or `pnpm create kasbah --template …`, or pick one when
   `init` asks what to start from) writes a finished mainnet app: LORDS balances, transfers and allowances with GraphQL
   relations; Ekubo's pools and swaps; JediSwap's pairs found through its factory. They replace `examples/`.
+- `init` (and `pnpm create kasbah`) asks for the directory first, installs the packages and makes the project a git
+  repository with one commit, as `create-ponder` does: `--skip-install` and `--skip-git` skip them, `--npm`, `--pnpm`
+  and `--yarn` pick the package manager (default: the one running `create`), and the project is written for it
+  (package.json, Dockerfile, README). `init --help` lists its flags, `-v` prints the version. The RPC defaults to a
+  free public one (`https://starknet-rpc.publicnode.com`), with a note in `.env` to replace it for a long backfill.
 - **Breaking:** the API is a [Hono](https://hono.dev) app. `src/api/index.ts` default-exports one, and kasbah mounts
   it after its own `/health`, `/ready`, `/status` and `/metrics`. `db` and `graphql()` come from the new `kasbah/api`
   entry: mount GraphQL with `app.use("/graphql", graphql({ db, schema }))`. Gone:

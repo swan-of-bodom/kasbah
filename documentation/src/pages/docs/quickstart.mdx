@@ -8,8 +8,10 @@
 kasbah init my-indexer
 ```
 
-`init` asks for your RPC, a contract address (its ABI and deployment block are read from the chain), the events to
-handle and a database (or none). It writes a working project: config, a table and a handler per event.
+`init` asks for a contract address (its ABI and deployment block are read from the chain) or a template, your RPC,
+the events to handle and a database (or none). It writes a working project (config, a table and a handler per
+event), installs it and makes it a git repository. The RPC defaults to a free public one: fine to try kasbah, slow
+for a long backfill, so replace it with a provider's (Alchemy, Infura) or your own node in `.env`.
 
 To skip the questions:
 
@@ -33,7 +35,6 @@ kasbah init my-indexer --template erc20
 
 ```bash
 cd my-indexer
-pnpm install
 pnpm dev
 ```
 
