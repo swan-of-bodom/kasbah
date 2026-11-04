@@ -721,8 +721,8 @@ TODO, stable views (to revisit later), as Ponder's `--views-schema` / `ponder db
 with a schema per deploy, a client reading the tables with its own SQL (a dashboard, a BI tool) must follow the new
 schema name after every deploy. A views schema with a fixed name (`my_indexer`) holding one view per table, repointed
 at the new deploy's tables once it's ready (`/ready`), keeps that name stable. The API, GraphQL and routes don't need
-it: each process reads its own schema. Old deploy schemas would also want Ponder's `db list` / `db prune` (the lock's
-heartbeat tells live ones from dead ones); today `clean --schema` drops one at a time.
+it: each process reads its own schema. Old deploy schemas are listed and dropped by `kasbah list` and `kasbah prune`
+(below).
 
 `kasbah()` from code implies nothing, so a library user or a
 test never opens a port by surprise. `network` is checked against `starknet_chainId` before the schema opens: an
@@ -756,9 +756,12 @@ only the directory's basename and a hash), and each volume's size from `system d
 Podman both report without reading the volume, which a rootless runtime's user can't. Running from anywhere, it
 needs no app.
 
-TODO: the rest of `ponder list`, with sizes: per schema with `_kasbah_meta` in the project's database, active (the
-lock), last active, last block, table count, size, plus the cache schemas' sizes. `prune` (drop the inactive ones)
-can follow, with the stable views TODO above.
+With `DATABASE_URL`, it first lists that database's app schemas, as `ponder db list` does but with sizes: a schema
+is one holding `_kasbah_meta`, running when its lock has an owner and a heartbeat younger than the lock's timeout,
+last active at that heartbeat; its phase and block are the meta's. Sizes come from the catalog
+(`pg_total_relation_size`), so listing reads no rows. `kasbah prune` drops the stopped ones (`ponder db prune`):
+each one's lock row is read `FOR UPDATE` in the transaction that drops it, so an indexer claiming it meanwhile
+either waits and recreates it or keeps it. The caches are never pruned: any app on the chain re-indexes from them.
 
 `serve`: `kasbah serve <app>` (`app.serve()`) runs the API alone over the app's schema,
 like `ponder serve`: an index finished with `--to`, or API processes next to one indexer.

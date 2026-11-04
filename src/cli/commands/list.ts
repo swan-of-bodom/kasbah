@@ -1,92 +1,148 @@
 import { homedir } from "node:os";
+import pg from "pg";
+import { type CacheInfo, listSchemas, type SchemaInfo } from "../../indexer/schemas.ts";
 import { type DevDatabaseInfo, listDevDatabases } from "../devdb.ts";
+import { ago, colors, size, table } from "../ui/table.ts";
 
-/** `kasbah list`: every dev database on the machine, largest first, in a box like the progress screen's. */
-export function list() {
-  const found = listDevDatabases();
+/**
+ * `kasbah list`: with `DATABASE_URL` (or `--database`), the app schemas and event caches in that database; then the
+ * dev databases on the machine, the containers `dev` made. Each largest first.
+ */
+export async function list(o: { database?: string }) {
   const color = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
-  if (found === undefined) return void console.log("no Docker or Podman: no dev databases");
-  console.log(renderList(found.databases, found.runtime, { color, home: homedir() }).join("\n"));
+  const database = o.database ?? process.env.DATABASE_URL;
+  const out: string[] = [];
+  if (database !== undefined) {
+    const pool = new pg.Pool({ connectionString: database, max: 1 });
+    try {
+      const { schemas, caches } = await listSchemas(pool);
+      out.push(...renderSchemas(schemas, caches, where(database), { color }), "");
+    } finally {
+      await pool.end();
+    }
+  }
+  const found = listDevDatabases();
+  if (found === undefined) {
+    if (database === undefined)
+      out.push("no DATABASE_URL, and no Docker or Podman for dev databases");
+  } else if (database === undefined || found.databases.length > 0)
+    out.push(...renderList(found.databases, found.runtime, { color, home: homedir() }));
+  console.log(out.join("\n").trimEnd());
 }
 
-/** A size in decimal units, as Docker and Podman print them. */
-const size = (n: number) =>
-  n >= 1e9
-    ? `${(n / 1e9).toFixed(1)} GB`
-    : n >= 1e6
-      ? `${Math.round(n / 1e6)} MB`
-      : `${Math.round(n / 1e3)} kB`;
+/** The database's host, port and name, never its user or password. */
+export function where(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.host}${u.pathname === "/" ? "" : u.pathname}`;
+  } catch {
+    return "DATABASE_URL";
+  }
+}
 
-/** The table `kasbah list` prints, without color when `color` is off. */
+/** The app schemas and event caches of one database. */
+export function renderSchemas(
+  schemas: readonly SchemaInfo[],
+  caches: readonly CacheInfo[],
+  database: string,
+  { color = false, now = Date.now() }: { color?: boolean; now?: number } = {},
+): string[] {
+  const { dim, green } = colors(color);
+  const cacheNotes = caches.map(
+    (c) => `event cache ${c.chain}: ${size(c.bytes)}, shared by its apps`,
+  );
+  if (schemas.length === 0)
+    return [`no app schemas in ${database}`, ...cacheNotes.map((n) => `  ${n}`)];
+  const total = schemas.reduce((s, x) => s + x.bytes, 0);
+  const running = schemas.filter((s) => s.running).length;
+  const stopped = schemas.length - running;
+  return [
+    ...table({
+      title: "schemas",
+      right: database,
+      color,
+      columns: [
+        { title: "SCHEMA" },
+        { title: "STATE" },
+        { title: "BY" },
+        { title: "PHASE" },
+        { title: "BLOCK", right: true },
+        { title: "TABLES", right: true },
+        { title: "SIZE", right: true },
+        { title: "LAST ACTIVE" },
+      ],
+      rows: schemas.map((s) => ({
+        cells: [
+          s.schema,
+          s.running ? "running" : "stopped",
+          s.dev === undefined ? "-" : s.dev ? "dev" : "start",
+          s.phase ?? "-",
+          s.block === undefined ? "-" : s.block.toLocaleString("en-US"),
+          String(s.tables),
+          size(s.bytes),
+          s.running ? "now" : s.lastActive === undefined ? "-" : ago(s.lastActive, now),
+        ],
+        style: (i, p) => (i === 1 ? (s.running ? green(p) : dim(p)) : p),
+      })),
+      notes: [
+        `${schemas.length} ${schemas.length === 1 ? "schema" : "schemas"} · ${running} running · ${size(total)}`,
+        ...cacheNotes,
+      ],
+    }),
+    ...(stopped === 0
+      ? []
+      : [
+          dim(
+            `drop the stopped ${stopped === 1 ? "one" : "ones"} with \`kasbah prune\` (the cache stays)`,
+          ),
+        ]),
+  ];
+}
+
+/** The dev databases on the machine. */
 export function renderList(
   databases: readonly DevDatabaseInfo[],
   runtime: string,
   { color = false, home = "" }: { color?: boolean; home?: string } = {},
 ): string[] {
-  const c = (open: number, close: number) => (s: string) =>
-    color ? `\x1b[${open}m${s}\x1b[${close}m` : s;
-  const dim = c(2, 22);
-  const bold = c(1, 22);
-  const green = c(32, 39);
+  const { dim, green } = colors(color);
   if (databases.length === 0)
     return [
       `no dev databases (${runtime}): \`kasbah dev\` makes one for an app without DATABASE_URL`,
     ];
-
   const shortHome = (dir: string) =>
     home !== "" && (dir === home || dir.startsWith(`${home}/`))
       ? `~${dir.slice(home.length)}`
       : dir;
-  const rows = databases.map((d) => ({
-    container: d.container,
-    state: d.running ? "running" : "stopped",
-    port: d.port ?? "-",
-    size: d.bytes === undefined ? "?" : size(d.bytes),
-    app: d.app === undefined ? "-" : shortHome(d.app),
-    running: d.running,
-  }));
-  const head = { container: "CONTAINER", state: "STATE", port: "PORT", size: "SIZE", app: "APP" };
-  const w = (k: keyof typeof head) => Math.max(head[k].length, ...rows.map((r) => r[k].length));
-  const widths = {
-    container: w("container"),
-    state: w("state"),
-    port: w("port"),
-    size: w("size"),
-    app: w("app"),
-  };
-  const cells = (r: typeof head, paint = (_k: keyof typeof head, s: string) => s) =>
-    [
-      paint("container", r.container.padEnd(widths.container)),
-      paint("state", r.state.padEnd(widths.state)),
-      paint("port", r.port.padStart(widths.port)),
-      paint("size", r.size.padStart(widths.size)),
-      paint("app", r.app.padEnd(widths.app)),
-    ].join("  ");
-  const inner = Object.values(widths).reduce((s, x) => s + x, 0) + 2 * 4;
-
   const total = databases.reduce((s, d) => s + (d.bytes ?? 0), 0);
   const running = databases.filter((d) => d.running).length;
-  const summary = `${databases.length} ${databases.length === 1 ? "database" : "databases"} · ${running} running · ${size(total)}`;
-  const title = ` ${bold("kasbah")} ${dim("·")} dev databases `;
-  const titleWidth = ` kasbah · dev databases `.length;
-  const right = ` ${runtime} `;
-  // Each line with its visible width: the cells are padded to `inner`, the summary isn't.
-  const body: [string, number][] = [
-    [dim(cells(head)), inner],
-    ...rows.map((r): [string, number] => [
-      cells(r, (k, s) =>
-        k === "state" ? (r.running ? green(s) : dim(s)) : k === "app" && r.app === "-" ? dim(s) : s,
-      ),
-      inner,
-    ]),
-    ["", 0],
-    [summary, summary.length],
-  ];
-  const width = Math.max(inner, titleWidth + right.length + 2);
   return [
-    `${dim("╭─")}${title}${dim("─".repeat(width + 2 - 1 - titleWidth - right.length - 1))}${dim(right)}${dim("─╮")}`,
-    ...body.map(([s, visible]) => `${dim("│")} ${s}${" ".repeat(width - visible)} ${dim("│")}`),
-    dim(`╰${"─".repeat(width + 2)}╯`),
+    ...table({
+      title: "dev databases",
+      right: runtime,
+      color,
+      columns: [
+        { title: "CONTAINER" },
+        { title: "STATE" },
+        { title: "PORT", right: true },
+        { title: "SIZE", right: true },
+        { title: "APP" },
+      ],
+      rows: databases.map((d) => ({
+        cells: [
+          d.container,
+          d.running ? "running" : "stopped",
+          d.port ?? "-",
+          d.bytes === undefined ? "?" : size(d.bytes),
+          d.app === undefined ? "-" : shortHome(d.app),
+        ],
+        style: (i, p) =>
+          i === 1 ? (d.running ? green(p) : dim(p)) : i === 4 && d.app === undefined ? dim(p) : p,
+      })),
+      notes: [
+        `${databases.length} ${databases.length === 1 ? "database" : "databases"} · ${running} running · ${size(total)}`,
+      ],
+    }),
     dim("delete one with `kasbah clean` in its app directory"),
   ];
 }

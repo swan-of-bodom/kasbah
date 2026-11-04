@@ -8,6 +8,7 @@ import { clean } from "./commands/clean.ts";
 import { dev } from "./commands/dev.ts";
 import { init } from "./commands/init.ts";
 import { list } from "./commands/list.ts";
+import { prune } from "./commands/prune.ts";
 import { serve } from "./commands/serve.ts";
 import { start } from "./commands/start.ts";
 import { target } from "./project.ts";
@@ -27,14 +28,17 @@ const USAGE = `usage:
   --port <n> / --hostname <host>        where the API listens (PORT / API_HOST; default 42069 on localhost)
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
   --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay
-  kasbah list                    every dev database on the machine (the containers \`dev\` made): running or
-                                        not, port, size and app directory
+  kasbah list                    with DATABASE_URL, its app schemas (running or not, phase, last block, size,
+                                        last active) and event caches; then every dev database on the machine
+                                        (the containers \`dev\` made), with its port, size and app directory
+  kasbah prune [--yes]           drops every schema in DATABASE_URL no indexer is running (asks first); the
+                                        cache stays
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
                                         than indexers, or a finished run)
   kasbah cache info [--chain <id>]
                                         each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
-Reads .env from the working directory. The cache commands use DATABASE_URL (or --database).`;
+Reads .env from the working directory. The cache, list and prune commands use DATABASE_URL (or --database).`;
 
 /** `kasbah init --help`, which `pnpm create kasbah --help` shows too. */
 const INIT_USAGE = `usage: kasbah init [dir] [options]   (or pnpm create kasbah [dir] [options])
@@ -147,7 +151,8 @@ try {
       reset: values.reset,
     });
   else if (command === "clean") await clean(target(arg), values.yes);
-  else if (command === "list") list();
+  else if (command === "list") await list(values);
+  else if (command === "prune") await prune(values);
   else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);
   else {

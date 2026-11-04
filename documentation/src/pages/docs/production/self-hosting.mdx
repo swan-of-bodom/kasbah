@@ -23,6 +23,8 @@ ready, switch traffic to it, then delete the old one:
 kasbah clean --schema my_indexer_1a2b3c4 --yes
 ```
 
+Or drop every schema no indexer is running with `kasbah prune` (`kasbah list` shows them first, with their sizes).
+
 Only one indexer runs on a schema at a time: a second one waits once (up to 25 seconds) and then stops with
 `schema "…" is in use by another indexer`. During a rolling deploy, which keeps the old container up until the new
 one is healthy, that's what a new deploy on the old schema would do, so use a new schema per deploy. See

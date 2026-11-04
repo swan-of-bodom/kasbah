@@ -68,13 +68,27 @@ Deletes the dev container and its volume, or with `DATABASE_URL`, only the app's
 ## list
 
 ```bash
-kasbah list
+kasbah list [--database <url>]
 ```
 
-Every dev database on the machine, the Postgres containers `dev` made for apps without `DATABASE_URL`, largest
-first: whether it is running, its port, the size of its volume and the app directory it belongs to. Containers an older
-kasbah made show no directory: `kasbah clean` in their app and the next `dev` makes one that does. Run from
-anywhere; it doesn't read the app.
+With `DATABASE_URL` (or `--database`), the app schemas in that database, largest first: whether an indexer is running
+on it, whether `dev` or `start` made it, its phase, last block, table count, size and when it was last active; then the
+size of each chain's event cache. With a schema per deploy, it shows which old ones you can drop.
+
+Then every dev database on the machine, the Postgres containers `dev` made for apps without `DATABASE_URL`: whether
+it is running, its port, the size of its volume and the app directory it belongs to. Containers an older kasbah made
+show no directory: `kasbah clean` in their app and the next `dev` makes one that does. It doesn't read the app, so it
+runs from anywhere.
+
+## prune
+
+```bash
+kasbah prune [--yes] [--database <url>]
+```
+
+Drops every app schema in `DATABASE_URL` that no indexer is running, after listing them and asking (`--yes` to skip
+the question). A schema whose indexer starts meanwhile is kept. The event caches stay, so a new deploy still
+re-indexes without fetching again. A dev container is deleted with `kasbah clean` instead.
 
 ## cache
 

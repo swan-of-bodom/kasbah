@@ -4,9 +4,13 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
-- `kasbah list` shows every dev database on the machine (the Postgres containers `dev` makes without
-  `DATABASE_URL`), largest first: running or stopped, port, volume size and the app directory. `dev` now labels the
-  containers it makes with their directory; one made before shows none until `kasbah clean` and the next `dev`.
+- `kasbah list` shows, with `DATABASE_URL` (or `--database`), every app schema in that database: running or stopped,
+  made by `dev` or `start`, phase, last block, tables, size and last activity, and each event cache's size; then
+  every dev database on the machine (the Postgres containers `dev` makes without `DATABASE_URL`): running or
+  stopped, port, volume size and the app directory. `dev` now labels the containers it makes with their directory;
+  one made before shows none until `kasbah clean` and the next `dev`.
+- `kasbah prune` drops every schema in `DATABASE_URL` no indexer is running, after listing them and asking
+  (`--yes`), as `ponder db prune` does. The event caches stay.
 - The build covers only what decides rows: the config's contracts and blocks, the chain, the tables and the files under
   `src/` except `src/api/` and tests. Editing an API route or a setting (`rpc`, `concurrency`, the port) no longer
   re-indexes in `dev` or refuses `start`. A helper outside `src/` no longer counts; a contract's ABI or `include` now

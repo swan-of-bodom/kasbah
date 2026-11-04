@@ -47,4 +47,5 @@ cache on (the default) so later deploys re-index from it.
 
 ::::
 
-Old schemas stay in the database. Delete them with `kasbah clean --schema <id> --yes`.
+Old schemas stay in the database. `kasbah list` shows them with their sizes; `kasbah prune` drops every one no
+indexer is running, or `kasbah clean --schema <id> --yes` drops one.
