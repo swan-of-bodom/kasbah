@@ -312,8 +312,12 @@ closed but not yet accepted (one past `latest`), so events at or below the index
 - Handlers run sequentially in checkpoint order. Checkpoint = `(block_number, transaction_index, event_index)`;
   one chain means no timestamps or chain ids in it.
 - The row cache is a fifth of the heap, all tables together, rows sized by estimate, as Ponder's indexing cache
-  (`indexingCacheMaxBytes`). After a commit past it, rows are dropped oldest first from the tables read least, down
-  to 80%, and a table that lost rows is no longer known in full. A limit of 500k rows per table held 1 GB of
+  (`indexingCacheMaxBytes`). After a commit past it, rows are dropped from the tables read least, in the order they
+  entered the cache, down to 80%, and a table that lost rows is no longer known in full. An update changes a cached
+  row in place. Moving it to the end of the Map instead (delete, then set) left the deleted entry in V8's hash
+  bucket until the Map was rebuilt, so every update of a hot key walked one more entry. On LORDS, where one account
+  is in 399k of the first 1M transfers, Transfer handlers grew from 20 µs to 86 µs on average, and a cached run to
+  block 1.3M took 118.8 s, 80% of it in `Map.set`. Updated in place: 18.5 s (2026-11-05, one run each). A limit of 500k rows per table held 1 GB of
   Ekubo's 12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet committed count too: past a
   twentieth of the heap they force a backfill commit (the one in flight holds as many). Reads look in those rows
   too, waiting or in flight, before Postgres, so the cache may drop any row.

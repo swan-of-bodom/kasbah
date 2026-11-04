@@ -142,7 +142,7 @@ export class Store {
     const waiting = this.#waiting(s, k);
     if (waiting !== undefined) {
       s.hits++;
-      if (s.read) this.#setNewest(s, k, waiting);
+      if (s.read) this.#setCached(s, k, waiting);
       return waiting;
     }
     if (s.complete) return null;
@@ -157,7 +157,7 @@ export class Store {
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
     const row = found === undefined ? null : this.#asStored(s, found as Row);
-    if (s.read) this.#setNewest(s, k, row);
+    if (s.read) this.#setCached(s, k, row);
     return row;
   }
 
@@ -166,14 +166,17 @@ export class Store {
     return Object.freeze(row);
   }
 
-  #setNewest(s: State, k: string, row: Row | null, bytes = approxBytes(row)) {
+  /**
+   * Updates a cached row in place: eviction drops rows in the order they entered. Moving it to the end (delete, then
+   * set) left the deleted entry in V8's hash bucket until the Map was rebuilt, so a hot key's lookups walked one more
+   * entry per update: LORDS transfers slowed from ~7 to ~150 µs.
+   */
+  #setCached(s: State, k: string, row: Row | null, bytes = approxBytes(row)) {
     const old = s.cache.get(k);
-    if (old !== undefined) {
-      s.cache.delete(k);
-      s.cachedBytes -= approxBytes(k) + approxBytes(old);
-    }
+    if (old !== undefined) s.cachedBytes -= approxBytes(old);
+    else s.cachedBytes += approxBytes(k);
     s.cache.set(k, row);
-    s.cachedBytes += approxBytes(k) + bytes;
+    s.cachedBytes += bytes;
   }
 
   #pend(s: State, k: string, p: Pending, bytes: number) {
@@ -197,7 +200,7 @@ export class Store {
     const bytes = approxBytes(row);
     this.#pend(s, k, { op, row }, bytes);
     // A complete table keeps every row, so a key it lacks stays known to be absent.
-    if (s.read || s.complete) this.#setNewest(s, k, row, bytes);
+    if (s.read || s.complete) this.#setCached(s, k, row, bytes);
   }
 
   #createDb(): Db {
@@ -275,7 +278,7 @@ export class Store {
           s.pending.delete(k);
           s.pendingBytes -= approxBytes(prior.row);
         } else this.#pend(s, k, { op: "delete", row: current }, approxBytes(current));
-        this.#setNewest(s, k, null);
+        this.#setCached(s, k, null);
         return true;
       },
     };

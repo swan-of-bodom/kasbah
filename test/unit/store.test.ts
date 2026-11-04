@@ -354,6 +354,29 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
+  "a row updated over and over costs no more per update as its updates add up",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS balances`);
+    await pool.query(createTableSql(tableInfo(balances)));
+    const store = new Store(drizzle(pool), [balances], { complete: true });
+    for (let i = 0; i < 50_000; i++)
+      await store.db.insert(balances).values({ owner: `0x${i}`, amount: 0n, updates: 0 });
+    const hot = { owner: "0x7" };
+    const updates = async (owner: (i: number) => string) => {
+      const started = performance.now();
+      for (let i = 0; i < 40_000; i++)
+        await store.db.update(balances, { owner: owner(i) }).set({ updates: i });
+      return performance.now() - started;
+    };
+    const spread = await updates((i) => `0x${i}`);
+    const one = await updates(() => hot.owner);
+    // Moving the row to the Map's end on every update made each one walk the deleted entries before it.
+    expect(one).toBeLessThan(spread * 3);
+    expect((await store.db.find(balances, hot))?.updates).toBe(39_999);
+  },
+);
+
+test.skipIf(url === undefined)(
   "past the cache limit, rows written while a commit ran stay readable after its eviction",
   async () => {
     await pool.query(`DROP TABLE IF EXISTS balances`);

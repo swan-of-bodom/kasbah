@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Handlers that update the same row again and again (a busy account's balance) no longer slow down as the run goes
+  on. Each update of a hot row took longer than the last, and a cached LORDS backfill to block 1.3M took 118.8 s.
+  It now takes 18.5 s.
 - `kasbah list` and `kasbah prune` leave out a schema that another process drops while they read it, such as
   during a prune or a reset. They used to fail with "relation does not exist".
 - The event cache keeps each contract's class history up to a final block, and each class's ABI. A restart asks
