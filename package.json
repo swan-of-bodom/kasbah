@@ -34,6 +34,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./api": {
+      "types": "./dist/api/index.d.ts",
+      "default": "./dist/api/index.js"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -60,18 +64,35 @@
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "dependencies": {
+    "@escape.tech/graphql-armor-max-aliases": "^2.6.2",
+    "@escape.tech/graphql-armor-max-depth": "^2.4.2",
+    "@escape.tech/graphql-armor-max-tokens": "^2.5.1",
+    "@hono/node-server": "1.19.5",
     "@noble/hashes": "^2.0.0",
     "drizzle-orm": "0.45.4",
-    "graphql": "^17.0.2",
+    "graphql": "^16.8.2",
+    "graphql-yoga": "5.17.1",
     "pg": "^8.23.1",
-    "pg-copy-streams": "^7.0.0"
+    "pg-copy-streams": "^7.0.0",
+    "pg-query-emscripten": "5.1.0",
+    "superjson": "^2.2.6"
+  },
+  "peerDependencies": {
+    "hono": ">=4.5"
+  },
+  "peerDependenciesMeta": {
+    "hono": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
+    "@pgsql/types": "16.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/ws": "^8.18.2",
+    "hono": "^4.13.16",
     "starknet": "^10.8.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",

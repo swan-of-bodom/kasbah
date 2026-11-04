@@ -12,11 +12,18 @@ export type ReaderOptions = {
   tables: TableInfo[];
   /** A login that may only read the app's tables. Without it, kasbah creates `<schema>_reader` (needs CREATEROLE). */
   readDatabase?: string;
-  /** Per query. Default 10 s. */
+  /** Per query. Default `API_TIMEOUT_MS`. */
   timeoutMs?: number;
-  /** Rows a SQL query may return. Default 10,000. */
-  maxRows?: number;
 };
+
+/** How long one API query may run: long enough for an aggregate over a large table, short enough to free its connection. */
+export const API_TIMEOUT_MS = 30_000;
+
+/** How long an API query waits for a lock: the indexer's key and index builds lock tables, and readers don't queue behind them. */
+export const API_LOCK_TIMEOUT_MS = 500;
+
+/** Connections the API keeps to Postgres. */
+const API_POOL_SIZE = 8;
 
 export class QueryError extends Error {
   readonly status: number;
@@ -48,22 +55,30 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
 
 /**
  * Read-only access for the API. Queries run as a role that can only SELECT the app's tables (its password derived
- * from the database URL, so every process on the schema agrees on it), in a read-only
- * transaction with a timeout that is always rolled back, so nothing a query sets outlives it.
+ * from the database URL, so every process on the schema agrees on it), on connections whose transactions are
+ * read-only, on the app's schema, with the API's timeouts.
  */
 export class Reader {
-  readonly #pool: pg.Pool;
+  /** Every connection read-only, on the app's schema. */
+  readonly pool: pg.Pool;
   readonly #url: string;
   readonly #schema: string;
   readonly timeoutMs: number;
-  readonly maxRows: number;
 
   private constructor(url: string, o: ReaderOptions) {
     this.#url = url;
-    this.#pool = new RetryingPool({ connectionString: url, max: 8 });
+    this.timeoutMs = o.timeoutMs ?? API_TIMEOUT_MS;
+    this.pool = new RetryingPool({
+      connectionString: url,
+      max: API_POOL_SIZE,
+      options: [
+        `-c search_path=${quote(o.schema)}`,
+        "-c default_transaction_read_only=on",
+        `-c statement_timeout=${this.timeoutMs}`,
+        `-c lock_timeout=${API_LOCK_TIMEOUT_MS}`,
+      ].join(" "),
+    });
     this.#schema = o.schema;
-    this.timeoutMs = o.timeoutMs ?? 10_000;
-    this.maxRows = o.maxRows ?? 10_000;
   }
 
   static async connect(o: ReaderOptions): Promise<Reader> {
@@ -106,7 +121,7 @@ export class Reader {
 
   /** Runs `body` in a read-only transaction on the app's schema, then rolls it back. */
   async transaction<T>(body: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.#pool.connect();
+    const client = await this.pool.connect();
     // pg-pool listens on idle connections only: one that dies mid-request would otherwise end the process.
     const ignore = () => {};
     client.on("error", ignore);
@@ -127,30 +142,6 @@ export class Reader {
       client.removeListener("error", ignore);
       client.release(broken);
     }
-  }
-
-  /**
-   * One read query, at most `maxRows` rows. Wrapped as a subquery (so only SELECT, VALUES and WITH parse) and sent
-   * with the extended protocol (so it is exactly one statement). `$1`… in `text` are `params`.
-   */
-  async sql(
-    text: string,
-    params: unknown[] = [],
-  ): Promise<{ columns: string[]; rows: unknown[][] }> {
-    const body = text.trim().replace(/;\s*$/, "");
-    if (body === "") throw new QueryError("empty query");
-    // The limit as the last parameter: values are never empty, so pg always uses the extended protocol.
-    const values = [...params, this.maxRows + 1];
-    const result = await this.transaction((c) =>
-      c.query({
-        text: `SELECT * FROM (\n${body}\n) AS _q LIMIT $${values.length}`,
-        values,
-        rowMode: "array",
-      }),
-    );
-    if (result.rows.length > this.maxRows)
-      throw new QueryError(`more than ${this.maxRows} rows: add a LIMIT`);
-    return { columns: result.fields.map((f) => f.name), rows: result.rows as unknown[][] };
   }
 
   /** `LISTEN`s on `channel` on its own connection, reconnecting after errors. Returns a function that stops it. */
@@ -183,6 +174,6 @@ export class Reader {
   }
 
   async close() {
-    await this.#pool.end();
+    await this.pool.end();
   }
 }

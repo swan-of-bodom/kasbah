@@ -1,5 +1,5 @@
 import type pg from "pg";
-import { liveChannel } from "../api/server.ts";
+import { liveChannel, livePayload } from "../api/channel.ts";
 import type { EventCache } from "../db/cache.ts";
 import type { Store } from "../db/store.ts";
 import { transaction } from "../db/transaction.ts";
@@ -167,6 +167,7 @@ export class Position {
     const started = performance.now();
     const rows = c.kind === "batch" || c.kind === "block";
     if (rows) store.take();
+    const written = rows ? store.takenTables() : undefined;
     if (rows || c.kind === "children") cache?.take();
     try {
       await transaction(pool, async (tx, attempt) => {
@@ -186,6 +187,7 @@ export class Position {
             break;
           case "block": {
             const n = c.block.number;
+            await setMeta(tx, "checkpointTime", c.block.header.timestamp);
             await timed("tables", () => store.flush(tx, n));
             await timed("cache", () => cache?.persist(tx));
             await insertChildren(tx, c.children);
@@ -205,11 +207,8 @@ export class Position {
         if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
         if (m.checkpoint !== undefined) {
           await setMeta(tx, "checkpoint", m.checkpoint);
-          // Delivered at COMMIT: API servers re-run live queries.
-          await tx.query(`SELECT pg_notify($1, $2)`, [
-            liveChannel(schema),
-            JSON.stringify({ checkpoint: m.checkpoint }),
-          ]);
+          // Delivered at COMMIT: API servers re-run the live queries that read these tables.
+          await tx.query(`SELECT pg_notify($1, $2)`, [liveChannel(schema), livePayload(written)]);
         }
       });
       if (rows || c.kind === "children") cache?.written();

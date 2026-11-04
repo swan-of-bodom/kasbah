@@ -335,11 +335,14 @@ test.skipIf(url === undefined)(
     const served = cli("serve", appFile);
     await until(async () => /API on (\S+):/.test(served.out.join("")));
     const base = /API on (\S+):/.exec(served.out.join(""))![1]!;
-    const r = await fetch(`${base}/sql`, {
-      method: "POST",
-      body: JSON.stringify({ sql: "select total::text from totals" }),
-    });
-    expect((await r.json()).rows).toEqual([[String((36 * 37) / 2)]]);
+    const status = (await (await fetch(`${base}/status`)).json()) as Record<string, any>;
+    const db = new pg.Client({ connectionString: url });
+    await db.connect();
+    const stored = (
+      await db.query(`SELECT value FROM ${schema}._kasbah_meta WHERE key = 'checkpoint'`)
+    ).rows[0].value;
+    await db.end();
+    expect(Object.values(status).map((c) => c.block.number)).toEqual([stored]);
     served.p.kill("SIGINT");
     expect(await served.exited).toBe(0);
   },

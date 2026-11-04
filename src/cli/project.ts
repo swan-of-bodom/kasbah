@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import type { ApiApp } from "../api/context.ts";
 import type { Project, RunOptions, Tables } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
 
@@ -10,13 +11,16 @@ export type App = {
   serve: () => Promise<{ url: string; close: () => Promise<void> }>;
   drop: () => Promise<string>;
   useProject: (p: Project) => void;
+  api: (app: ApiApp) => void;
 };
 
 export const CONFIG = "kasbah.config.ts";
 /** The project's tables, when the config doesn't pass `tables`. */
 export const SCHEMA = "kasbah.schema.ts";
-/** What a project registers on the config's app, imported after it when present. */
-export const PROJECT_FILES = ["src/index.ts", "src/api/index.ts"];
+/** A project's handlers, registered on the config's app: imported after it, when present. */
+export const HANDLERS = "src/index.ts";
+/** A project's HTTP endpoints: its default export, a Hono app, is mounted after kasbah's own. */
+export const API = "src/api/index.ts";
 
 /** The app file given, or the project's config in the working directory. */
 export function target(arg: string | undefined): string {
@@ -41,8 +45,15 @@ export async function load(file: string, o: { schemaRequired?: boolean } = {}): 
       ? ((await import(pathToFileURL(schema).href)) as Tables)
       : undefined;
     app.useProject({ name: basename(dir), tables, schemaRequired: o.schemaRequired });
-    for (const f of PROJECT_FILES.map((f) => join(dir, f)))
-      if (existsSync(f)) await import(pathToFileURL(f).href);
+    if (existsSync(join(dir, HANDLERS))) await import(pathToFileURL(join(dir, HANDLERS)).href);
+    if (existsSync(join(dir, API))) {
+      const api = (await import(pathToFileURL(join(dir, API)).href)) as { default?: ApiApp };
+      if (typeof api.default?.fetch !== "function")
+        throw new ConfigError(
+          `${API}: the default export must be a Hono app (const app = new Hono(); … export default app)`,
+        );
+      app.api(api.default);
+    }
   }
   return app;
 }

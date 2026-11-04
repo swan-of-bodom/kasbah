@@ -1,4 +1,3 @@
-import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import {
   type Block,
   createDecoder,
@@ -169,16 +168,6 @@ kasbah({
 kasbah(config).on("setup", async ({ context }) => void context.db);
 // @ts-expect-error: setup has no event
 kasbah(config).on("setup", ({ event }) => void event);
-
-const swapsTable = pgTable("swaps", { id: text().primaryKey(), amount: integer().notNull() });
-const routed = kasbah({ ...config, tables: { swapsTable }, api: { port: 0 } });
-routed.get("/swaps/:id", async ({ db, params }) => {
-  const row = await db.query.swapsTable.findFirst({ where: (t, { eq }) => eq(t.id, params.id!) });
-  const amount: number | undefined = row?.amount;
-  // @ts-expect-error: no such table
-  void db.query.nope;
-  return amount;
-});
 
 const withTx = kasbah({
   rpc: "",

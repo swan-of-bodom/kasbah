@@ -1,6 +1,11 @@
+import { createRequire } from "node:module";
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
+  resolve: {
+    // graphql ships CommonJS and ESM: Vitest would give kasbah's code one and Yoga the other, which graphql refuses.
+    alias: { graphql: createRequire(import.meta.url).resolve("graphql") },
+  },
   test: {
     globalSetup: ["test/teardown.ts"],
     // Every e2e run starts a fetch thread (a V8 instance and a Postgres connection of its own), and the files run in

@@ -4,8 +4,7 @@ import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import type pg from "pg";
 import { classHistory, deployedAt } from "../abi/history.ts";
-import type { Route } from "../api/routes.ts";
-import { Api } from "../api/server.ts";
+import type { ApiApp } from "../api/context.ts";
 import type { BlockConfig, RunOptions, StartBlock } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
 import { checkNetwork, networkName } from "../config/network.ts";
@@ -89,7 +88,7 @@ const POOL_SIZE = 8;
 export async function open(
   configured: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,
-  routes: readonly Route[],
+  app: ApiApp | undefined,
   options: RunOptions,
   status: Status,
   signal: AbortSignal,
@@ -117,7 +116,12 @@ export async function open(
   const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
   const { pool, lock } = await openSchema(config, options, status, buildId, signal, closers);
   const stored = await startup(pool, schema, tables, buildId);
-  if (config.api !== undefined) await startApi(config, config.api, routes, status, closers);
+  // For the API's `/status`, which another process may serve.
+  await pool.query(
+    `INSERT INTO _kasbah_meta VALUES ('chain', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    [JSON.stringify(chainId)],
+  );
+  if (config.api !== undefined) await startApi(config, config.api, app, status, closers);
 
   const store = new Store(drizzle(pool), tables, {
     complete: stored.checkpoint === undefined,
@@ -254,16 +258,17 @@ async function openSchema(
 async function startApi(
   config: Resolved,
   api: NonNullable<Resolved["api"]>,
-  routes: readonly Route[],
+  app: ApiApp | undefined,
   status: Status,
   closers: (() => unknown)[],
 ): Promise<void> {
+  const { Api } = await import("../api/server.ts");
   const server = await Api.start({
     ...api,
     database: config.database,
     schema: config.schema,
     tables: config.tables,
-    routes,
+    app,
     metrics: () => metricsOf(status),
   });
   closers.push(() => server.close());

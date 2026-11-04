@@ -1,4 +1,4 @@
-import type { Route } from "../api/routes.ts";
+import type { ApiApp } from "../api/context.ts";
 import type { RunOptions, StartBlock } from "../config/app.ts";
 import type { Resolved } from "../config/resolve.ts";
 import type { Db } from "../db/store.ts";
@@ -27,7 +27,7 @@ export async function run(
   config: Resolved<StartBlock>,
   handlers: ReadonlyMap<string, AnyHandler>,
   options: RunOptions = {},
-  routes: readonly Route[] = [],
+  api?: ApiApp,
 ): Promise<void> {
   const status = options.status ?? new Status();
   const unsubscribe =
@@ -38,7 +38,7 @@ export async function run(
   const closers: (() => unknown)[] = [];
   let failure: { error: unknown } | undefined;
   try {
-    const r = await open(config, handlers, routes, options, status, signal, closers);
+    const r = await open(config, handlers, api, options, status, signal, closers);
     for (const phase of PHASES) {
       if (signal.aborted) break;
       await phase(r);

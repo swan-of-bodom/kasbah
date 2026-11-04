@@ -57,6 +57,8 @@ test("the layout: config, schema, ABI, handlers, routes", () => {
     expect(files["kasbah.config.ts"]).not.toContain(gone);
   expect(files["src/index.ts"]).toContain(`import app from "../kasbah.config.ts";`);
   expect(files["src/api/index.ts"]).toContain(`app.get("/moved/latest"`);
+  expect(files["src/api/index.ts"]).toContain(`app.use("/graphql", graphql({ db, schema }));`);
+  expect(JSON.parse(files["package.json"]!).dependencies.hono).toMatch(/^\^4\./);
   expect(JSON.parse(files["package.json"]!).scripts).toMatchObject({
     dev: "kasbah dev",
     fresh: "kasbah dev --reset",

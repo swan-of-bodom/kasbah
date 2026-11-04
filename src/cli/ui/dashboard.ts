@@ -137,7 +137,7 @@ export function render(
   if (status.api !== "")
     box.label(
       "api",
-      `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · POST /sql · GET /live /status")}`,
+      `${p.cyan(`${status.api}/graphql`)}  ${p.dim("GraphiQL in a browser · GET /status /ready /metrics")}`,
     );
   return frame(p, inner, status, body);
 }

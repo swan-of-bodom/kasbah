@@ -27,13 +27,13 @@ import {
   type ValueNode,
 } from "graphql";
 import type pg from "pg";
-import { ConfigError } from "../config/errors.ts";
-import { quote, type TableInfo } from "../db/table.ts";
-import { chunks } from "../utils/chunks.ts";
-import { asQueryError, QueryError } from "./reader.ts";
+import { ConfigError } from "../../config/errors.ts";
+import { quote, type TableInfo } from "../../db/table.ts";
+import { chunks } from "../../utils/chunks.ts";
+import { asQueryError, QueryError } from "../reader.ts";
 
 export type GraphqlContext = {
-  client: pg.PoolClient;
+  client: pg.Pool;
   timeoutMs: number;
   /** Set by the schema on first use: the request's statement count, start time and batch loaders. */
   budget?: { statements: number; started: number; loaders: Map<string, Loader> };

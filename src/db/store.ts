@@ -285,6 +285,11 @@ export class Store {
    * Writes what `take` moved out with `client`, inside the caller's transaction. In journal mode, `block` tags the
    * pre-images written to the undo journal.
    */
+  /** The tables what `take` moved out writes to. */
+  takenTables(): string[] {
+    return [...(this.#taken?.tables.keys() ?? [])].map((s) => s.info.name);
+  }
+
   async flush(client: PoolClient, block?: number): Promise<void> {
     const taken = this.#taken;
     if (taken === undefined) throw new Error("flush without take");

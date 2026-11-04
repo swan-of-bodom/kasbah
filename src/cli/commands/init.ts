@@ -67,6 +67,9 @@ const HEX = new Set([
   "core::starknet::eth_address::EthAddress",
   "core::bytes_31::bytes31",
 ]);
+/** The Hono a new project's API is written against (kasbah needs 4.5 or later). */
+const HONO = "^4.13.0";
+
 /** Columns every event table has: an argument with one of these names gets a `_` suffix. */
 const FIXED = new Set(["id", "block", "timestamp", "transaction"]);
 
@@ -146,11 +149,21 @@ export function generate(p: Project): Record<string, string> {
     handlers.join("\n\n"),
   );
   const api = lines(
-    `import { desc } from "kasbah";`,
-    `import app from "../../kasbah.config.ts";`,
+    `import { Hono } from "hono";`,
+    `import { desc, replaceBigInts } from "kasbah";`,
+    `import { db, graphql } from "kasbah/api";`,
     `import * as schema from "../../kasbah.schema.ts";`,
     "",
-    `app.get("/${snake(defs[0]!.name)}/latest", async ({ db }) => db.select().from(schema.${first}).orderBy(desc(schema.${first}.block)).limit(10));`,
+    "const app = new Hono();",
+    "",
+    `app.use("/graphql", graphql({ db, schema }));`,
+    "",
+    `app.get("/${snake(defs[0]!.name)}/latest", async (c) => {`,
+    `  const rows = await db.select().from(schema.${first}).orderBy(desc(schema.${first}.block)).limit(10);`,
+    "  return c.json(replaceBigInts(rows, String));",
+    "});",
+    "",
+    "export default app;",
   );
   const pkg = {
     name: basename(p.dir),
@@ -165,7 +178,7 @@ export function generate(p: Project): Record<string, string> {
       serve: "kasbah serve",
       typecheck: "tsc",
     },
-    dependencies: { kasbah: p.dependency },
+    dependencies: { kasbah: p.dependency, hono: HONO },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };
   const tsconfig = {
@@ -212,7 +225,7 @@ export function generate(p: Project): Record<string, string> {
       "- `kasbah.config.ts`: RPC, database, contracts, API",
       "- `kasbah.schema.ts`: the tables",
       "- `src/index.ts`: what each event writes",
-      "- `src/api/index.ts`: your own endpoints, next to `/graphql` and `/sql`",
+      "- `src/api/index.ts`: the HTTP API, a Hono app: GraphQL at `/graphql`, and your own endpoints",
       "",
       "```",
       "pnpm dev               # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql",

@@ -1,168 +1,105 @@
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { is, type Relations } from "drizzle-orm";
+import { createServer, type Server } from "node:http";
+import { serve } from "@hono/node-server";
+import { is } from "drizzle-orm";
+import { DrizzleQueryError } from "drizzle-orm/errors";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
-import {
-  type DocumentNode,
-  execute,
-  GraphQLError,
-  type GraphQLSchema,
-  specifiedRules,
-  validate,
-} from "graphql";
+import { type Context, Hono } from "hono";
+import { cors } from "hono/cors";
+import { HTTPException } from "hono/http-exception";
 import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
-import { createGraphqlSchema, relationsOf } from "./graphql.ts";
-import { parseLimited } from "./limits.ts";
+import { liveChannel, liveTables } from "./channel.ts";
+import { type ApiApp, type ApiContext, apiContext, type Tables } from "./context.ts";
 import { prometheus } from "./prometheus.ts";
-import { QueryError, Reader, type ReaderOptions } from "./reader.ts";
-import { matcher, type Route } from "./routes.ts";
+import { Reader, type ReaderOptions } from "./reader.ts";
 
 export type ApiOptions = Omit<ReaderOptions, "tables"> & {
-  /** Tables, and Drizzle `relations()` between them (GraphQL relation fields): a schema module works as is. */
-  tables: Record<string, PgTable | Relations>;
+  /** Tables, and Drizzle `relations()` between them: a schema module works as is. */
+  tables: Tables;
   port: number;
   host?: string;
-  /** Open `GET /live` streams allowed at once. Default 1,000. */
-  maxLive?: number;
-  /** The app's own endpoints, matched after the built-in ones. */
-  routes?: readonly Route[];
+  /** Mounted after the built-in endpoints. */
+  app?: ApiApp;
   /** `GET /metrics` in Prometheus' format: the indexer's, when it runs the API; else the checkpoint and phase. */
   metrics?: () => string;
 };
 
-/** The channel the indexer notifies on each commit, with `{"checkpoint": n}`. */
-export const liveChannel = (schema: string) => `kasbah_${schema}`;
+/** Browsers may cache a CORS preflight's answer this long (seconds). */
+const CORS_MAX_AGE = 86_400;
 
-const stringify = (v: unknown) =>
-  JSON.stringify(v, (_, x) => (typeof x === "bigint" ? x.toString() : x));
+/** On close, open requests (live streams never end) get this long before their connections are cut. */
+const CLOSE_GRACE_MS = 1_000;
 
-/** Request bodies over this are refused (413): a query is text, never this large. */
-const MAX_BODY = 1 << 20;
+/** The phases in which the backfill is done: `/ready` answers 200. */
+const READY_PHASES = new Set(["live", "done"]);
 
-function readBody(req: IncomingMessage): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let size = 0;
-    const chunks: Buffer[] = [];
-    req.on("data", (c: Buffer) => {
-      size += c.length;
-      if (size > MAX_BODY) {
-        reject(new QueryError("request body over 1 MB", 413));
-        req.destroy();
-      } else chunks.push(c);
-    });
-    req.on("end", () => resolve(Buffer.concat(chunks).toString()));
-    req.on("error", reject);
-  });
-}
-
-function send(res: ServerResponse, status: number, body: unknown) {
-  const json = stringify(body);
-  res.writeHead(status, { "content-type": "application/json", "access-control-allow-origin": "*" });
-  res.end(json);
-}
-
-async function json(req: IncomingMessage): Promise<Record<string, unknown>> {
-  try {
-    const body = JSON.parse(await readBody(req));
-    if (typeof body === "object" && body !== null && !Array.isArray(body)) return body;
-  } catch (e) {
-    if (e instanceof QueryError) throw e;
-  }
-  throw new QueryError("body must be a JSON object");
-}
-
-const parseJson = (text: string | null, name: string): unknown => {
-  if (text === null) return undefined;
-  try {
-    return JSON.parse(text);
-  } catch {
-    throw new QueryError(`\`${name}\` must be JSON`);
-  }
-};
-
-/** GraphiQL for browsers, from unpkg (pinned): the API itself stays dependency-free. */
-const GRAPHIQL = `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>kasbah GraphQL</title>
-  <link rel="stylesheet" href="https://unpkg.com/graphiql@3.8.3/graphiql.min.css" />
-  <style>body { margin: 0; height: 100vh; } #graphiql { height: 100vh; }</style>
-</head>
-<body>
-  <div id="graphiql">Loading GraphiQL…</div>
-  <script crossorigin src="https://unpkg.com/react@18.3.1/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/graphiql@3.8.3/graphiql.min.js"></script>
-  <script>
-    const fetcher = GraphiQL.createFetcher({ url: location.origin + location.pathname });
-    ReactDOM.createRoot(document.getElementById("graphiql")).render(React.createElement(GraphiQL, { fetcher }));
-  </script>
-</body>
-</html>`;
+type Meta = { checkpoint?: number; checkpointTime?: number; chain?: string; phase?: string };
 
 /**
- * The read API: `POST /sql` `{ sql, params? }` → `{ columns, rows }`, `POST /graphql` `{ query, variables? }`
- * (`GET /graphql`: GraphiQL for a browser, or `?query=`),
- * `GET /status`, and `GET /live` (server-sent events on each commit; with `sql` or `query`, that query's result
- * whenever it changes). Everything runs through `Reader` (read-only role and transaction).
+ * The HTTP API: `/health`, `/ready`, `/status` and `/metrics`, then the app's Hono app. Each request runs with its
+ * API's context (`db`, `graphql()` and `client()` from `kasbah/api` read it), and every query through it runs as
+ * the read-only reader.
  */
 export class Api {
   readonly #reader: Reader;
-  readonly #schema: GraphQLSchema;
   readonly #server: Server;
-  readonly #live = new Set<(checkpoint: number | undefined) => void>();
-  readonly #maxLive: number;
-  readonly #tables: Record<string, PgTable | Relations>;
-  readonly #routes: {
-    method: string;
-    path: string;
-    match: ReturnType<typeof matcher>;
-    handler: Route["handler"];
-  }[];
-  readonly #metrics: (() => string) | undefined;
-  #unlisten: (() => Promise<void>) | undefined;
+  readonly #stop: AbortController;
+  readonly #unlisten: () => Promise<void>;
 
-  private constructor(reader: Reader, schema: GraphQLSchema, o: ApiOptions) {
+  private constructor(
+    reader: Reader,
+    server: Server,
+    stop: AbortController,
+    unlisten: () => Promise<void>,
+  ) {
     this.#reader = reader;
-    this.#metrics = o.metrics;
-    this.#schema = schema;
-    this.#maxLive = o.maxLive ?? 1_000;
-    this.#tables = o.tables;
-    this.#routes = (o.routes ?? []).map((r) => ({ ...r, match: matcher(r.path) }));
-    this.#server = createServer((req, res) => void this.#handle(req, res));
+    this.#server = server;
+    this.#stop = stop;
+    this.#unlisten = unlisten;
   }
 
   static async start(o: ApiOptions): Promise<Api> {
-    const seen = new Set<string>();
-    for (const r of o.routes ?? []) {
-      if (seen.has(`${r.method} ${r.path}`))
-        throw new ConfigError(`route ${r.method} ${r.path} defined twice`);
-      seen.add(`${r.method} ${r.path}`);
-      matcher(r.path);
-    }
-    const infos = Object.fromEntries(
-      Object.entries(o.tables).flatMap(([k, t]) => (is(t, PgTable) ? [[k, tableInfo(t)]] : [])),
-    );
-    const reader = await Reader.connect({ ...o, tables: Object.values(infos) });
-    const api = new Api(reader, createGraphqlSchema(infos, relationsOf(o.tables, infos)), o);
-    api.#unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
-      let checkpoint: number | undefined;
-      try {
-        checkpoint =
-          payload === "" ? undefined : (JSON.parse(payload) as { checkpoint?: number }).checkpoint;
-      } catch {}
-      for (const l of api.#live) l(checkpoint);
-    });
+    const infos = Object.values(o.tables).flatMap((t) => (is(t, PgTable) ? [tableInfo(t)] : []));
+    const reader = await Reader.connect({ ...o, tables: infos });
+    const commits = new Set<(tables: string[] | undefined) => void>();
+    const states = new Map<object, unknown>();
+    const stop = new AbortController();
+    const context: ApiContext = {
+      db: drizzle(reader.pool, { schema: o.tables }),
+      reader,
+      tables: o.tables,
+      onCommit: (listener) => {
+        commits.add(listener);
+        return () => commits.delete(listener);
+      },
+      ready: async () => READY_PHASES.has((await meta(reader)).phase ?? ""),
+      state: <T>(key: object, make: () => T): T => {
+        if (!states.has(key)) states.set(key, make());
+        return states.get(key) as T;
+      },
+      signal: stop.signal,
+    };
+    const root = routes(reader, o);
+    const server = serve({
+      fetch: (request, env) => apiContext.run(context, () => root.fetch(request, env)),
+      createServer,
+      port: o.port,
+      hostname: o.host ?? "127.0.0.1",
+    }) as Server;
     try {
       await new Promise<void>((resolve, reject) => {
-        api.#server.once("error", reject);
-        api.#server.listen(o.port, o.host ?? "127.0.0.1", resolve);
+        server.once("error", reject);
+        if (server.listening) resolve();
+        else server.once("listening", resolve);
       });
+      const unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
+        const tables = liveTables(payload);
+        for (const l of commits) l(tables);
+      });
+      return new Api(reader, server, stop, unlisten);
     } catch (e) {
-      await api.#unlisten?.();
+      server.close();
       await reader.close();
       if ((e as NodeJS.ErrnoException).code === "EADDRINUSE")
         throw new ConfigError(
@@ -170,7 +107,6 @@ export class Api {
         );
       throw e;
     }
-    return api;
   }
 
   get port(): number {
@@ -178,252 +114,88 @@ export class Api {
     return typeof a === "object" && a !== null ? a.port : 0;
   }
 
-  async #handle(req: IncomingMessage, res: ServerResponse) {
-    try {
-      const path = new URL(req.url ?? "/", "http://x").pathname;
-      if (req.method === "OPTIONS") {
-        res.writeHead(204, {
-          "access-control-allow-origin": "*",
-          "access-control-allow-methods": "GET, POST",
-          "access-control-allow-headers": "content-type",
-        });
-        return res.end();
-      }
-      if (path === "/status" && req.method === "GET") return send(res, 200, await this.#status());
-      if (path === "/metrics" && req.method === "GET") {
-        res.writeHead(200, { "content-type": "text/plain; version=0.0.4" });
-        return res.end(this.#metrics?.() ?? (await this.#storedMetrics()));
-      }
-      if (path === "/health" && req.method === "GET") {
-        await this.#reader.sql("SELECT 1");
-        return send(res, 200, { ok: true });
-      }
-      if (path === "/ready" && req.method === "GET") {
-        const s = await this.#status();
-        return send(res, s.phase === "live" || s.phase === "done" ? 200 : 503, s);
-      }
-      if (path === "/sql" && req.method === "POST") {
-        const body = await json(req);
-        if (typeof body.sql !== "string") throw new QueryError("`sql` must be a string");
-        if (body.params !== undefined && !Array.isArray(body.params))
-          throw new QueryError("`params` must be an array");
-        return send(
-          res,
-          200,
-          await this.#reader.sql(body.sql, body.params as unknown[] | undefined),
-        );
-      }
-      if (path === "/graphql" && req.method === "POST") {
-        const body = await json(req);
-        if (typeof body.query !== "string") throw new QueryError("`query` must be a string");
-        return send(res, 200, await this.#graphql(body.query, body.variables));
-      }
-      if (path === "/graphql" && req.method === "GET") {
-        const q = new URL(req.url ?? "/", "http://x").searchParams;
-        const query = q.get("query");
-        if (query !== null)
-          return send(
-            res,
-            200,
-            await this.#graphql(query, parseJson(q.get("variables"), "variables")),
-          );
-        if ((req.headers.accept ?? "").includes("text/html")) {
-          res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-          return res.end(GRAPHIQL);
-        }
-        throw new QueryError(
-          "GET /graphql takes ?query= (and ?variables=), or open it in a browser for GraphiQL",
-        );
-      }
-      if (path === "/" && req.method === "GET") {
-        return send(res, 200, {
-          endpoints: [
-            "POST /sql {sql, params?}",
-            "POST /graphql {query, variables?}",
-            "GET /graphql (GraphiQL in a browser, or ?query=)",
-            "GET /live (?sql= or ?query=)",
-            "GET /status",
-            "GET /health",
-            "GET /ready",
-            ...this.#routes.map((r) => `${r.method} ${r.path}`),
-          ],
-        });
-      }
-      if (path === "/live" && req.method === "GET") return await this.#stream(req, res);
-      for (const r of this.#routes) {
-        const params = r.match(path);
-        if (params !== undefined && r.method === req.method)
-          return await this.#route(r.handler, params, req, res);
-      }
-      send(res, 404, { error: "not found" });
-    } catch (e) {
-      if (e instanceof QueryError) return send(res, e.status, { error: e.message });
-      console.error("[kasbah api]", e);
-      send(res, 500, { error: "internal error" });
-    }
-  }
-
-  async #storedMetrics(): Promise<string> {
-    const s = await this.#status();
-    return prometheus([
-      {
-        name: "phase",
-        type: "gauge",
-        help: "The phase running (1).",
-        samples: [[{ phase: s.phase ?? "starting" }, 1]],
-      },
-      {
-        name: "checkpoint",
-        type: "gauge",
-        help: "Last block committed.",
-        samples: [[{}, Number(s.checkpoint ?? 0)]],
-      },
-    ]);
-  }
-
-  async #status(): Promise<Record<string, string>> {
-    const { rows } = await this.#reader.sql(
-      `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'phase')`,
-    );
-    return Object.fromEntries(rows as [string, string][]);
-  }
-
-  async #route(
-    handler: Route["handler"],
-    params: Record<string, string>,
-    req: IncomingMessage,
-    res: ServerResponse,
-  ) {
-    const text = req.method === "POST" ? await readBody(req) : "";
-    const body = text === "" ? undefined : parseJson(text, "body");
-    const query = new URL(req.url ?? "/", "http://x").searchParams;
-    const out = await this.#reader.transaction(async (client) => {
-      const r = await (handler as (c: unknown) => unknown)({
-        db: drizzle(client, { schema: this.#tables }),
-        params,
-        query,
-        body,
-        request: req,
-      });
-      // Read inside the transaction: a streamed body could still be querying.
-      return r instanceof Response
-        ? { response: r, bytes: Buffer.from(await r.arrayBuffer()) }
-        : { json: r };
-    });
-    if ("json" in out) return send(res, 200, out.json ?? null);
-    const headers: Record<string, string> = { "access-control-allow-origin": "*" };
-    out.response.headers.forEach((v, k) => {
-      headers[k] = v;
-    });
-    res.writeHead(out.response.status, headers);
-    res.end(out.bytes);
-  }
-
-  async #graphql(query: string, variables: unknown) {
-    let document: DocumentNode;
-    try {
-      document = parseLimited(query);
-    } catch (e) {
-      if (e instanceof GraphQLError)
-        return { errors: [{ message: e.message, locations: e.locations }] };
-      throw e;
-    }
-    const invalid = validate(this.#schema, document, specifiedRules);
-    if (invalid.length > 0)
-      return { errors: invalid.map((e) => ({ message: e.message, locations: e.locations })) };
-    const result = await this.#reader.transaction(async (client) =>
-      execute({
-        schema: this.#schema,
-        document,
-        variableValues: (variables ?? undefined) as Record<string, unknown> | undefined,
-        contextValue: { client, timeoutMs: this.#reader.timeoutMs },
-      }),
-    );
-    const errors = result.errors?.map((e) => {
-      const original = e.originalError;
-      // Only parse and validation errors, our own messages and Postgres errors a query can cause reach the client.
-      const safe =
-        original === undefined ||
-        original instanceof QueryError ||
-        original instanceof TypeError ||
-        original instanceof GraphQLError;
-      if (!safe) console.error("[kasbah api]", original);
-      return { message: safe ? e.message : "internal error", path: e.path, locations: e.locations };
-    });
-    return errors === undefined ? { data: result.data } : { data: result.data, errors };
-  }
-
-  async #stream(req: IncomingMessage, res: ServerResponse) {
-    if (this.#live.size >= this.#maxLive) throw new QueryError("too many live queries", 503);
-    const q = new URL(req.url ?? "/", "http://x").searchParams;
-    const sql = q.get("sql");
-    const query = q.get("query");
-    let run: (() => Promise<unknown>) | undefined;
-    if (sql !== null) {
-      const params = parseJson(q.get("params"), "params");
-      if (params !== undefined && !Array.isArray(params))
-        throw new QueryError("`params` must be an array");
-      run = () => this.#reader.sql(sql, params as unknown[] | undefined);
-    } else if (query !== null) {
-      const variables = parseJson(q.get("variables"), "variables");
-      run = () => this.#graphql(query, variables);
-    }
-    // The first result before the stream opens: a bad query is a plain 400.
-    let last = run === undefined ? undefined : stringify(await run());
-    if (res.destroyed) return;
-
-    const event = (name: string, data: string) => res.write(`event: ${name}\ndata: ${data}\n\n`);
-    let running = false;
-    let again = false;
-    const rerun = async () => {
-      if (running) {
-        again = true;
-        return;
-      }
-      running = true;
-      try {
-        do {
-          again = false;
-          try {
-            const next = stringify(await run!());
-            if (next !== last) event("result", (last = next));
-          } catch (e) {
-            event(
-              "error",
-              stringify({ error: e instanceof QueryError ? e.message : "internal error" }),
-            );
-          }
-        } while (again && !res.destroyed);
-      } finally {
-        running = false;
-      }
-    };
-    const listener = (checkpoint: number | undefined) => {
-      if (checkpoint !== undefined) event("checkpoint", stringify({ checkpoint }));
-      if (run !== undefined) void rerun();
-    };
-    // Listening before the first write: a commit can't fall between the first result and the subscription.
-    this.#live.add(listener);
-    res.writeHead(200, {
-      "content-type": "text/event-stream",
-      "cache-control": "no-cache",
-      "access-control-allow-origin": "*",
-    });
-    res.flushHeaders();
-    if (last !== undefined) event("result", last);
-    const ping = setInterval(() => res.write(": ping\n\n"), 15_000);
-    req.on("close", () => {
-      clearInterval(ping);
-      this.#live.delete(listener);
-    });
-  }
-
   async close() {
-    await this.#unlisten?.();
-    // Live streams never end on their own.
-    const closed = new Promise<void>((resolve) => this.#server.close(() => resolve()));
-    this.#server.closeAllConnections();
-    await closed;
+    this.#stop.abort();
+    await this.#unlisten();
+    await new Promise<void>((resolve) => {
+      const cut = setTimeout(() => this.#server.closeAllConnections(), CLOSE_GRACE_MS);
+      this.#server.close(() => {
+        clearTimeout(cut);
+        resolve();
+      });
+      this.#server.closeIdleConnections();
+    });
     await this.#reader.close();
   }
+}
+
+function routes(reader: Reader, o: ApiOptions): Hono {
+  const root = new Hono()
+    .use(cors({ origin: "*", maxAge: CORS_MAX_AGE }))
+    .get("/metrics", async (c) => c.text(o.metrics?.() ?? storedMetrics(await meta(reader))))
+    .get("/health", (c) => c.text("", 200))
+    .get("/ready", async (c) =>
+      READY_PHASES.has((await meta(reader)).phase ?? "")
+        ? c.text("", 200)
+        : c.text("Historical indexing is not complete.", 503),
+    )
+    .get("/status", async (c) => {
+      const m = await meta(reader);
+      if (m.chain === undefined || m.checkpoint === undefined) return c.json({});
+      return c.json({
+        [m.chain]: {
+          id: m.chain,
+          block: { number: m.checkpoint, timestamp: m.checkpointTime ?? 0 },
+        },
+      });
+    });
+  if (o.app instanceof Hono) root.route("/", o.app);
+  else if (o.app !== undefined) {
+    const app = o.app;
+    root.all("*", (c) => app.fetch(c.req.raw));
+  }
+  return root.onError(onError);
+}
+
+async function meta(reader: Reader): Promise<Meta> {
+  return reader.transaction(async (client) => {
+    const { rows } = await client.query<{ key: string; value: unknown }>(
+      `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'checkpointTime', 'chain', 'phase')`,
+    );
+    return Object.fromEntries(rows.map((r) => [r.key, r.value])) as Meta;
+  });
+}
+
+function storedMetrics(m: Meta): string {
+  return prometheus([
+    {
+      name: "phase",
+      type: "gauge",
+      help: "The phase running (1).",
+      samples: [[{ phase: m.phase ?? "starting" }, 1]],
+    },
+    {
+      name: "checkpoint",
+      type: "gauge",
+      help: "Last block committed.",
+      samples: [[{}, Number(m.checkpoint ?? 0)]],
+    },
+  ]);
+}
+
+/** Where in the app's code an error was thrown: the first file in its stack. */
+const FILE = /(\S+\.(?:js|ts|mjs|cjs)):\d+:\d+/;
+
+function onError(thrown: Error, c: Context): Response {
+  if (thrown instanceof HTTPException) return thrown.getResponse();
+  // Drizzle's error says only which query failed; Postgres's says why.
+  const error =
+    thrown instanceof DrizzleQueryError && thrown.cause instanceof Error ? thrown.cause : thrown;
+  const found = error.stack?.match(FILE)?.[0]?.trim();
+  const file = found?.replace(/^\(/, "").replace(/^file:\/\//, "");
+  console.error(`[kasbah api] ${c.req.method} ${c.req.path}:`, thrown);
+  return c.text(
+    `${error.name}: ${error.message} occurred in '${file}' while handling a '${c.req.method}' request to the route '${c.req.path}'`,
+    500,
+  );
 }

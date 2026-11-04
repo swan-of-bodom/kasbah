@@ -3,8 +3,7 @@ import type { PgTable } from "drizzle-orm/pg-core";
 import pg from "pg";
 import type { Abi } from "../abi/abi.ts";
 import type { EventArgs, EventName } from "../abi/types.ts";
-import type { Route, RouteHandler } from "../api/routes.ts";
-import { Api } from "../api/server.ts";
+import type { ApiApp } from "../api/context.ts";
 import type { Db } from "../db/store.ts";
 import { quote } from "../db/table.ts";
 import type { Client } from "../indexer/client.ts";
@@ -95,8 +94,8 @@ export type Config = {
    */
   ws?: string | true;
   /**
-   * The read API (SQL over HTTP, GraphQL, the app's `get`/`post` routes), served while indexing. The CLI serves it
-   * unless `false`; from code, only when given. `PORT` (`--port`) and `API_HOST` (`--hostname`) win over `port`
+   * The HTTP API (`/health`, `/ready`, `/status`, `/metrics`, then the app's Hono app from `src/api/index.ts`),
+   * served while indexing. The CLI serves it unless `false`; from code, only when given. `PORT` (`--port`) and `API_HOST` (`--hostname`) win over `port`
    * (default 42069) and `host`.
    */
   api?: false | { port?: number; host?: string; readDatabase?: string };
@@ -111,7 +110,6 @@ export type Config = {
 export const createConfig = <const C extends Config>(config: C): C => config;
 
 type Contracts<C extends Config> = C["contracts"];
-type TablesOf<C extends Config> = C["tables"] extends Tables ? C["tables"] : Tables;
 type Blocks<C extends Config> =
   C["blocks"] extends Record<string, BlockConfig> ? C["blocks"] : Record<never, never>;
 
@@ -233,17 +231,11 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
   let config: Config = initial;
   const handlers = new Map<string, Handler<C, HandlerName<C>>>();
 
-  const routes: Route[] = [];
+  let apiApp: ApiApp | undefined;
 
   const on = <N extends HandlerName<C>>(name: N, handler: Handler<C, N>) => {
     if (handlers.has(name)) throw new ConfigError(`${name} already has a handler`);
     handlers.set(name, handler as never);
-  };
-
-  const route = (method: Route["method"]) => (path: string, handler: RouteHandler<TablesOf<C>>) => {
-    if (config.api === undefined || config.api === false)
-      throw new ConfigError(`${method} ${path}: routes need the API, which \`api\` turns off`);
-    routes.push({ method, path, handler: handler as never });
   };
 
   /** The API alone, over what an indexer of this app stores: another process, or an earlier run. */
@@ -251,12 +243,13 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
     const resolved = resolveConfig(config);
     if (resolved.api === undefined)
       throw new ConfigError("serve needs the API, which `api` turns off");
+    const { Api } = await import("../api/server.ts");
     const api = await Api.start({
       ...resolved.api,
       database: resolved.database,
       schema: resolved.schema,
       tables: resolved.tables,
-      routes,
+      app: apiApp,
     });
     return { url: apiUrl(resolved.api, api.port), close: () => api.close() };
   };
@@ -277,13 +270,16 @@ export function kasbah<const C extends Config>(initial: C & Checked<C>) {
 
   return {
     on,
-    get: route("GET"),
-    post: route("POST"),
-    run: (options: RunOptions = {}) => run(resolveConfig(config), handlers, options, routes),
+    /** The app's HTTP endpoints: a Hono app, mounted after the built-in ones. The CLI passes `src/api/index.ts`. */
+    api: (app: ApiApp) => {
+      if (config.api === false) throw new ConfigError("the API is off (`api: false`)");
+      apiApp = app;
+    },
+    run: (options: RunOptions = {}) => run(resolveConfig(config), handlers, options, apiApp),
     serve,
     drop,
     /**
-     * For the CLI, before the project's handlers and routes load: what the config leaves out, the layout gives. The
+     * For the CLI, before the project's handlers and API load: what the config leaves out, the layout gives. The
      * schema is the directory's name, the tables `kasbah.schema.ts`, and the API is on.
      */
     useProject: (p: Project) => {

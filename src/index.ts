@@ -81,7 +81,6 @@ export type {
   FunctionResult,
   TypeOf,
 } from "./abi/types.ts";
-export { HttpError, type RouteContext, type RouteHandler } from "./api/routes.ts";
 export {
   type BlockConfig,
   type Config,
@@ -116,3 +115,4 @@ export type { Include } from "./sync/extras.ts";
 export type { Block, GasPrice } from "./types/block.ts";
 export { type Felt, felt } from "./types/felt.ts";
 export type { DaMode, Receipt, ResourceBounds, Transaction } from "./types/transaction.ts";
+export { type ReplaceBigInts, replaceBigInts } from "./utils/replace-bigints.ts";
