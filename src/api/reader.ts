@@ -60,7 +60,6 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
 export class Reader {
   /** Every connection read-only, on the app's schema. */
   readonly pool: pg.Pool;
-  readonly #schema: string;
   readonly timeoutMs: number;
 
   private constructor(url: string, o: ReaderOptions) {
@@ -75,7 +74,6 @@ export class Reader {
         `-c lock_timeout=${API_LOCK_TIMEOUT_MS}`,
       ].join(" "),
     });
-    this.#schema = o.schema;
   }
 
   static async connect(o: ReaderOptions): Promise<Reader> {
