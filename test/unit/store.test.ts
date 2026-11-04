@@ -273,8 +273,7 @@ test.skipIf(url === undefined)(
           `SELECT 1 FROM pg_constraint WHERE conrelid = 'balances'::regclass AND contype = 'p'`,
         )
       ).rowCount === 1;
-    // Autovacuum is off while the table has no key, and the key brings it back with fresh statistics.
-    const vacuumed = async () =>
+    const autovacuumState = async () =>
       (
         await pool.query<{ options: string[] | null; analyzed: boolean }>(
           `SELECT c.reloptions AS options, s.last_analyze IS NOT NULL AS analyzed
@@ -291,11 +290,14 @@ test.skipIf(url === undefined)(
     for (let i = 0; i < 5; i++) await store.db.insert(balances).values(row(i));
     await commit(store);
     expect(await hasKey()).toBe(false);
-    expect(await vacuumed()).toEqual({ options: ["autovacuum_enabled=false"], analyzed: false });
+    expect(await autovacuumState()).toEqual({
+      options: ["autovacuum_enabled=false"],
+      analyzed: false,
+    });
     await store.db.update(balances, { owner: "0x1" }).set({ updates: 1 });
     await commit(store);
     expect(await hasKey()).toBe(true);
-    expect(await vacuumed()).toEqual({ options: null, analyzed: true });
+    expect(await autovacuumState()).toEqual({ options: null, analyzed: true });
 
     await pool.query(`DROP TABLE balances`);
     await pool.query(createTableSql(info, { primaryKey: false }));

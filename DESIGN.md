@@ -188,8 +188,8 @@ Built (`src/indexer/sources.ts`, config `factory: { address, abi, event, paramet
 - Pre-pass over the factory's events up to the backfill end; children stored in `_kasbah_children` with their
   creation block, and `discovered:<contract>` in `_kasbah_meta`, so a restart only scans what's new.
 - A child's classes: probed at its creation block and at the tip, bisected only if they differ (2 calls per child
-  instead of a full history; 1 at a restart, which knows the creation block's class, §8.4). Children with the same
-  class share one decoder.
+  instead of a full history). A restart already knows the class at the creation block, so it makes 1 call per
+  child (§8.4). Children with the same class share one decoder.
 - Live: each tick first reads the factory's events for the tick's blocks, adds the children, then fetches child
   events with them included. A reorg forgets children created after the ancestor (memory and table).
 - Class checks while live: children of a contract with upgrade events need none (§6.1); otherwise up to 100
@@ -401,17 +401,18 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   and `.unique()` are built then too (`IF NOT EXISTS`, at every start, so a new index needs no re-index). Their SQL
   is made at startup, and anything kasbah can't create as written (expressions, `where`, ordering, operator
   classes, storage options, foreign keys, checks) is refused then, not after hours of backfill.
-- A table without its key has autovacuum off (`autovacuum_enabled = false`), and the key turns it back on, then
-  runs one `ANALYZE`. Unkeyed means nothing but inserts reached it: an upsert or delete, the only writes that leave
-  dead rows, keys the table first. So autovacuum has nothing to reclaim then, yet since Postgres 13 inserts trigger
-  it, each time a table grows ~20%: on a 2026-11-04 Ekubo backfill filling the cache, it was scanning the cache's
-  `events` (52M rows), `swapped` (30M) and `position_updated` (4M) at once, commits took 8 s instead of ~2 s, and
-  events/s fell from ~40k to ~9k for minutes (the CPU was also throttling, which can't be told apart). A cached
-  re-index with this kept ~66k/s past `swapped`'s 17M rows, no autovacuum on the app's tables, and commits at
-  ~1.7 s. The price: the visibility map and freezing autovacuum would have done along the way come in one pass in
-  live mode, and API queries during the backfill run without statistics (on tables without indexes anyway).
-  Anti-wraparound vacuums run whatever the setting. The event cache keeps autovacuum: apps share it, and its reads
-  use the visibility map.
+- A table without its key has autovacuum off (`autovacuum_enabled = false`). Building the key turns it back on
+  and runs one `ANALYZE`. A table without a key has only received inserts, because an upsert or a delete builds
+  the key first, and those are the only writes that leave dead rows. Autovacuum has nothing to reclaim in such a
+  table. Since Postgres 13, inserts still trigger it each time a table grows by ~20%. On a 2026-11-04 Ekubo
+  backfill that filled the cache, autovacuum scanned the cache's `events` (52M rows), `swapped` (30M) and
+  `position_updated` (4M) at the same time. Commits took 8 s instead of ~2 s, and events/s fell from ~40k to ~9k
+  for minutes. The CPU was also throttling then, and the two causes can't be separated. A cached re-index with
+  autovacuum off held ~66k/s past `swapped`'s 17M rows, with commits at ~1.7 s, though the laptop also started
+  that run cool. The cost: autovacuum sets the visibility map and freezes rows in one pass in live mode instead of
+  during the backfill. API queries during the backfill also run without statistics, on tables that have no
+  indexes yet anyway. Anti-wraparound vacuums run whatever the setting. The event cache keeps autovacuum, because
+  apps share it and its reads use the visibility map.
 - `synchronous_commit` stays on: ~75 commits per million-row backfill, the fsync isn't what costs.
 - Crash recovery: resume from the last committed checkpoint. A journal for blocks above it is reverted first.
 - One run (`src/indexer/run.ts`): setup (`open.ts`), then the phases factories → backfill → keys → live
@@ -560,12 +561,11 @@ today's ABI silently drops **1,839,169** `ProtocolFeesPaid` events; with the cla
 unknown. So a "latest ABI only" indexer loses data without any error.
 
 - At startup, `classHistory` (`src/abi/history.ts`) bisects `getClassHashAt` over the contract's range: ~25 calls
-  per change (Ekubo: 22 classes in 358 calls, 1.9 s). Each class's ABI is fetched once (`getClass`). Both are
-  kept in the event cache (§9), the history through the final block at startup: a contract's classes up to a
-  final block never change, nor does a class's ABI. A restart then asks only from there to the tip, one
-  `getClassHashAt` and ~25 more per new class, and no `getClass` for a class it has seen: Ekubo restarted with
-  ~370 calls before (346 + 22 `getClass`, about 1–6 s before the first event, depending on the RPC's answer
-  time: the bisections are ~24 calls in a row).
+  per change (Ekubo: 22 classes in 358 calls, 1.9 s). Each class's ABI is fetched once (`getClass`). The event
+  cache keeps both (§9), the history up to the final block at startup. A contract's classes up to a final block
+  never change, and neither does a class's ABI. A restart asks only about the blocks from there to the tip: one
+  `getClassHashAt`, plus ~25 per class change since. It calls `getClass` only for a class it hasn't seen. Before
+  this, every Ekubo start made ~370 calls (346 `getClassHashAt` and 22 `getClass`).
 - Events decode with the class active at their block (`createHistoricalDecoder`).
 - Blind spot: a class replaced and restored between two probes (1M blocks apart by default) is missed. For
   factories, children's classes come from the same bisection, per child, lazily.
@@ -614,9 +614,9 @@ plain log lines, better for Docker and log files. Skipped events are reported on
   `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
   small numbers).
 - `headers(block, hash, parent, timestamp)` for the blocks whose headers were fetched (block handlers).
-- `class_history(address, first, through, spans)`: each contract's classes over `[first, through]`, `through` a
-  final block, and `classes(hash, abi)`: each class's ABI as the node gave it (`json`, so jsonb doesn't reorder
-  it). §8.4: a restart asks the node only past `through`.
+- `class_history(address, first, through, spans)` holds each contract's classes from block `first` to block
+  `through`, a final block. A restart asks the node only about blocks after `through` (§8.4).
+- `classes(hash, abi)` holds each class's ABI.
 - `coverage(address, selector, filter, ranges int8multirange)`: which (address, selector) pairs are complete for
   which blocks, for a key filter or (`filter` empty) for all their events. Ponder's fragment idea, without its EVM
   topic cross-products. A cache from before filters gains the column on open, its coverage counted as unfiltered.

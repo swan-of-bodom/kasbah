@@ -4,14 +4,15 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
-- `kasbah list` and `kasbah prune` no longer fail when another process drops a schema while they read it (a
-  prune, a reset): that schema is left out.
-- A restart no longer asks the node for every contract's class history and ABIs again: the event cache keeps them,
-  through a final block, and a restart asks only from there. Ekubo Core's startup went from ~370 RPC calls to 1.
-- During a backfill, autovacuum skips the app's tables while they only receive inserts, and their key, built at the
-  end of the backfill or at a table's first update or delete, turns it back on with fresh statistics (`ANALYZE`).
-  It had been scanning tables of tens of millions of rows mid-backfill, which made commits up to four times slower
-  for minutes.
+- `kasbah list` and `kasbah prune` leave out a schema that another process drops while they read it, such as
+  during a prune or a reset. They used to fail with "relation does not exist".
+- The event cache keeps each contract's class history up to a final block, and each class's ABI. A restart asks
+  the node only about the blocks after that, usually with one `getClassHashAt` call. Before, every start asked
+  for the whole history again, which took ~370 calls for Ekubo Core.
+- Autovacuum now skips an app table while the backfill only inserts into it. kasbah turns it back on, and runs
+  `ANALYZE` for fresh statistics, when it builds the table's key: at the end of the backfill, or at the table's
+  first update or delete. Before, autovacuum scanned tables of tens of millions of rows during the backfill, and
+  commits took up to four times longer for minutes.
 - Events read back from the event cache are unpacked only when a handler reads them, not while their batch waits:
   cached Ekubo backfills spend a third less time in GC, pause the event loop for over 100 ms a third as often, use
   up to 30% less memory, and run a few percent faster.

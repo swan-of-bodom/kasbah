@@ -87,10 +87,9 @@ test("a stored history is asked again only past the final block it was known thr
   const fresh = (from: number, to: number) =>
     classHistory(fakeContract(1_234, changes), "0x1", from, to);
 
-  // First run: tip 2.5M, final 2.3M: the change at 2.4M is found but not saved.
-  expect(await storedClassHistory(rpc, store, "0x1", 0, 2_500_000, 2_300_000)).toEqual(
-    await fresh(0, 2_500_000),
-  );
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 0, to: 2_500_000, final: 2_300_000 }),
+  ).toEqual(await fresh(0, 2_500_000));
   expect(histories.get("0x1")).toEqual({
     from: 0,
     through: 2_300_000,
@@ -100,24 +99,22 @@ test("a stored history is asked again only past the final block it was known thr
     ],
   });
 
-  // Restart: one probe at the new tip; it differs, so only past 2.3M is bisected.
   asked.length = 0;
-  expect(await storedClassHistory(rpc, store, "0x1", 0, 3_000_000, 2_999_000)).toEqual(
-    await fresh(0, 3_000_000),
-  );
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 0, to: 3_000_000, final: 2_999_000 }),
+  ).toEqual(await fresh(0, 3_000_000));
   expect(Math.min(...asked)).toBeGreaterThan(2_300_000);
   expect(histories.get("0x1")?.through).toBe(2_999_000);
 
-  // Nothing new: one call. Inside what's known, from a later block: none.
   asked.length = 0;
-  expect(await storedClassHistory(rpc, store, "0x1", 0, 2_999_500, 2_999_400)).toEqual(
-    await fresh(0, 2_999_500),
-  );
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 0, to: 2_999_500, final: 2_999_400 }),
+  ).toEqual(await fresh(0, 2_999_500));
   expect(asked).toEqual([2_999_500]);
   asked.length = 0;
-  expect(await storedClassHistory(rpc, store, "0x1", 600_000, 2_500_000, 2_999_400)).toEqual(
-    await fresh(600_000, 2_500_000),
-  );
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 600_000, to: 2_500_000, final: 2_999_400 }),
+  ).toEqual(await fresh(600_000, 2_500_000));
   expect(asked).toEqual([]);
 });
 
@@ -126,14 +123,16 @@ test("a stored history starting after the range asked is recomputed, and one not
   const asked: number[] = [];
   const rpc = fakeContract(5_000, changes, asked);
   const { store, histories } = memoryStore();
-  expect(await storedClassHistory(rpc, store, "0x1", 1_000, 2_000, 2_000)).toEqual([]);
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 1_000, to: 2_000, final: 2_000 }),
+  ).toEqual([]);
   expect(histories.get("0x1")).toEqual({ from: 1_000, through: 2_000, spans: [] });
-  expect(await storedClassHistory(rpc, store, "0x1", 1_500, 9_000, 9_000)).toEqual([
-    { from: 5_000, classHash: "0xa" },
-  ]);
-  expect(await storedClassHistory(rpc, store, "0x1", 0, 9_000, 9_000)).toEqual([
-    { from: 5_000, classHash: "0xa" },
-  ]);
+  expect(
+    await storedClassHistory(rpc, store, "0x1", { from: 1_500, to: 9_000, final: 9_000 }),
+  ).toEqual([{ from: 5_000, classHash: "0xa" }]);
+  expect(await storedClassHistory(rpc, store, "0x1", { from: 0, to: 9_000, final: 9_000 })).toEqual(
+    [{ from: 5_000, classHash: "0xa" }],
+  );
   expect(histories.get("0x1")).toEqual({
     from: 0,
     through: 9_000,

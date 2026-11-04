@@ -58,8 +58,8 @@ export function createTableSql(info: TableInfo, { primaryKey = true } = {}): str
     const notNull = column.notNull || keyColumns.has(column) ? " NOT NULL" : "";
     return `${quote(column.name)} ${column.getSQLType()}${notNull}`;
   });
-  // Without its key, the table is in a backfill that only appends: autovacuum would scan it over and over as it
-  // grows, competing with the writes, for nothing until the key comes (`primaryKeySql`).
+  // Since Postgres 13, inserts alone trigger autovacuum. A table without its key has only had inserts, so autovacuum
+  // has nothing to reclaim in it, and its scans slowed backfill commits up to 4×.
   if (!primaryKey)
     return `CREATE TABLE IF NOT EXISTS ${quote(info.name)} (${cols.join(", ")}) WITH (autovacuum_enabled = false)`;
   const pk = info.primaryKey.map((c) => quote(c.column.name)).join(", ");
@@ -68,8 +68,8 @@ export function createTableSql(info: TableInfo, { primaryKey = true } = {}): str
 
 /**
  * The index first (readers can still read the table while it builds), then the constraint on it, which locks the
- * table only for a moment. Then autovacuum back on, and one ANALYZE: the statistics queries are planned with, which
- * autovacuum didn't gather while the table was keyless.
+ * table only for a moment. Then autovacuum goes back on, and one ANALYZE gathers the statistics Postgres plans
+ * queries with, which autovacuum didn't collect while the table had no key.
  */
 export function primaryKeySql(info: TableInfo): string[] {
   const name = quote(`${info.name}_pkey`);

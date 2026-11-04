@@ -23,7 +23,6 @@ const asked: {
   from_block: { block_number: number };
   to_block: { block_number: number };
 }[] = [];
-/** Every method the proxy passed on. */
 const methods: string[] = [];
 const proxy = createServer((req, res) => {
   let body = "";

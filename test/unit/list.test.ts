@@ -216,7 +216,6 @@ test.skipIf(url === undefined)(
       await pool.query(
         `CREATE TABLE ${gone}._kasbah_meta (key text PRIMARY KEY, value jsonb NOT NULL)`,
       );
-      // Another process drops it right after list found it.
       let first = true;
       const racing = {
         query: async (...args: Parameters<pg.Pool["query"]>) => {

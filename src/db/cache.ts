@@ -120,9 +120,7 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE TABLE IF NOT EXISTS ${s}.transactions (hash bytea PRIMARY KEY, block integer NOT NULL, transaction jsonb, receipt jsonb)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
   `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
-  // Each contract's classes over [first, through], through final; spans as [from, class hash] pairs.
   `CREATE TABLE IF NOT EXISTS ${s}.class_history (address bytea PRIMARY KEY, first integer NOT NULL, through integer NOT NULL, spans json NOT NULL)`,
-  // json, not jsonb: the ABI comes back as the node wrote it.
   `CREATE TABLE IF NOT EXISTS ${s}.classes (hash bytea PRIMARY KEY, abi json NOT NULL)`,
 ];
 

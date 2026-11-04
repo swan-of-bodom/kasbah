@@ -4,9 +4,13 @@ import { errorCode } from "../utils/errors.ts";
 import { quote } from "../utils/quote.ts";
 import { LOCK } from "./lock.ts";
 
-/** Postgres's codes for a table, and a schema, that doesn't exist. */
+/** Postgres's error codes for a missing table and a missing schema. */
 const UNDEFINED_TABLE = "42P01";
 const INVALID_SCHEMA = "3F000";
+
+/** Another process (a prune, a reset) dropped the schema between the query that found it and the one reading it. */
+const droppedSinceListed = (e: unknown) =>
+  errorCode(e) === UNDEFINED_TABLE || errorCode(e) === INVALID_SCHEMA;
 
 /** An app schema in a database, as `kasbah list` shows it and `kasbah prune` decides on it. */
 export type SchemaInfo = {
@@ -72,8 +76,7 @@ export async function listSchemas(
         )
       ).rows;
     } catch (e) {
-      // Dropped since the query above (a prune, a reset): it's no longer there to list.
-      if (errorCode(e) === UNDEFINED_TABLE || errorCode(e) === INVALID_SCHEMA) continue;
+      if (droppedSinceListed(e)) continue;
       throw e;
     }
     const meta = new Map(found.map((m) => [m.key, m.value]));

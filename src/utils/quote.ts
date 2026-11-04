@@ -1,2 +1,2 @@
-/** A Postgres identifier (schema, table, column) quoted for SQL: in double quotes, each one inside doubled. */
+/** A Postgres identifier (schema, table, column) quoted for SQL. */
 export const quote = (name: string) => `"${name.replace(/"/g, '""')}"`;

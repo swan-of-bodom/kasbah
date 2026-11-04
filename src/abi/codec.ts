@@ -219,7 +219,7 @@ export function splitTopLevel(s: string): string[] {
   return parts;
 }
 
-/** A tuple's parts as members, if every part is named (`(amount: u128, fee: u64)`, Cairo 0); else undefined. */
+/** Cairo 0 ABIs name tuple members: `(amount: u128, fee: u64)`. */
 function namedMembers(parts: string[]): { name: string; type: string }[] | undefined {
   if (parts.length === 0 || !parts.every((p) => p.includes(":") && !p.includes("::")))
     return undefined;

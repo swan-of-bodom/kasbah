@@ -94,6 +94,9 @@ type StateUpdate = {
  * Everything the fetcher watches: `addresses` and `keys` (shared with the fetchers, changed in place), each
  * address's class history and decoder.
  */
+/** Where class histories and ABIs are kept between runs, and the final block at startup, the last one saved. */
+export type StoredClasses = { store: ClassStore; final: number };
+
 export class Sources {
   readonly addresses: string[] = [];
   /** `keys` filter: handled selectors at position 0. */
@@ -102,7 +105,7 @@ export class Sources {
   readonly streams: Stream[] = [];
   readonly byAddress = new Map<string, Watched>();
   readonly #rpc: RpcClient;
-  readonly #classes: { store?: ClassStore; final: number };
+  readonly #classes: StoredClasses;
   readonly #contracts = new Map<string, ContractSource>();
   readonly #abis = new Map<string, Promise<Abi>>();
   readonly #decoders = new WeakMap<Abi, Decode>();
@@ -114,12 +117,11 @@ export class Sources {
 
   readonly #fallback = new Map<string, Decode>();
 
-  /** `classes`: where class histories known through `final` and ABIs are kept from one run to the next. */
   constructor(
     rpc: RpcClient,
     contracts: ContractSource[],
     note: (n: SourceNote) => void,
-    classes: { store?: ClassStore; final: number } = { final: -1 },
+    classes: StoredClasses,
   ) {
     this.#rpc = rpc;
     this.#classes = classes;
@@ -200,21 +202,20 @@ export class Sources {
 
   async #fetchAbi(classHash: string): Promise<Abi> {
     const { store } = this.#classes;
-    const stored = await store?.abi(classHash);
+    const stored = await store.abi(classHash);
     if (stored !== undefined) return stored;
     const cls = await this.#rpc.request<{ abi: string | Abi }>("starknet_getClass", {
       block_id: "latest",
       class_hash: classHash,
     });
     const abi = (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi;
-    await store?.saveAbi(classHash, abi);
+    await store.saveAbi(classHash, abi);
     return abi;
   }
 
-  /** `storedClassHistory` with this run's store and final block. */
   history(address: string, from: number, to: number, step?: number): Promise<ClassSpan[]> {
     const { store, final } = this.#classes;
-    return storedClassHistory(this.#rpc, store, address, from, to, final, step);
+    return storedClassHistory(this.#rpc, store, address, { from, to, final, step });
   }
 
   #decoderFor = (abi: Abi): Decode => {

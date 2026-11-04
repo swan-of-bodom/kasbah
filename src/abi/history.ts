@@ -45,7 +45,8 @@ export async function deployedAt(
 /**
  * Every class a contract had over `[from, to]`, found by bisecting `getClassHashAt`: about 25 calls per change.
  * A class replaced and then restored between two probes is invisible; probes every `step` blocks bound that window.
- * `atFrom`: the class at `from`, already known (undefined inside it: not deployed), so it isn't asked again.
+ * Pass `atFrom` when the class at `from` is already known, so it isn't asked again. Its `classHash` is undefined if
+ * the contract wasn't deployed yet.
  */
 export async function classHistory(
   rpc: RpcClient,
@@ -88,10 +89,10 @@ export async function classHistory(
   return [...start, ...changes.sort((a, b) => a.from - b.from)];
 }
 
-/** A contract's classes over `[from, through]`, `through` final: no reorg can change them. */
+/** A contract's classes from block `from` to block `through`. `through` is final, so no reorg can change them. */
 export type KnownClasses = { from: number; through: number; spans: ClassSpan[] };
 
-/** Where class histories and ABIs outlive a run: what is final about a contract never changes. */
+/** Keeps class histories and ABIs from one run to the next. What is final about a contract never changes. */
 export type ClassStore = {
   history(address: string): Promise<KnownClasses | undefined>;
   saveHistory(address: string, known: KnownClasses): Promise<void>;
@@ -99,8 +100,7 @@ export type ClassStore = {
   saveAbi(classHash: string, abi: Abi): Promise<void>;
 };
 
-/** `spans` over `[from, to]`, as `classHistory(…, from, to)` gives them: the class at `from` starts at `from`. */
-function within(spans: ClassSpan[], from: number, to: number): ClassSpan[] {
+function clip(spans: ClassSpan[], from: number, to: number): ClassSpan[] {
   const atFrom = spans.filter((s) => s.from <= from).at(-1);
   return [
     ...(atFrom === undefined ? [] : [{ from, classHash: atFrom.classHash }]),
@@ -108,26 +108,25 @@ function within(spans: ClassSpan[], from: number, to: number): ClassSpan[] {
   ];
 }
 
+/** The blocks `storedClassHistory` covers, `from` to `to` (the tip). `final` is the newest block no reorg can undo. */
+export type ClassRange = { from: number; to: number; final: number; step?: number };
+
 /**
- * `classHistory` through `store`: what it knows up to a final block isn't asked again, so a restart probes only from
- * there to `to` (one call, ~25 more per new class). What is known through `final` is saved for the next run.
+ * `classHistory`, reusing what `store` knows up to a final block. A restart probes only from there to `to`: one call,
+ * plus ~25 per class change since. The history up to `final` is saved for the next run.
  */
 export async function storedClassHistory(
   rpc: RpcClient,
-  store: ClassStore | undefined,
+  store: ClassStore,
   address: string,
-  from: number,
-  to: number,
-  final: number,
-  step?: number,
+  { from, to, final, step }: ClassRange,
 ): Promise<ClassSpan[]> {
-  if (store === undefined) return classHistory(rpc, address, from, to, step);
   const known = await store.history(address);
   let all: ClassSpan[];
   let start: number;
   let before = -1;
   if (known !== undefined && known.from <= from && from <= known.through) {
-    if (to <= known.through) return within(known.spans, from, to);
+    if (to <= known.through) return clip(known.spans, from, to);
     const atThrough = known.spans.at(-1)?.classHash;
     const later = await classHistory(rpc, address, known.through, to, step, {
       classHash: atThrough,
@@ -146,7 +145,7 @@ export async function storedClassHistory(
       through,
       spans: all.filter((s) => s.from <= through),
     });
-  return within(all, from, to);
+  return clip(all, from, to);
 }
 
 export type Decode = (
