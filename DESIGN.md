@@ -188,7 +188,8 @@ Built (`src/indexer/sources.ts`, config `factory: { address, abi, event, paramet
 - Pre-pass over the factory's events up to the backfill end; children stored in `_kasbah_children` with their
   creation block, and `discovered:<contract>` in `_kasbah_meta`, so a restart only scans what's new.
 - A child's classes: probed at its creation block and at the tip, bisected only if they differ (2 calls per child
-  instead of a full history). Children with the same class share one decoder.
+  instead of a full history; 1 at a restart, which knows the creation block's class, §8.4). Children with the same
+  class share one decoder.
 - Live: each tick first reads the factory's events for the tick's blocks, adds the children, then fetches child
   events with them included. A reorg forgets children created after the ancestor (memory and table).
 - Class checks while live: children of a contract with upgrade events need none (§6.1); otherwise up to 100
@@ -559,7 +560,12 @@ today's ABI silently drops **1,839,169** `ProtocolFeesPaid` events; with the cla
 unknown. So a "latest ABI only" indexer loses data without any error.
 
 - At startup, `classHistory` (`src/abi/history.ts`) bisects `getClassHashAt` over the contract's range: ~25 calls
-  per change (Ekubo: 22 classes in 358 calls, 1.9 s). Each class's ABI is fetched once (`getClass`) and cached.
+  per change (Ekubo: 22 classes in 358 calls, 1.9 s). Each class's ABI is fetched once (`getClass`). Both are
+  kept in the event cache (§9), the history through the final block at startup: a contract's classes up to a
+  final block never change, nor does a class's ABI. A restart then asks only from there to the tip, one
+  `getClassHashAt` and ~25 more per new class, and no `getClass` for a class it has seen: Ekubo restarted with
+  ~370 calls before (346 + 22 `getClass`, about 1–6 s before the first event, depending on the RPC's answer
+  time: the bisections are ~24 calls in a row).
 - Events decode with the class active at their block (`createHistoricalDecoder`).
 - Blind spot: a class replaced and restored between two probes (1M blocks apart by default) is missed. For
   factories, children's classes come from the same bisection, per child, lazily.
@@ -608,6 +614,9 @@ plain log lines, better for Docker and log files. Skipped events are reported on
   `keys` and `data` are one bytea each: per felt a length byte and its minimal big-endian bytes (most felts are
   small numbers).
 - `headers(block, hash, parent, timestamp)` for the blocks whose headers were fetched (block handlers).
+- `class_history(address, first, through, spans)`: each contract's classes over `[first, through]`, `through` a
+  final block, and `classes(hash, abi)`: each class's ABI as the node gave it (`json`, so jsonb doesn't reorder
+  it). §8.4: a restart asks the node only past `through`.
 - `coverage(address, selector, filter, ranges int8multirange)`: which (address, selector) pairs are complete for
   which blocks, for a key filter or (`filter` empty) for all their events. Ponder's fragment idea, without its EVM
   topic cross-products. A cache from before filters gains the column on open, its coverage counted as unfiltered.

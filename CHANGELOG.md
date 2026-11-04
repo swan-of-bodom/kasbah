@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A restart no longer asks the node for every contract's class history and ABIs again: the event cache keeps them,
+  through a final block, and a restart asks only from there. Ekubo Core's startup went from ~370 RPC calls to 1.
 - During a backfill, autovacuum skips the app's tables while they only receive inserts, and their key, built at the
   end of the backfill or at a table's first update or delete, turns it back on with fresh statistics (`ANALYZE`).
   It had been scanning tables of tens of millions of rows mid-backfill, which made commits up to four times slower

@@ -2,9 +2,11 @@ import type { Abi } from "../abi/abi.ts";
 import { abiEvents, createDecoder } from "../abi/events.ts";
 import {
   type ClassSpan,
+  type ClassStore,
   classHistory,
   createHistoricalDecoder,
   type Decode,
+  storedClassHistory,
 } from "../abi/history.ts";
 import { ConfigError } from "../config/errors.ts";
 import type { RpcClient } from "../rpc/client.ts";
@@ -100,6 +102,7 @@ export class Sources {
   readonly streams: Stream[] = [];
   readonly byAddress = new Map<string, Watched>();
   readonly #rpc: RpcClient;
+  readonly #classes: { store?: ClassStore; final: number };
   readonly #contracts = new Map<string, ContractSource>();
   readonly #abis = new Map<string, Promise<Abi>>();
   readonly #decoders = new WeakMap<Abi, Decode>();
@@ -111,8 +114,15 @@ export class Sources {
 
   readonly #fallback = new Map<string, Decode>();
 
-  constructor(rpc: RpcClient, contracts: ContractSource[], note: (n: SourceNote) => void) {
+  /** `classes`: where class histories known through `final` and ABIs are kept from one run to the next. */
+  constructor(
+    rpc: RpcClient,
+    contracts: ContractSource[],
+    note: (n: SourceNote) => void,
+    classes: { store?: ClassStore; final: number } = { final: -1 },
+  ) {
     this.#rpc = rpc;
+    this.#classes = classes;
     for (const c of contracts) {
       this.#contracts.set(c.name, c);
       const own = { contract: c.name, from: c.startBlock, to: c.endBlock };
@@ -182,15 +192,29 @@ export class Sources {
   abiOf(classHash: string): Promise<Abi> {
     let abi = this.#abis.get(classHash);
     if (abi === undefined) {
-      abi = this.#rpc
-        .request<{ abi: string | Abi }>("starknet_getClass", {
-          block_id: "latest",
-          class_hash: classHash,
-        })
-        .then((cls) => (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi);
+      abi = this.#fetchAbi(classHash);
       this.#abis.set(classHash, abi);
     }
     return abi;
+  }
+
+  async #fetchAbi(classHash: string): Promise<Abi> {
+    const { store } = this.#classes;
+    const stored = await store?.abi(classHash);
+    if (stored !== undefined) return stored;
+    const cls = await this.#rpc.request<{ abi: string | Abi }>("starknet_getClass", {
+      block_id: "latest",
+      class_hash: classHash,
+    });
+    const abi = (typeof cls.abi === "string" ? JSON.parse(cls.abi) : cls.abi) as Abi;
+    await store?.saveAbi(classHash, abi);
+    return abi;
+  }
+
+  /** `storedClassHistory` with this run's store and final block. */
+  history(address: string, from: number, to: number, step?: number): Promise<ClassSpan[]> {
+    const { store, final } = this.#classes;
+    return storedClassHistory(this.#rpc, store, address, from, to, final, step);
   }
 
   #decoderFor = (abi: Abi): Decode => {
@@ -243,8 +267,7 @@ export class Sources {
   ): Promise<Watched | undefined> {
     const a = canonical(address);
     if (this.byAddress.has(a)) return undefined;
-    const spans = await classHistory(
-      this.#rpc,
+    const spans = await this.history(
       a,
       from,
       Math.max(from, to),

@@ -23,12 +23,16 @@ const asked: {
   from_block: { block_number: number };
   to_block: { block_number: number };
 }[] = [];
+/** Every method the proxy passed on. */
+const methods: string[] = [];
 const proxy = createServer((req, res) => {
   let body = "";
   req.on("data", (c) => (body += c));
   req.on("end", async () => {
-    for (const c of [JSON.parse(body)].flat())
+    for (const c of [JSON.parse(body)].flat()) {
       if (c.method === "starknet_getEvents") asked.push(c.params.filter);
+      methods.push(c.method);
+    }
     const out = await (await fetch(pairUrl, { method: "POST", body })).text();
     res.writeHead(200, { "content-type": "application/json" }).end(out);
   });
@@ -127,6 +131,21 @@ test.skipIf(url === undefined)(
       expect(f.to_block.block_number).toBeLessThanOrEqual(END);
       expect(f.address!.map(BigInt).sort()).toEqual([0xcn, 0xen]);
     }
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a restart asks the node for no class it already knows: histories through a final block and ABIs are cached",
+  async () => {
+    const classCalls = () =>
+      methods.filter((m) => m === "starknet_getClassHashAt" || m === "starknet_getClass").length;
+    const run = () =>
+      app({ address: ["0xc", "0xe"], startBlock: 0 }, proxied).run({ reset: true, to: BLOCKS - 5 });
+    await run();
+    methods.length = 0;
+    await run();
+    expect(methods).toContain("starknet_getEvents");
+    expect(classCalls()).toBe(0);
   },
 );
 

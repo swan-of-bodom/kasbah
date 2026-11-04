@@ -3,7 +3,7 @@ import { is } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import type pg from "pg";
-import { classHistory, deployedAt } from "../abi/history.ts";
+import { deployedAt } from "../abi/history.ts";
 import type { ApiApp } from "../api/context.ts";
 import type { BlockConfig, RunOptions, StartBlock } from "../config/app.ts";
 import { ConfigError } from "../config/errors.ts";
@@ -132,7 +132,8 @@ export async function open(
   });
   const tip = await blockNumber(rpc);
   const finality = new Finality(rpc, config.finality === "l1" ? undefined : config.reorgWindow);
-  const plan = planOf(config, options.to, tip, await finality.finalAt(tip));
+  const final = await finality.finalAt(tip);
+  const plan = planOf(config, options.to, tip, final);
   if (plan.clamped && options.to !== undefined)
     status.note({
       kind: "clamped",
@@ -142,8 +143,11 @@ export async function open(
       rule: finality.rule,
     });
   const cache = await EventCache.open(pool, chainId, config.cache);
-  const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n));
-  const factories = await factoriesOf(config, rpc, sources, plan.classTo);
+  const sources = new Sources(rpc, contractsOf(config, handlers), (n) => status.note(n), {
+    store: cache,
+    final,
+  });
+  const factories = await factoriesOf(config, sources, plan.classTo);
   await Promise.all(
     Object.entries(config.contracts).flatMap(([name, c]) =>
       c.address === undefined
@@ -475,12 +479,7 @@ function startup(
   });
 }
 
-function factoriesOf(
-  config: Resolved,
-  rpc: RpcClient,
-  sources: Sources,
-  classTo: number,
-): Promise<Factory[]> {
+function factoriesOf(config: Resolved, sources: Sources, classTo: number): Promise<Factory[]> {
   return Promise.all(
     Object.entries(config.contracts).flatMap(([name, c]) => {
       if (c.factory === undefined) return [];
@@ -494,7 +493,7 @@ function factoriesOf(
             parameter: c.factory.parameter,
             startBlock: c.startBlock,
           };
-          const spans = await classHistory(rpc, f.address, f.startBlock, classTo);
+          const spans = await sources.history(f.address, f.startBlock, classTo);
           if (spans.length === 0)
             throw new ConfigError(
               `${name}: factory ${f.address} is not deployed by block ${classTo}`,

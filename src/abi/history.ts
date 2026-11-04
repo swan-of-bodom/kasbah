@@ -45,6 +45,7 @@ export async function deployedAt(
 /**
  * Every class a contract had over `[from, to]`, found by bisecting `getClassHashAt`: about 25 calls per change.
  * A class replaced and then restored between two probes is invisible; probes every `step` blocks bound that window.
+ * `atFrom`: the class at `from`, already known (undefined inside it: not deployed), so it isn't asked again.
  */
 export async function classHistory(
   rpc: RpcClient,
@@ -52,11 +53,16 @@ export async function classHistory(
   from: number,
   to: number,
   step = 1_000_000,
+  atFrom?: { classHash: string | undefined },
 ): Promise<ClassSpan[]> {
   const points: number[] = [];
   for (let b = from; b < to; b += step) points.push(b);
   points.push(to);
-  const classes = await Promise.all(points.map((b) => classAt(rpc, address, b)));
+  const classes = await Promise.all(
+    points.map((b, i) =>
+      i === 0 && atFrom !== undefined ? atFrom.classHash : classAt(rpc, address, b),
+    ),
+  );
 
   const changes: ClassSpan[] = [];
   const bisect = async (
@@ -80,6 +86,67 @@ export async function classHistory(
 
   const start = classes[0] === undefined ? [] : [{ from, classHash: classes[0] }];
   return [...start, ...changes.sort((a, b) => a.from - b.from)];
+}
+
+/** A contract's classes over `[from, through]`, `through` final: no reorg can change them. */
+export type KnownClasses = { from: number; through: number; spans: ClassSpan[] };
+
+/** Where class histories and ABIs outlive a run: what is final about a contract never changes. */
+export type ClassStore = {
+  history(address: string): Promise<KnownClasses | undefined>;
+  saveHistory(address: string, known: KnownClasses): Promise<void>;
+  abi(classHash: string): Promise<Abi | undefined>;
+  saveAbi(classHash: string, abi: Abi): Promise<void>;
+};
+
+/** `spans` over `[from, to]`, as `classHistory(…, from, to)` gives them: the class at `from` starts at `from`. */
+function within(spans: ClassSpan[], from: number, to: number): ClassSpan[] {
+  const atFrom = spans.filter((s) => s.from <= from).at(-1);
+  return [
+    ...(atFrom === undefined ? [] : [{ from, classHash: atFrom.classHash }]),
+    ...spans.filter((s) => s.from > from && s.from <= to),
+  ];
+}
+
+/**
+ * `classHistory` through `store`: what it knows up to a final block isn't asked again, so a restart probes only from
+ * there to `to` (one call, ~25 more per new class). What is known through `final` is saved for the next run.
+ */
+export async function storedClassHistory(
+  rpc: RpcClient,
+  store: ClassStore | undefined,
+  address: string,
+  from: number,
+  to: number,
+  final: number,
+  step?: number,
+): Promise<ClassSpan[]> {
+  if (store === undefined) return classHistory(rpc, address, from, to, step);
+  const known = await store.history(address);
+  let all: ClassSpan[];
+  let start: number;
+  let before = -1;
+  if (known !== undefined && known.from <= from && from <= known.through) {
+    if (to <= known.through) return within(known.spans, from, to);
+    const atThrough = known.spans.at(-1)?.classHash;
+    const later = await classHistory(rpc, address, known.through, to, step, {
+      classHash: atThrough,
+    });
+    all = [...known.spans, ...later.filter((s) => s.from > known.through)];
+    start = known.from;
+    before = known.through;
+  } else {
+    all = await classHistory(rpc, address, from, to, step);
+    start = from;
+  }
+  const through = Math.min(to, final);
+  if (through >= start && through > before)
+    await store.saveHistory(address, {
+      from: start,
+      through,
+      spans: all.filter((s) => s.from <= through),
+    });
+  return within(all, from, to);
 }
 
 export type Decode = (

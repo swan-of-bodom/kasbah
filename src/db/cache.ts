@@ -1,4 +1,6 @@
 import type pg from "pg";
+import type { Abi } from "../abi/abi.ts";
+import type { ClassStore, KnownClasses } from "../abi/history.ts";
 import { DEFAULTS } from "../config/resolve.ts";
 import type { BlockHeader, EmittedEvent } from "../rpc/methods.ts";
 import type { RawExtras } from "../sync/extras.ts";
@@ -118,6 +120,10 @@ const SCHEMA_SQL = (s: string) => [
   `CREATE TABLE IF NOT EXISTS ${s}.transactions (hash bytea PRIMARY KEY, block integer NOT NULL, transaction jsonb, receipt jsonb)`,
   `CREATE TABLE IF NOT EXISTS ${s}.headers (block integer PRIMARY KEY, hash bytea NOT NULL, parent bytea NOT NULL, timestamp bigint NOT NULL)`,
   `ALTER TABLE ${s}.headers ADD COLUMN IF NOT EXISTS header jsonb`,
+  // Each contract's classes over [first, through], through final; spans as [from, class hash] pairs.
+  `CREATE TABLE IF NOT EXISTS ${s}.class_history (address bytea PRIMARY KEY, first integer NOT NULL, through integer NOT NULL, spans json NOT NULL)`,
+  // json, not jsonb: the ABI comes back as the node wrote it.
+  `CREATE TABLE IF NOT EXISTS ${s}.classes (hash bytea PRIMARY KEY, abi json NOT NULL)`,
 ];
 
 /** A packed felt's length byte as two hex digits, by byte count (a felt has at most 32). */
@@ -288,7 +294,7 @@ type Write = {
  * here as it arrives (`writer`) and its handlers read events back from here; a re-index fetches only the blocks not
  * covered.
  */
-export class EventCache {
+export class EventCache implements ClassStore {
   readonly #pool: pg.Pool;
   readonly #schema: string;
   #transactions: CachedTransaction[] = [];
@@ -799,6 +805,52 @@ export class EventCache {
   written(): void {
     this.#taken = undefined;
     this.#committedCallRows = this.#callRows;
+  }
+
+  async history(address: string): Promise<KnownClasses | undefined> {
+    const { rows } = await this.#pool.query<{
+      first: number;
+      through: number;
+      spans: [number, string][];
+    }>(`SELECT first, through, spans FROM ${this.#schema}.class_history WHERE address = $1`, [
+      feltBytes(address),
+    ]);
+    const r = rows[0];
+    return r === undefined
+      ? undefined
+      : {
+          from: r.first,
+          through: r.through,
+          spans: r.spans.map(([from, classHash]) => ({ from, classHash })),
+        };
+  }
+
+  async saveHistory(address: string, known: KnownClasses): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO ${this.#schema}.class_history (address, first, through, spans) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (address) DO UPDATE SET first = EXCLUDED.first, through = EXCLUDED.through, spans = EXCLUDED.spans`,
+      [
+        feltBytes(address),
+        known.from,
+        known.through,
+        JSON.stringify(known.spans.map((s) => [s.from, s.classHash])),
+      ],
+    );
+  }
+
+  async abi(classHash: string): Promise<Abi | undefined> {
+    const { rows } = await this.#pool.query<{ abi: Abi }>(
+      `SELECT abi FROM ${this.#schema}.classes WHERE hash = $1`,
+      [feltBytes(classHash)],
+    );
+    return rows[0]?.abi;
+  }
+
+  async saveAbi(classHash: string, abi: Abi): Promise<void> {
+    await this.#pool.query(
+      `INSERT INTO ${this.#schema}.classes (hash, abi) VALUES ($1, $2) ON CONFLICT (hash) DO NOTHING`,
+      [feltBytes(classHash), JSON.stringify(abi)],
+    );
   }
 
   async headers(numbers: number[]): Promise<Map<number, Block>> {
