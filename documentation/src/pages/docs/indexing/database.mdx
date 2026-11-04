@@ -16,6 +16,9 @@ export const pools = pgTable("pools", {
 });
 ```
 
+In Postgres, each column is named after its key in snake_case: `sqrtRatio` is the column `sqrt_ratio`, while
+handlers, endpoints and GraphQL use `sqrtRatio`. A column named in its builder (`integer("Ticks")`) keeps that name.
+
 ## Column types
 
 | Cairo | Column | TypeScript |

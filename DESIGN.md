@@ -386,7 +386,7 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   (`commit.ts`) whose fields only its own commits set. Every write after startup is one of six commits (pre-pass
   children, backfill batch, entering live, live block, revert, done: a run with `to` indexed through it), all through
   `commit`, or `start` for a backfill batch (written while the next is handled, above): `moves()` says what each moves in
-  `_kasbah_meta` (checkpoint and `pg_notify`, `discovered:*`, `phase`), and memory takes the same values only
+  `_kasbah_meta` (checkpoint, `discovered:*`, `phase`), and memory takes the same values only
   after COMMIT. Pre-pass children are resolved (classes read) before their transaction and watched after it.
 - Prefetch profiling (Ponder's guess-the-key mechanism): only if measurements show handler reads are a bottleneck.
 

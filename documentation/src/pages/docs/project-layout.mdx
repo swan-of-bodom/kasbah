@@ -7,13 +7,13 @@ my-indexer/
 ├── abis/Core.ts        the contract's ABI, `as const`
 ├── src/
 │   ├── index.ts        event handlers
-│   └── api/index.ts    API routes (optional)
+│   └── api/index.ts    the HTTP API, a Hono app (optional)
 ├── .env                KASBAH_RPC_URL, DATABASE_URL
 ├── Dockerfile
 └── docker-compose.yml
 ```
 
-Handlers and routes import the app from the config, so they're typed from it without code generation:
+Handlers import the app from the config, so they're typed from it without code generation:
 
 ```ts [src/index.ts]
 import app from "../kasbah.config.ts";

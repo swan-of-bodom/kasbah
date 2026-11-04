@@ -61,12 +61,10 @@ export function asQueryError(e: unknown, timeoutMs: number): unknown {
 export class Reader {
   /** Every connection read-only, on the app's schema. */
   readonly pool: pg.Pool;
-  readonly #url: string;
   readonly #schema: string;
   readonly timeoutMs: number;
 
   private constructor(url: string, o: ReaderOptions) {
-    this.#url = url;
     this.timeoutMs = o.timeoutMs ?? API_TIMEOUT_MS;
     this.pool = new RetryingPool({
       connectionString: url,
@@ -142,35 +140,6 @@ export class Reader {
       client.removeListener("error", ignore);
       client.release(broken);
     }
-  }
-
-  /** `LISTEN`s on `channel` on its own connection, reconnecting after errors. Returns a function that stops it. */
-  async listen(
-    channel: string,
-    onPayload: (payload: string) => void,
-  ): Promise<() => Promise<void>> {
-    let client: pg.Client | undefined;
-    let stopped = false;
-    const connect = async (): Promise<void> => {
-      const c = new pg.Client({ connectionString: this.#url });
-      c.on("notification", (n) => n.channel === channel && onPayload(n.payload ?? ""));
-      c.on("error", () => {
-        if (stopped) return;
-        client = undefined;
-        void c.end().catch(() => {});
-        setTimeout(() => void connect().catch(() => {}), 1_000);
-      });
-      await c.connect();
-      await c.query(`LISTEN ${quote(channel)}`);
-      client = c;
-      // Commits during the reconnect were missed: tell listeners to look again.
-      onPayload("");
-    };
-    await connect();
-    return async () => {
-      stopped = true;
-      await client?.end();
-    };
   }
 
   async close() {

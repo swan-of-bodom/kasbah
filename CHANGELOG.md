@@ -4,6 +4,19 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- **Breaking:** the API is a [Hono](https://hono.dev) app. `src/api/index.ts` default-exports one, and kasbah mounts
+  it after its own `/health`, `/ready`, `/status` and `/metrics`. `db` and `graphql()` come from the new `kasbah/api`
+  entry: mount GraphQL with `app.use("/graphql", graphql({ db, schema }))`. Gone:
+  `app.get`/`app.post` (write Hono routes: `app.get("/x", (c) => c.json(…))`, `HttpError` becomes Hono's
+  `HTTPException`), `POST /sql`, `GET /live`, the commit `NOTIFY` and `GET /graphql?query=`. Add `hono` to an app's dependencies;
+  an app without an API doesn't need it. `replaceBigInts(value, String)` turns bigints into strings for JSON.
+  API queries time out after 30 s (was 10 s) and wait at most 500 ms for a lock. `/health` and `/ready` answer
+  with an empty body (`/ready` with "Historical indexing is not complete." before), and `/status` is
+  `{ "<chain>": { id, block: { number, timestamp } } }`.
+- **Breaking:** `pgTable` from `kasbah` names columns in snake_case in Postgres (`sqrtRatio` → `sqrt_ratio`), unless
+  a column names itself; the keys in TypeScript and GraphQL don't change. An app with camelCase keys re-indexes
+  once (`dev` does it by itself; `start` asks for `--reset` or a new schema), and its raw SQL uses the new names.
+
 - A lost database connection no longer ends the run: kasbah retries for about a minute, waiting longer each time,
   and says so on the screen ("database connection lost …: retry 3 of 9", then "database: connected again"). A
   Postgres restart, a failover or a network drop used to stop it, and a connection dying while idle could crash

@@ -50,18 +50,20 @@ The first event of a period inserts the row (its price is the open). Every later
 
 `event.block.timestamp` needs `include: { block: true }`, or the `timestamps` answer in `init`.
 
-Serve them from a route:
+Serve them from an endpoint:
 
 ```ts [src/api/index.ts]
-import { and, desc, eq } from "kasbah";
+import { and, desc, eq, replaceBigInts } from "kasbah";
+import { db } from "kasbah/api";
 
-app.get("/pools/:id/candles", async ({ db, params, query }) => {
-  const interval = Number(query.get("interval") ?? 3_600);
-  return db
+app.get("/pools/:id/candles", async (c) => {
+  const interval = Number(c.req.query("interval") ?? 3_600);
+  const rows = await db
     .select()
     .from(candles)
-    .where(and(eq(candles.pool, params.id!), eq(candles.interval, interval)))
+    .where(and(eq(candles.pool, c.req.param("id")), eq(candles.interval, interval)))
     .orderBy(desc(candles.time))
     .limit(200);
+  return c.json(replaceBigInts(rows, String));
 });
 ```

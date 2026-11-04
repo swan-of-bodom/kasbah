@@ -45,7 +45,6 @@ test.skipIf(url === undefined)(
         // Read only by children and revert commits.
         sources: {} as Sources,
         status,
-        schema,
         lock,
         final: () => 0,
         start: 0,

@@ -4,7 +4,7 @@ layout: minimal
 
 # kasbah [A minimal, fast Starknet indexer in TypeScript]
 
-Index Starknet contracts into Postgres, and query them over SQL, GraphQL or your own API routes.
+Index Starknet contracts into Postgres, and query them over GraphQL or your own endpoints.
 
 ```ts
 app.on("Core:Swapped", async ({ event, context }) => {
@@ -19,6 +19,6 @@ app.on("Core:Swapped", async ({ event, context }) => {
 - **Fast backfill**: parallel `getEvents` windows, a raw-event cache, and filters the node applies.
 - **Reorg safe**: blocks near the head are undone and redone when the chain changes.
 - **Factories, block handlers, contract reads, transactions and receipts.**
-- **A read API**: SQL over HTTP, GraphQL with relations, live queries, and your own routes.
+- **A read API on Hono**: GraphQL with relations, and your own endpoints.
 
 [Get started →](/docs)

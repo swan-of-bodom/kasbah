@@ -1,5 +1,4 @@
 import type pg from "pg";
-import { liveChannel, livePayload } from "../api/channel.ts";
 import type { EventCache } from "../db/cache.ts";
 import type { Store } from "../db/store.ts";
 import { transaction } from "../db/transaction.ts";
@@ -59,7 +58,6 @@ type Writers = {
   factories: { contract: string }[];
   sources: Sources;
   status: Status;
-  schema: string;
   lock: SchemaLock;
   final: () => number;
   start: number;
@@ -155,7 +153,7 @@ export class Position {
    * handled meanwhile is the next commit's.
    */
   async #commit(c: Commit): Promise<{ undone: number; forgotten: number }> {
-    const { pool, store, cache, factories, sources, status, schema, lock, final } = this.#w;
+    const { pool, store, cache, factories, sources, status, lock, final } = this.#w;
     const m = moves(c, this.#watermark);
     const parts = { tables: 0, cache: 0 };
     const timed = async (part: keyof typeof parts, write: () => unknown) => {
@@ -167,7 +165,6 @@ export class Position {
     const started = performance.now();
     const rows = c.kind === "batch" || c.kind === "block";
     if (rows) store.take();
-    const written = rows ? store.takenTables() : undefined;
     if (rows || c.kind === "children") cache?.take();
     try {
       await transaction(pool, async (tx, attempt) => {
@@ -205,11 +202,7 @@ export class Position {
         if (m.watermark !== undefined)
           for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
         if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
-        if (m.checkpoint !== undefined) {
-          await setMeta(tx, "checkpoint", m.checkpoint);
-          // Delivered at COMMIT: API servers re-run the live queries that read these tables.
-          await tx.query(`SELECT pg_notify($1, $2)`, [liveChannel(schema), livePayload(written)]);
-        }
+        if (m.checkpoint !== undefined) await setMeta(tx, "checkpoint", m.checkpoint);
       });
       if (rows || c.kind === "children") cache?.written();
     } finally {

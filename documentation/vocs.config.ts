@@ -41,10 +41,9 @@ export default defineConfig({
     {
       text: "Query",
       items: [
-        { text: "SQL over HTTP", link: "/docs/query/sql" },
         { text: "GraphQL", link: "/docs/query/graphql" },
-        { text: "Live queries", link: "/docs/query/live" },
-        { text: "API routes", link: "/docs/query/routes" },
+        { text: "API endpoints", link: "/docs/query/api-endpoints" },
+        { text: "Direct SQL", link: "/docs/database#direct-sql" },
       ],
     },
     {

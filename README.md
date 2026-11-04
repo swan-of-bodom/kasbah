@@ -3,7 +3,7 @@
 A minimal, fast Starknet indexer in TypeScript.
 
 Write handlers for your contracts' events, and kasbah stores what they write in Postgres and serves it over SQL,
-GraphQL and your own routes. If you've used [Ponder](https://ponder.sh), you already know how it works.
+GraphQL and your own endpoints. If you've used [Ponder](https://ponder.sh), you already know how it works.
 
 - **Fast backfills**: parallel `getEvents` windows, one ordered stream, writes with `COPY`.
 - **Live and reorg-safe**: follows the head, undoes reorgs with a journal, or waits for L1 finality.
@@ -23,10 +23,11 @@ pnpm install
 pnpm dev                      # backfills, follows the head, restarts on every change
 ```
 
-Then open [localhost:42069/graphql](http://localhost:42069/graphql), or query with SQL:
+Then open [localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL, or ask from anywhere:
 
 ```bash
-curl localhost:42069/sql -d '{"sql": "SELECT * FROM swapped ORDER BY block DESC LIMIT 5"}'
+curl localhost:42069/graphql -H 'content-type: application/json' \
+  -d '{"query": "{ swappeds(orderBy: \"block\", orderDirection: \"desc\", limit: 5) { items { id block } } }"}'
 ```
 
 ## A project
@@ -38,7 +39,7 @@ my-indexer/
 ├── abis/               contract ABIs
 └── src/
     ├── index.ts        event handlers
-    └── api/index.ts    your API routes (optional)
+    └── api/index.ts    the HTTP API: a Hono app with GraphQL and your endpoints
 ```
 
 ```ts

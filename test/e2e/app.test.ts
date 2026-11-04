@@ -3,7 +3,6 @@ import { index, integer, pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { rawSelector as selector } from "../../src/abi/selector.ts";
-import { liveChannel } from "../../src/api/channel.ts";
 import { bignum, kasbah, Status } from "../../src/index.ts";
 import type { EmittedEvent } from "../../src/rpc/methods.ts";
 import { testChain } from "../fixtures/chain.ts";
@@ -354,35 +353,27 @@ test.skipIf(url === undefined)(
   60_000,
 );
 
-test.skipIf(url === undefined)(
-  "a backfill to `to` commits once, through `to`, and notifies the tables it wrote",
-  async () => {
-    const s = "kasbah_test_app_once";
-    const listener = new pg.Client({ connectionString: url });
-    await listener.connect();
-    const notified: string[][] = [];
-    listener.on("notification", (n) => notified.push(JSON.parse(n.payload!).sort()));
-    await listener.query(`LISTEN "${liveChannel(s)}"`);
-    const status = new Status();
-    const progress: string[] = [];
-    status.subscribe((n) => n.kind === "progress" && progress.push(n.text));
-    try {
-      await app(s).run({ reset: true, to: 150, status });
-      await new Promise((r) => setTimeout(r, 200));
-      expect(notified).toEqual([["log", "totals"]]);
-      expect(progress).toHaveLength(1);
-      expect(progress[0]).toMatch(/^block 150\/150 \(100\.0%\)/);
-      expect([status.phase, status.checkpoint]).toEqual(["done", 150]);
-      const meta = await listener.query(`SELECT value FROM ${s}._kasbah_meta WHERE key = 'phase'`);
-      expect(meta.rows[0].value).toBe("done");
-    } finally {
-      await listener.end();
-      const p = new pg.Pool({ connectionString: url, max: 1 });
-      await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
-      await p.end();
-    }
-  },
-);
+test.skipIf(url === undefined)("a backfill to `to` commits once, through `to`", async () => {
+  const s = "kasbah_test_app_once";
+  const listener = new pg.Client({ connectionString: url });
+  await listener.connect();
+  const status = new Status();
+  const progress: string[] = [];
+  status.subscribe((n) => n.kind === "progress" && progress.push(n.text));
+  try {
+    await app(s).run({ reset: true, to: 150, status });
+    expect(progress).toHaveLength(1);
+    expect(progress[0]).toMatch(/^block 150\/150 \(100\.0%\)/);
+    expect([status.phase, status.checkpoint]).toEqual(["done", 150]);
+    const meta = await listener.query(`SELECT value FROM ${s}._kasbah_meta WHERE key = 'phase'`);
+    expect(meta.rows[0].value).toBe("done");
+  } finally {
+    await listener.end();
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    await p.query(`DROP SCHEMA IF EXISTS ${s} CASCADE`);
+    await p.end();
+  }
+});
 
 test.skipIf(url === undefined)(
   "through a database that keeps losing connections (mid-transaction, at COMMIT before and after it ran, down for a while) every event is stored once",

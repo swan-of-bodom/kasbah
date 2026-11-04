@@ -4,7 +4,7 @@ kasbah reads events from a Starknet node and runs your TypeScript handlers on th
 Postgres tables you define, and an API serves those tables.
 
 ```text
-Starknet RPC ──▶ events ──▶ your handlers ──▶ Postgres ──▶ SQL · GraphQL · your routes
+Starknet RPC ──▶ events ──▶ your handlers ──▶ Postgres ──▶ GraphQL · your endpoints
 ```
 
 A project is four files:
@@ -14,7 +14,7 @@ A project is four files:
 | `kasbah.config.ts` | the network, the RPC and the contracts to index |
 | `kasbah.schema.ts` | your tables (Drizzle) |
 | `src/index.ts` | event handlers |
-| `src/api/index.ts` | your API routes (optional) |
+| `src/api/index.ts` | the HTTP API, a Hono app (optional) |
 
 It runs as one Node.js process next to Postgres, with any Starknet RPC on spec 0.10. There's no hosted service and
 nothing to sign up for.

@@ -1,0 +1,46 @@
+# API endpoints [Your own HTTP endpoints, next to GraphQL and SQL]
+
+The API is a [Hono](https://hono.dev) app: `src/api/index.ts` default-exports one, and kasbah mounts it after its
+own endpoints. Hono comes with the project (`kasbah init` adds it); an app without the file serves only kasbah's.
+
+```ts [src/api/index.ts]
+import { Hono } from "hono";
+import { HTTPException } from "hono/http-exception";
+import { eq, replaceBigInts } from "kasbah";
+import { db, graphql } from "kasbah/api";
+import * as schema from "../../kasbah.schema.ts";
+import { pools } from "../../kasbah.schema.ts";
+
+const app = new Hono();
+
+app.use("/graphql", graphql({ db, schema }));
+
+app.get("/pools/:id", async (c) => {
+  const [pool] = await db.select().from(pools).where(eq(pools.id, c.req.param("id")));
+  if (pool === undefined) throw new HTTPException(404, { message: "no such pool" });
+  return c.json(replaceBigInts(pool, String));
+});
+
+export default app;
+```
+
+- `db` from `kasbah/api` is a read-only Drizzle database on the app's schema, the same one GraphQL and SQL over
+  HTTP read. Its queries time out after 30 s, and wait at most 500 ms for a lock (the key build after a backfill
+  locks tables). It works while kasbah serves a request; endpoints have no RPC client: read what handlers stored.
+- JSON has no bigints: `replaceBigInts(value, String)` turns every bigint in a value into a string.
+- Anything Hono does works: middleware, other HTTP methods, `c.req.query()`, a `Response` with your own headers.
+- `throw new HTTPException(status, { message })` answers with that status; any other error answers 500 with its
+  message, the file it came from and the route.
+
+## Built-in endpoints
+
+kasbah's come first, and can't be replaced:
+
+| Path       | Answers                                                                                      |
+| ---------- | -------------------------------------------------------------------------------------------- |
+| `/health`  | 200 once the server is up.                                                                   |
+| `/ready`   | 200 once the backfill is done (live, or done for a run with an end); before, 503.            |
+| `/status`  | `{ "<chain>": { id, block: { number, timestamp } } }`: the last block committed.             |
+| `/metrics` | Prometheus metrics: the indexer's when it serves the API, else the checkpoint and the phase. |
+
+Every response allows any origin (CORS), and browsers may cache the preflight for a day.

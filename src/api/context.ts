@@ -10,24 +10,13 @@ export type Tables = Record<string, PgTable | Relations>;
 /** The app's own endpoints: a Hono app (the default export of `src/api/index.ts`). */
 export type ApiApp = { fetch: (request: Request) => Response | Promise<Response> };
 
-/** What one running API gives the code it serves: `db`, `graphql()` and `client()` find it here. */
+/** What one running API gives the code it serves: `db` and `graphql()` find it here. */
 export type ApiContext = {
   /** Read-only Drizzle on the app's schema, with the API's timeouts. */
   db: NodePgDatabase<Tables>;
   reader: Reader;
   /** The app's tables and relations, as the config has them. */
   tables: Tables;
-  /**
-   * Calls `listener` after each commit with the tables it wrote, `_kasbah_meta` always among them; `undefined`
-   * when it can't say (a reconnect, a revert), meaning any table. Returns how to stop.
-   */
-  onCommit(listener: (tables: string[] | undefined) => void): () => void;
-  /** Whether the backfill is done: the phase is live or done. */
-  ready(): Promise<boolean>;
-  /** A middleware's own state for this API, made on first use. */
-  state<T>(key: object, make: () => T): T;
-  /** Aborted when the API closes. */
-  signal: AbortSignal;
 };
 
 /** The API serving the request (or loading the app's API file), so two in one process never mix. */

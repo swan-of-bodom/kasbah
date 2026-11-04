@@ -162,7 +162,6 @@ export async function open(
       factories,
       sources,
       status,
-      schema,
       lock,
       final: (): number => partial.final,
       start: plan.start,

@@ -62,6 +62,7 @@ SET search_path TO my_indexer;
 SELECT id, swaps FROM pools ORDER BY swaps DESC LIMIT 10;
 ```
 
+- Columns are snake_case: a key `sqrtRatio` is the column `sqrt_ratio`.
 - Read only. Writes from outside are not undone on a reorg, and the next build doesn't keep them.
 - Primary keys and indexes are created once the backfill is done, so queries during the backfill scan whole tables.
 - The schema changes when you deploy a new build in a new schema: point your client at the new one.

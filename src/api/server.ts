@@ -9,7 +9,6 @@ import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
-import { liveChannel, liveTables } from "./channel.ts";
 import { type ApiApp, type ApiContext, apiContext, type Tables } from "./context.ts";
 import { prometheus } from "./prometheus.ts";
 import { Reader, type ReaderOptions } from "./reader.ts";
@@ -28,7 +27,7 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
 /** Browsers may cache a CORS preflight's answer this long (seconds). */
 const CORS_MAX_AGE = 86_400;
 
-/** On close, open requests (live streams never end) get this long before their connections are cut. */
+/** On close, open requests get this long before their connections are cut. */
 const CLOSE_GRACE_MS = 1_000;
 
 /** The phases in which the backfill is done: `/ready` answers 200. */
@@ -38,47 +37,25 @@ type Meta = { checkpoint?: number; checkpointTime?: number; chain?: string; phas
 
 /**
  * The HTTP API: `/health`, `/ready`, `/status` and `/metrics`, then the app's Hono app. Each request runs with its
- * API's context (`db`, `graphql()` and `client()` from `kasbah/api` read it), and every query through it runs as
+ * API's context (`db` and `graphql()` from `kasbah/api` read it), and every query through it runs as
  * the read-only reader.
  */
 export class Api {
   readonly #reader: Reader;
   readonly #server: Server;
-  readonly #stop: AbortController;
-  readonly #unlisten: () => Promise<void>;
 
-  private constructor(
-    reader: Reader,
-    server: Server,
-    stop: AbortController,
-    unlisten: () => Promise<void>,
-  ) {
+  private constructor(reader: Reader, server: Server) {
     this.#reader = reader;
     this.#server = server;
-    this.#stop = stop;
-    this.#unlisten = unlisten;
   }
 
   static async start(o: ApiOptions): Promise<Api> {
     const infos = Object.values(o.tables).flatMap((t) => (is(t, PgTable) ? [tableInfo(t)] : []));
     const reader = await Reader.connect({ ...o, tables: infos });
-    const commits = new Set<(tables: string[] | undefined) => void>();
-    const states = new Map<object, unknown>();
-    const stop = new AbortController();
     const context: ApiContext = {
       db: drizzle(reader.pool, { schema: o.tables }),
       reader,
       tables: o.tables,
-      onCommit: (listener) => {
-        commits.add(listener);
-        return () => commits.delete(listener);
-      },
-      ready: async () => READY_PHASES.has((await meta(reader)).phase ?? ""),
-      state: <T>(key: object, make: () => T): T => {
-        if (!states.has(key)) states.set(key, make());
-        return states.get(key) as T;
-      },
-      signal: stop.signal,
     };
     const root = routes(reader, o);
     const server = serve({
@@ -93,11 +70,7 @@ export class Api {
         if (server.listening) resolve();
         else server.once("listening", resolve);
       });
-      const unlisten = await reader.listen(liveChannel(o.schema), (payload) => {
-        const tables = liveTables(payload);
-        for (const l of commits) l(tables);
-      });
-      return new Api(reader, server, stop, unlisten);
+      return new Api(reader, server);
     } catch (e) {
       server.close();
       await reader.close();
@@ -115,8 +88,6 @@ export class Api {
   }
 
   async close() {
-    this.#stop.abort();
-    await this.#unlisten();
     await new Promise<void>((resolve) => {
       const cut = setTimeout(() => this.#server.closeAllConnections(), CLOSE_GRACE_MS);
       this.#server.close(() => {

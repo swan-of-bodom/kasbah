@@ -30,10 +30,11 @@ the time goes. Every file change restarts it.
 
 ### Query your data
 
-Open [http://localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL, or use SQL over HTTP:
+Open [http://localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL, or ask from anywhere:
 
 ```bash
-curl localhost:42069/sql -d '{"sql": "SELECT * FROM swapped ORDER BY block DESC LIMIT 5"}'
+curl localhost:42069/graphql -H 'content-type: application/json' \
+  -d '{"query": "{ swappeds(orderBy: \"block\", orderDirection: \"desc\", limit: 5) { items { id block } } }"}'
 ```
 
 ### Add a column
@@ -77,5 +78,5 @@ pnpm clean   # delete it: the dev container, or the app's schema in your databas
 
 - [Contracts](/docs/config/contracts): addresses, factories, filters
 - [Tables and writes](/docs/indexing/database): everything `context.db` does
-- [GraphQL](/docs/query/graphql) and [API routes](/docs/query/routes)
+- [GraphQL](/docs/query/graphql) and [API endpoints](/docs/query/api-endpoints)
 - [Self-hosting](/docs/production/self-hosting) and [Railway](/docs/production/railway)
