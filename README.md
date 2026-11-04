@@ -81,6 +81,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
 | `kasbah dev` | index and serve, restarting on every change |
 | `kasbah start --schema <name>` | index and serve, for production |
 | `kasbah serve --schema <name>` | the API alone, over what an indexer stored |
+| `kasbah list` | every dev database on the machine, with its size and app |
 | `kasbah cache info` | the raw-event cache and its size |
 
 ## Docs

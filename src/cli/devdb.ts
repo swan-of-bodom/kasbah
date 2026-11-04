@@ -8,6 +8,9 @@ import { sleep } from "../utils/sleep.ts";
 /** Fully qualified: Podman refuses or prompts for a short name, depending on the distro's registries. */
 export const IMAGE = "docker.io/library/postgres:17";
 
+/** The label holding the app directory a dev container belongs to, which `kasbah list` shows. */
+export const APP_LABEL = "kasbah.app";
+
 export type DevDatabase = { url: string; container: string; runtime: string; stop: () => void };
 
 const run = (runtime: string, args: string[], inherit = false) =>
@@ -63,6 +66,8 @@ export async function devDatabase(
         container,
         "--label",
         "kasbah=dev",
+        "--label",
+        `${APP_LABEL}=${resolve(appDir)}`,
         "-e",
         "POSTGRES_PASSWORD=kasbah",
         "-e",
@@ -124,4 +129,81 @@ export function removeDevDatabase(appDir: string): {
   if (volume && run(runtime, ["volume", "rm", container]).status !== 0)
     throw new Error(`${runtime} volume rm ${container} failed`);
   return { container, runtime, removed: had || volume };
+}
+
+/** A dev container as `kasbah list` shows it. */
+export type DevDatabaseInfo = {
+  container: string;
+  running: boolean;
+  /** The localhost port Postgres is published on, while running. */
+  port?: string;
+  /** Its volume's size, as the runtime reports it; undefined when it reports none. */
+  bytes?: number;
+  /** The app directory, for containers made since `dev` labels it. */
+  app?: string;
+};
+
+/** Every dev container on the machine (label `kasbah=dev`), with its volume's size; undefined without a runtime. */
+export function listDevDatabases(): { runtime: string; databases: DevDatabaseInfo[] } | undefined {
+  const runtime = findRuntime();
+  if (runtime === undefined) return undefined;
+  const names = run(runtime, ["ps", "-a", "--filter", "label=kasbah=dev", "--format", "{{.Names}}"])
+    .stdout.split("\n")
+    .map((n) => n.trim())
+    .filter((n) => n !== "");
+  if (names.length === 0) return { runtime, databases: [] };
+  const inspected = run(runtime, [
+    "inspect",
+    "--format",
+    `{{.Name}}\t{{.State.Running}}\t{{index .Config.Labels "${APP_LABEL}"}}`,
+    ...names,
+  ]).stdout;
+  const sizes = volumeSizes(run(runtime, ["system", "df", "-v"]).stdout);
+  const databases = inspected
+    .split("\n")
+    .filter((l) => l.trim() !== "")
+    .map((l): DevDatabaseInfo => {
+      const [name = "", running, app] = l.split("\t");
+      const container = name.replace(/^\//, "");
+      const up = running === "true";
+      const port = up
+        ? /:(\d+)\s*$/m.exec(run(runtime, ["port", container, "5432/tcp"]).stdout)?.[1]
+        : undefined;
+      return {
+        container,
+        running: up,
+        port,
+        bytes: sizes.get(container),
+        app: app === undefined || app === "" || app === "<no value>" ? undefined : app,
+      };
+    })
+    .sort((a, b) => (b.bytes ?? 0) - (a.bytes ?? 0));
+  return { runtime, databases };
+}
+
+/** The volume sizes in `docker|podman system df -v`: its table under "VOLUME NAME", up to the next blank line. */
+export function volumeSizes(df: string): Map<string, number> {
+  const sizes = new Map<string, number>();
+  let inVolumes = false;
+  for (const line of df.split("\n")) {
+    if (/^VOLUME NAME\s/.test(line)) {
+      inVolumes = true;
+      continue;
+    }
+    if (!inVolumes) continue;
+    if (line.trim() === "") break;
+    const cols = line.trim().split(/\s+/);
+    const size = parseSize(cols.at(-1) ?? "");
+    if (cols[0] !== undefined && size !== undefined) sizes.set(cols[0], size);
+  }
+  return sizes;
+}
+
+const UNITS: Record<string, number> = { B: 1, KB: 1e3, MB: 1e6, GB: 1e9, TB: 1e12 };
+
+/** A size as Docker and Podman print it ("65.08GB", "12.41kB", "0B"): decimal units, as theirs are. */
+export function parseSize(s: string): number | undefined {
+  const m = /^([\d.]+)\s*([kKMGT]?B)$/.exec(s);
+  const unit = m?.[2] === undefined ? undefined : UNITS[m[2].toUpperCase()];
+  return m?.[1] === undefined || unit === undefined ? undefined : Number(m[1]) * unit;
 }

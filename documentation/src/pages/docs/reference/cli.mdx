@@ -65,6 +65,17 @@ kasbah clean [--yes]
 Deletes the dev container and its volume, or with `DATABASE_URL`, only the app's schema. Asks first, unless
 `--yes`. The cache stays.
 
+## list
+
+```bash
+kasbah list
+```
+
+Every dev database on the machine, the Postgres containers `dev` made for apps without `DATABASE_URL`, largest
+first: whether it is running, its port, the size of its volume and the app directory it belongs to. Containers an older
+kasbah made show no directory: `kasbah clean` in their app and the next `dev` makes one that does. Run from
+anywhere; it doesn't read the app.
+
 ## cache
 
 ```bash

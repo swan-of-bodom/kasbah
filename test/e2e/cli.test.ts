@@ -1,5 +1,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import pg from "pg";
@@ -314,6 +315,17 @@ test.skipIf(!hasRuntime)(
       expect(second.out.join("")).not.toMatch(/backfill done: [1-9]/);
       second.p.kill("SIGINT");
       expect(await second.exited).toBe(0);
+
+      const listed = spawnSync(
+        process.execPath,
+        ["--no-warnings", resolve("src/cli/main.ts"), "list"],
+        {
+          encoding: "utf8",
+        },
+      );
+      const row = listed.stdout.split("\n").find((l) => l.includes(name));
+      expect(row).toContain("stopped");
+      expect(row).toContain(resolve(dir).replace(homedir(), "~"));
 
       const { DATABASE_URL: _, ...env } = process.env;
       const cleaned = spawnSync(

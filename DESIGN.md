@@ -749,11 +749,16 @@ read-only role, API reads queued behind writes, an in-process stand-in for LISTE
 it is the same Postgres as production, and the generated compose file already assumes Docker. `start` never starts
 one. `pnpm create kasbah` is the `create/` package: it runs the installed `kasbah init`.
 
-TODO, next release: `kasbah list`, as `ponder list` but with sizes. The data is easy to delete (`clean`) but hard to
-see: a user found 90 GB in volumes without knowing which were whose. Per schema with `_kasbah_meta` in the project's
-database: active (the lock), last active, last block, table count, size, plus the cache schemas' sizes; then the
-other `kasbah-*` dev containers on the machine, with size, project directory and whether running. `prune` (drop the
-inactive ones) can follow, with the stable views TODO above.
+`kasbah list` shows the dev containers on the machine, since their data is easy to delete (`clean`) but was hard to
+see: a user found 90 GB in volumes without knowing which were whose. It finds them by the `kasbah=dev` label, reads
+each one's app directory from the `kasbah.app` label `dev` sets when creating it (not from its name: the name keeps
+only the directory's basename and a hash), and each volume's size from `system df -v`, the one size Docker and
+Podman both report without reading the volume, which a rootless runtime's user can't. Running from anywhere, it
+needs no app.
+
+TODO: the rest of `ponder list`, with sizes: per schema with `_kasbah_meta` in the project's database, active (the
+lock), last active, last block, table count, size, plus the cache schemas' sizes. `prune` (drop the inactive ones)
+can follow, with the stable views TODO above.
 
 `serve`: `kasbah serve <app>` (`app.serve()`) runs the API alone over the app's schema,
 like `ponder serve`: an index finished with `--to`, or API processes next to one indexer.

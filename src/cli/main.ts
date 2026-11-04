@@ -7,6 +7,7 @@ import { cache } from "./commands/cache.ts";
 import { clean } from "./commands/clean.ts";
 import { dev } from "./commands/dev.ts";
 import { init } from "./commands/init.ts";
+import { list } from "./commands/list.ts";
 import { serve } from "./commands/serve.ts";
 import { start } from "./commands/start.ts";
 import { target } from "./project.ts";
@@ -26,6 +27,8 @@ const USAGE = `usage:
   --port <n> / --hostname <host>        where the API listens (PORT / API_HOST; default 42069 on localhost)
   --ui / --no-ui                        the progress screen (on for dev in a terminal)
   --debug                              with the screen: the fetcher's buffer and windows, waits, event loop delay
+  kasbah list                    every dev database on the machine (the containers \`dev\` made): running or
+                                        not, port, size and app directory
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
                                         than indexers, or a finished run)
   kasbah cache info [--chain <id>]
@@ -144,6 +147,7 @@ try {
       reset: values.reset,
     });
   else if (command === "clean") await clean(target(arg), values.yes);
+  else if (command === "list") list();
   else if (command === "serve") await serve(target(arg));
   else if (command === "cache") await cache(arg, values);
   else {
