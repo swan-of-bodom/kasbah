@@ -312,9 +312,20 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   one chain means no timestamps or chain ids in it.
 - The row cache is a fifth of the heap, all tables together, rows sized by estimate, as Ponder's indexing cache
   (`indexingCacheMaxBytes`). After a commit past it, rows are dropped oldest first from the tables read least, down
-  to 80% (never a row no commit wrote yet), and a table that lost rows is no longer known in full. A limit of 500k
-  rows per table held 1 GB of Ekubo's 12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet
-  committed count too: past a twentieth of the heap they force a backfill commit (the one in flight holds as many).
+  to 80%, and a table that lost rows is no longer known in full. A limit of 500k rows per table held 1 GB of
+  Ekubo's 12 tables and crashed a 2 GB heap at block 500k. Rows written but not yet committed count too: past a
+  twentieth of the heap they force a backfill commit (the one in flight holds as many). Reads look in those rows
+  too, waiting or in flight, before Postgres, so the cache may drop any row.
+- A table keeps its written rows in the cache only once a handler has read it (`find`, `update`, `delete`,
+  `onConflictDo…`; an insert's own existence check doesn't count). Until then, the commit that writes its rows drops
+  them from the cache, and the table is no longer known in full. Every table keeps them until the first commit, so a
+  table read from its first batch on (balances, pools) works as before. An insert-only table (swaps, transfers) is
+  rarely read back (Ponder found recency a poor predictor of reads), and its rows cost the size estimate, the
+  eviction and the GC of keeping them. A duplicate key it receives is refused at the insert while the first row
+  waits for its commit, else when the batch is written (or its key is built). Cached Ekubo, 620k–700k (all its
+  tables insert-only), three pairs: backfill 123.2/115.1/118.3 s → 99.5/96.2/107.6 s (median ×0.84, 3 of 3), peak
+  RSS 2.9 → 2.0 GB, main-thread CPU 111.7 → 103.0 s, GC 19.4 → 17.7 s, loop stops over 100 ms 62 → 38 (max 371 →
+  217 ms). At a 512 MB heap, to 630k: 14.0 → 11.7 s, RSS 726 → 601 MB.
 - In a table no longer known in full, plain inserts skip the existence check (a query per insert: JediSwap's 7M
   swaps went from 50k to 4k events/s); a duplicate is refused by the primary key when the batch is written, with the table and key in
   the error. `onConflictDo…`, `find` and `update` still read a missing row from Postgres.

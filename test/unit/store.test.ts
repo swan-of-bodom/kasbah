@@ -342,7 +342,7 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
-  "past the cache limit, a commit's eviction keeps the rows written while it ran: only the cache has them",
+  "past the cache limit, rows written while a commit ran stay readable after its eviction",
   async () => {
     await pool.query(`DROP TABLE IF EXISTS balances`);
     await pool.query(createTableSql(tableInfo(balances)));
@@ -351,6 +351,8 @@ test.skipIf(url === undefined)(
       complete: true,
       maxCachedBytes: 10 * (approxBytes(row(0)) + 64),
     });
+    // Read, so the table keeps its rows in the cache and the eviction is what drops them.
+    expect(await store.db.find(balances, { owner: "0xnone" })).toBeNull();
     for (let i = 0; i < 20; i++) await store.db.insert(balances).values(row(i));
     const done = await commitInFlight(store);
     for (let i = 20; i < 40; i++) await store.db.insert(balances).values(row(i));
@@ -372,6 +374,9 @@ test.skipIf(url === undefined)(
       unkeyed: new Set(["balances"]),
     });
     await store.db.insert(balances).values({ owner: "0x1", amount: 1n, updates: 0 });
+    // A read before the commit, of the row waiting for it: the table's rows stay in memory, so the update below
+    // reads no Postgres.
+    expect((await store.db.find(balances, { owner: "0x1" }))?.amount).toBe(1n);
     await commit(store);
     // An upsert: the commit adds the key in its transaction.
     await store.db.update(balances, { owner: "0x1" }).set({ updates: 1 });
@@ -509,6 +514,90 @@ test.skipIf(url === undefined)(
       await c.query(`DROP SCHEMA IF EXISTS ${quoted} CASCADE`);
       c.release();
       await p.end();
+    }
+  },
+);
+
+/** A pool that counts the queries the store sends. */
+function counting(): { pool: pg.Pool; queries: () => number } {
+  let n = 0;
+  const wrapped = {
+    ...pool,
+    query: (...a: unknown[]) => {
+      n++;
+      return (pool.query as (...x: unknown[]) => unknown)(...a);
+    },
+  } as unknown as pg.Pool;
+  return { pool: wrapped, queries: () => n };
+}
+
+test.skipIf(url === undefined)(
+  "a table no handler reads keeps no rows in memory once written; reads still see rows waiting or in flight",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS transfers`);
+    await pool.query(createTableSql(tableInfo(transfers)));
+    const c = counting();
+    const store = new Store(drizzle(c.pool), [transfers], { complete: true });
+    for (let i = 0; i < 10; i++)
+      await store.db.insert(transfers).values({ id: `a${i}`, amount: 1n });
+    await commit(store);
+    for (let i = 0; i < 10; i++)
+      await store.db.insert(transfers).values({ id: `b${i}`, amount: 2n });
+    const done = await commitInFlight(store);
+    for (let i = 0; i < 10; i++)
+      await store.db.insert(transfers).values({ id: `c${i}`, amount: 3n });
+    expect(c.queries()).toBe(0);
+
+    // In flight, then waiting for the next commit: both from memory.
+    expect((await store.db.find(transfers, { id: "b3" }))?.amount).toBe(2n);
+    expect((await store.db.find(transfers, { id: "c3" }))?.amount).toBe(3n);
+    expect(c.queries()).toBe(0);
+    await done();
+    // Committed while nothing read the table: only Postgres has it.
+    expect((await store.db.find(transfers, { id: "a3" }))?.amount).toBe(1n);
+    expect(c.queries()).toBe(1);
+
+    // Read now, so rows written from here on stay in memory after their commit.
+    await store.db.insert(transfers).values({ id: "d0", amount: 4n });
+    await commit(store);
+    expect((await store.db.find(transfers, { id: "d0" }))?.amount).toBe(4n);
+    expect((await store.db.find(transfers, { id: "c3" }))?.amount).toBe(3n);
+    expect(c.queries()).toBe(1);
+    expect((await pool.query(`SELECT count(*)::int AS n FROM transfers`)).rows[0].n).toBe(31);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a table no handler reads refuses a key inserted twice at the insert while it waits, else when written",
+  async () => {
+    await pool.query(`DROP TABLE IF EXISTS transfers`);
+    await pool.query(createTableSql(tableInfo(transfers)));
+    const store = new Store(drizzle(pool), [transfers], { complete: true });
+    await store.db.insert(transfers).values({ id: "a", amount: 1n });
+    await commit(store);
+    await store.db.insert(transfers).values({ id: "b", amount: 1n });
+    await expect(store.db.insert(transfers).values({ id: "b", amount: 2n })).rejects.toThrow(
+      "already exists",
+    );
+    const done = await commitInFlight(store);
+    await expect(store.db.insert(transfers).values({ id: "b", amount: 3n })).rejects.toThrow(
+      "already exists",
+    );
+    await done();
+
+    // Committed: Postgres's key refuses it when the batch is written.
+    await store.db.insert(transfers).values({ id: "a", amount: 4n });
+    store.take();
+    const c = await pool.connect();
+    try {
+      await c.query("BEGIN");
+      await expect(store.flush(c)).rejects.toThrow(
+        /transfers: insert of a key that already exists/,
+      );
+      await c.query("ROLLBACK");
+    } finally {
+      c.release();
+      store.written();
     }
   },
 );

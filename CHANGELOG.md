@@ -4,6 +4,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A table no handler reads (`find`, `update`, `delete`, `onConflictDo…`) keeps no rows in memory once they're
+  written: an insert-only table, like swaps or transfers, costs no cache. Cached Ekubo backfills ~16% faster with
+  ~30% less memory. A key such a table receives twice is refused at the insert while the first row waits for its
+  commit, else when the batch is written, or when its key is built at the end of the backfill.
 - `kasbah list` shows, with `DATABASE_URL` (or `--database`), every app schema in that database (without it, in each
   running dev container): running or stopped, made by `dev` or `start`, phase, last block, tables, size and last
   activity, and each event cache's size; then

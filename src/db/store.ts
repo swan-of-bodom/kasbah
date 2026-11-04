@@ -22,9 +22,16 @@ type Taken = { pending: Map<string, Pending>; before: Map<string, Row | null> };
 
 type State = {
   info: TableInfo;
+  /**
+   * The newest version of rows, by key. A table's written rows stay in it once a handler has read the table
+   * (`read`); until then they are only waiting for their commit, and the cache drops them once it's written.
+   */
   cache: Map<string, Row | null>;
   cachedBytes: number;
   hits: number;
+  /** A handler read this table: `find`, `update`, `delete` or `onConflictDo…` (an insert's own check doesn't count). */
+  read: boolean;
+  /** The cache holds every row of the table, so a key it lacks is absent. */
   complete: boolean;
   pending: Map<string, Pending>;
   pendingBytes: number;
@@ -101,6 +108,7 @@ export class Store {
         cache: new Map(),
         cachedBytes: 0,
         hits: 0,
+        read: false,
         complete: options.complete,
         pending: new Map(),
         pendingBytes: 0,
@@ -117,12 +125,24 @@ export class Store {
     return s;
   }
 
+  /** `k` as written but not yet committed: the next commit's change, else the one in flight (`null`: deleted). */
+  #waiting(s: State, k: string): Row | null | undefined {
+    const p = s.pending.get(k) ?? this.#taken?.tables.get(s)?.pending.get(k);
+    return p === undefined ? undefined : p.op === "delete" ? null : p.row;
+  }
+
   async #get(s: State, key: Row): Promise<Row | null> {
     const k = s.info.keyOf(key);
     const cached = s.cache.get(k);
     if (cached !== undefined) {
       s.hits++;
       return cached;
+    }
+    const waiting = this.#waiting(s, k);
+    if (waiting !== undefined) {
+      s.hits++;
+      if (s.read) this.#setNewest(s, k, waiting);
+      return waiting;
     }
     if (s.complete) return null;
     if (!s.keyed) {
@@ -136,7 +156,7 @@ export class Store {
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
     const row = found === undefined ? null : this.#asStored(s, found as Row);
-    this.#setNewest(s, k, row);
+    if (s.read) this.#setNewest(s, k, row);
     return row;
   }
 
@@ -175,7 +195,8 @@ export class Store {
     const op = prior === "insert" ? "insert" : prior !== undefined || existed ? "upsert" : "insert";
     const bytes = approxBytes(row);
     this.#pend(s, k, { op, row }, bytes);
-    this.#setNewest(s, k, row, bytes);
+    // A complete table keeps every row, so a key it lacks stays known to be absent.
+    if (s.read || s.complete) this.#setNewest(s, k, row, bytes);
   }
 
   #createDb(): Db {
@@ -184,7 +205,8 @@ export class Store {
       const k = s.info.keyOf(values);
       const row = { ...values };
       const plain = async () => {
-        const known = s.cache.get(k);
+        const cached = s.cache.get(k);
+        const known = cached !== undefined ? cached : this.#waiting(s, k);
         if (known === undefined && !s.complete && !this.journal) {
           this.#write(s, row, null);
           return row;
@@ -198,11 +220,13 @@ export class Store {
         // biome-ignore lint/suspicious/noThenProperty: awaitable like Drizzle's builders, `await db.insert(t).values(r)`
         then: (ok?: (v: Row) => unknown, fail?: (e: unknown) => unknown) => plain().then(ok, fail),
         onConflictDoNothing: async () => {
+          s.read = true;
           if (await this.#get(s, row)) return null;
           this.#write(s, row, null);
           return row;
         },
         onConflictDoUpdate: async (change: Row | ((r: Row) => Row)) => {
+          s.read = true;
           const current = await this.#get(s, row);
           if (current === null) {
             this.#write(s, row, null);
@@ -217,11 +241,16 @@ export class Store {
     };
 
     return {
-      find: (table, key) => this.#get(this.#state(table), key as Row) as never,
+      find: (table, key) => {
+        const s = this.#state(table);
+        s.read = true;
+        return this.#get(s, key as Row) as never;
+      },
       insert: (table) => ({ values: (row) => insert(table, row as Row) as never }),
       update: (table, key) => ({
         set: async (change) => {
           const s = this.#state(table);
+          s.read = true;
           const current = await this.#get(s, key as Row);
           if (current === null)
             throw new Error(`${s.info.name}: no row with key ${s.info.keyOf(key as Row)}`);
@@ -235,6 +264,7 @@ export class Store {
       }),
       delete: async (table, key) => {
         const s = this.#state(table);
+        s.read = true;
         const current = await this.#get(s, key as Row);
         if (current === null) return false;
         const k = s.info.keyOf(current);
@@ -296,10 +326,19 @@ export class Store {
       if (t.pending.size > 0) await this.#writeTable(client, s, t.pending);
   }
 
-  /** After the commit's transaction ends: Postgres has its rows, so the cache may drop them. */
+  /**
+   * After the commit's transaction ends: Postgres has its rows, so the cache may drop them. A table no handler has
+   * read drops them all: an insert-only table (swaps, transfers) would only pay to keep rows nothing reads.
+   */
   written(): void {
     this.#taken?.written();
     this.#taken = undefined;
+    for (const s of this.#tables.values())
+      if (!s.read && s.cache.size > 0) {
+        s.cache.clear();
+        s.cachedBytes = 0;
+        s.complete = false;
+      }
     this.#evict();
   }
 
@@ -348,10 +387,9 @@ export class Store {
     if (total <= this.#maxCachedBytes) return;
     const target = this.#maxCachedBytes * CACHE_KEPT;
     for (const s of tables.sort((a, b) => a.hits - b.hits)) {
+      // A row still waiting for its commit may go too: reads find it there.
       for (const [k, row] of s.cache) {
         if (total <= target) break;
-        // Not in Postgres yet: a read would miss it.
-        if (s.pending.has(k)) continue;
         const n = approxBytes(k) + approxBytes(row);
         s.cache.delete(k);
         s.cachedBytes -= n;
