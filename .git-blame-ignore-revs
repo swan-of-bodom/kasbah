@@ -1,3 +1,0 @@
-# Whole-tree reformats: git blame skips them (GitHub reads this file; locally: git config blame.ignoreRevsFile .git-blame-ignore-revs)
-# Format everything with Biome
-ccb70acfc1c9d46d750b5651bc08a8b7f977631b
