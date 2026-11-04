@@ -1,8 +1,6 @@
 # Time-series data [Hourly and daily candles from swap events]
 
-Keep one row per pool per period, and fold every event into it. This is how the
-[Ekubo example](https://github.com/swan-of-bodom/kasbah/tree/main/examples/ekubo) builds price and volume
-candles.
+Keep one row per pool per period, and fold every event into it.
 
 ```ts [kasbah.schema.ts]
 import { bignum, doublePrecision, integer, pgTable, primaryKey, text } from "kasbah";

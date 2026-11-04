@@ -1,10 +1,16 @@
 import { createRequire } from "node:module";
+import { resolve } from "node:path";
 import { configDefaults, defineConfig } from "vitest/config";
 
 export default defineConfig({
   resolve: {
     // graphql ships CommonJS and ESM: Vitest would give kasbah's code one and Yoga the other, which graphql refuses.
-    alias: { graphql: createRequire(import.meta.url).resolve("graphql") },
+    alias: [
+      { find: /^graphql$/, replacement: createRequire(import.meta.url).resolve("graphql") },
+      // Templates import kasbah as an app does: in this repo, its sources.
+      { find: /^kasbah$/, replacement: resolve(import.meta.dirname, "src/index.ts") },
+      { find: /^kasbah\/api$/, replacement: resolve(import.meta.dirname, "src/api/index.ts") },
+    ],
   },
   test: {
     // Worktrees of this repo (an editor's agents) hold copies of the tests.

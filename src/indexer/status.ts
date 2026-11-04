@@ -389,7 +389,7 @@ function describe(n: Note): string {
     case "locked":
       return `schema "${n.schema}" is held by another indexer: waiting ${n.seconds} s for it to stop or expire`;
     case "api":
-      return `API on ${n.url}: GraphiQL at ${n.url}/graphql, POST /sql, POST /graphql, GET /live, GET /status, GET /health, GET /ready`;
+      return `API on ${n.url}: GET /status /ready /health /metrics, and the app's routes`;
     case "clamped":
       return `--to ${n.to} is past block ${n.through}, the last one that can't be reorged (head ${n.tip}, final when ${n.rule}): indexing to ${n.through}`;
     case "deployed":

@@ -17,6 +17,18 @@ To skip the questions:
 kasbah init my-indexer --address 0x… --handle Swapped,PositionUpdated --timestamps --yes
 ```
 
+Or start from a template, a finished app on mainnet contracts (`pnpm create kasbah --template <name>` does the same):
+
+```bash
+kasbah init my-indexer --template erc20
+```
+
+| Template | What it indexes | What it shows |
+| --- | --- | --- |
+| `erc20` | LORDS: balances, transfers and allowances, about 2.5M events | GraphQL relations both ways (an account's transfers, a transfer's accounts), a two-column key, upserts |
+| `ekubo` | Ekubo's Core: every pool and its swaps | A row updated by later events, a `one`/`many` relation |
+| `jediswap` | JediSwap v1: pairs, their swaps and reserves, about 16M events | A factory: pair contracts found as the factory creates them |
+
 ### Start the dev server
 
 ```bash

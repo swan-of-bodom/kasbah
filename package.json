@@ -46,6 +46,7 @@
   "files": [
     "dist",
     "src",
+    "templates",
     "README.md",
     "LICENSE",
     "THIRD_PARTY_NOTICES.md"

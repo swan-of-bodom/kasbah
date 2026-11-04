@@ -30,6 +30,8 @@ CI runs the same three on every push to main and on every PR.
 - Only `Position` (`src/indexer/commit.ts`) moves the checkpoint, through `commit()` or, for a backfill batch,
   `start()`. Phases ask for a commit and never write progress themselves.
 - No module-level mutable state: a run's state lives on its `Run`, and stopping goes through its `AbortSignal`.
+- `templates/` import `kasbah` and `kasbah/api` by name, as a project does: the tsconfig's `paths` and Vitest's
+  aliases point them at `src/`, and `test/e2e/package.test.ts` typechecks each one against the packed package.
 - Comments: a doc comment on exported API and constants, and inline comments only for what the code cannot say
   (a node's quirk, an ordering that matters). No commented-out code.
 

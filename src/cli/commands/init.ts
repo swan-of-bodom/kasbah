@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import pg from "pg";
 import type { Abi, AbiMember } from "../../abi/abi.ts";
@@ -33,15 +33,22 @@ export type InitOptions = {
   yes?: boolean;
   /** The kasbah dependency, as package.json writes it. */
   dependency?: string;
+  /** Start from one of `TEMPLATES` instead of a contract address. */
+  template?: string;
 };
 
-export type Project = {
+/** What every new project has, from a contract or a template. */
+type Common = {
   dir: string;
   rpc: string;
-  /** The RPC's network, written into the config so another network's RPC is refused; none for other chains. */
-  network: Network | undefined;
   /** `undefined`: none in `.env`, so `dev` starts a container. */
   database: string | undefined;
+  dependency: string;
+};
+
+export type Project = Common & {
+  /** The RPC's network, written into the config so another network's RPC is refused; none for other chains. */
+  network: Network | undefined;
   name: string;
   address: string;
   abi: Abi;
@@ -49,8 +56,19 @@ export type Project = {
   events: string[];
   timestamps: boolean;
   ws: boolean;
-  dependency: string;
 };
+
+/** Projects to start from, in `templates/`: each holds the app's own files, and `init` adds the rest. */
+export const TEMPLATES = {
+  erc20: "LORDS: balances, transfers and allowances, with GraphQL relations between them",
+  ekubo: "Ekubo's Core: every pool, with its swaps",
+  jediswap:
+    "JediSwap v1: the pairs its factory creates, found as it runs, with their swaps and reserves",
+} as const;
+
+export type Template = keyof typeof TEMPLATES;
+
+const TEMPLATES_DIR = resolve(import.meta.dirname, "../../../templates");
 
 const SMALL = new Set(
   ["u8", "u16", "u32", "usize", "i8", "i16", "i32"].map((t) => `core::integer::${t}`),
@@ -165,6 +183,35 @@ export function generate(p: Project): Record<string, string> {
     "",
     "export default app;",
   );
+  return {
+    "kasbah.config.ts": config,
+    "kasbah.schema.ts": schemaTs,
+    [`abis/${p.name}.ts`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
+    "src/index.ts": index,
+    "src/api/index.ts": api,
+    ...commonFiles(
+      p,
+      `Indexes ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.`,
+    ),
+  };
+}
+
+/** A template's files, and the project's around them. */
+export function templateFiles(template: Template, p: Common): Record<string, string> {
+  const root = join(TEMPLATES_DIR, template);
+  const files: Record<string, string> = {};
+  for (const path of (readdirSync(root, { recursive: true }) as string[]).sort())
+    if (statSync(join(root, path)).isFile())
+      files[path.split("\\").join("/")] = readFileSync(join(root, path), "utf8");
+  return {
+    ...files,
+    ...commonFiles(p, `${TEMPLATES[template]}. From kasbah's \`${template}\` template.`),
+  };
+}
+
+/** The files around the app's own: package, TypeScript, environment, Docker and README, which starts with `about`. */
+function commonFiles(p: Common, about: string): Record<string, string> {
+  const lines = (...l: string[]) => `${l.join("\n")}\n`;
   const pkg = {
     name: basename(p.dir),
     private: true,
@@ -201,11 +248,6 @@ export function generate(p: Project): Record<string, string> {
         : `DATABASE_URL=${database}`,
     );
   return {
-    "kasbah.config.ts": config,
-    "kasbah.schema.ts": schemaTs,
-    [`abis/${p.name}.ts`]: `export default ${JSON.stringify(p.abi, null, 2)} as const;\n`,
-    "src/index.ts": index,
-    "src/api/index.ts": api,
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
     "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
     ".env": env(p.rpc, p.database),
@@ -220,7 +262,7 @@ export function generate(p: Project): Record<string, string> {
     "README.md": lines(
       `# ${basename(p.dir)}`,
       "",
-      `Indexes ${p.name} (${p.address}) from block ${p.startBlock}: ${defs.map((e) => e.name).join(", ")}.`,
+      about,
       "",
       "- `kasbah.config.ts`: RPC, database, contracts, API",
       "- `kasbah.schema.ts`: the tables",
@@ -328,15 +370,28 @@ export async function init(o: InitOptions): Promise<void> {
       throw new ConfigError(`--${flag} is required without a terminal (or with --yes)`);
     },
   };
-  ui.line(`${ui.bold("kasbah init")}  ${ui.dim("a new indexer for one Starknet contract")}`);
+  ui.line(`${ui.bold("kasbah init")}  ${ui.dim("a new Starknet indexer")}`);
   ui.line();
 
+  const template = await askTemplate(a, o);
   const dir =
-    o.dir ?? (a.ask ? await ui.text("Directory", { initial: "my-indexer" }) : "my-indexer");
+    o.dir ??
+    (a.ask ? await ui.text("Directory", { initial: template ?? "my-indexer" }) : "my-indexer");
   const target = resolve(dir);
   if (existsSync(target) && readdirSync(target).length > 0)
     throw new ConfigError(`${target} is not empty`);
   const { rpc, client, network } = await askRpc(a, o);
+  if (template !== undefined) {
+    if (network !== "mainnet")
+      throw new ConfigError(
+        `the ${template} template indexes mainnet contracts: give a mainnet RPC (this one is ${network ?? "another chain"})`,
+      );
+    const database = await askDatabase(a, o);
+    const dependency = o.dependency ?? indexerSpec();
+    write(ui, target, templateFiles(template, { dir: target, rpc, database, dependency }));
+    await nextSteps(a, dir, target);
+    return;
+  }
   const { address, abi } = await askContract(a, o, client);
   const name =
     o.name ??
@@ -375,6 +430,11 @@ export async function init(o: InitOptions): Promise<void> {
     ws,
     dependency: o.dependency ?? indexerSpec(),
   });
+  write(ui, target, files);
+  await nextSteps(a, dir, target, startBlock);
+}
+
+function write(ui: Prompt, target: string, files: Record<string, string>) {
   for (const [path, content] of Object.entries(files)) {
     mkdirSync(dirname(join(target, path)), { recursive: true });
     writeFileSync(join(target, path), content);
@@ -386,7 +446,27 @@ export async function init(o: InitOptions): Promise<void> {
       `  ${path}${path === ".env" ? ui.dim("  (the RPC URL and database: kept out of git)") : ""}`,
     );
   ui.line();
-  await nextSteps(a, dir, target, startBlock);
+}
+
+async function askTemplate({ ui, ask }: Asking, o: InitOptions): Promise<Template | undefined> {
+  if (o.template !== undefined) {
+    if (!Object.hasOwn(TEMPLATES, o.template))
+      throw new ConfigError(
+        `no template ${o.template} (there are ${Object.keys(TEMPLATES).join(", ")})`,
+      );
+    if (o.address !== undefined)
+      throw new ConfigError("--template and --address don't go together: pick one to start from");
+    return o.template as Template;
+  }
+  if (!ask || o.address !== undefined) return undefined;
+  return ui.select<Template | undefined>("Start from", [
+    { label: "A contract address", value: undefined, hint: "a table per event, from its ABI" },
+    ...Object.entries(TEMPLATES).map(([name, about]) => ({
+      label: `The ${name} template`,
+      value: name as Template,
+      hint: about,
+    })),
+  ]);
 }
 
 async function askRpc({ ui, ask, need }: Asking, o: InitOptions) {
@@ -533,7 +613,7 @@ async function askDatabase({ ui, ask }: Asking, o: InitOptions): Promise<string 
   return database;
 }
 
-async function nextSteps({ ui, ask }: Asking, dir: string, target: string, startBlock: number) {
+async function nextSteps({ ui, ask }: Asking, dir: string, target: string, startBlock?: number) {
   const pm = process.env.npm_config_user_agent?.startsWith("npm") ? "npm" : "pnpm";
   if (ask && (await ui.confirm(`Install the dependencies now (${pm} install)?`))) {
     const r = spawnSync(pm, ["install"], { cwd: target, stdio: "inherit" });
@@ -541,7 +621,7 @@ async function nextSteps({ ui, ask }: Asking, dir: string, target: string, start
   } else ui.line(`  cd ${dir} && ${pm} install`);
   ui.line();
   ui.line(
-    `Then ${ui.cyan(`${pm} dev`)} in ${dir}: it indexes from block ${startBlock.toLocaleString("en")}, follows the head and restarts on every change.`,
+    `Then ${ui.cyan(`${pm} dev`)} in ${dir}: it indexes from ${startBlock === undefined ? "the config's start block" : `block ${startBlock.toLocaleString("en")}`}, follows the head and restarts on every change.`,
   );
   ui.line(`GraphiQL at ${ui.cyan("http://localhost:42069/graphql")} once it runs.`);
 }

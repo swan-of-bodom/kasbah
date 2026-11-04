@@ -12,8 +12,12 @@
     "verbatimModuleSyntax": true,
     "resolveJsonModule": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      "kasbah": ["./src/index.ts"],
+      "kasbah/api": ["./src/api/index.ts"]
+    }
   },
-  "include": ["src", "test", "scripts", "examples"],
-  "exclude": ["test/bench/apps"]
+  "include": ["src", "test", "scripts", "templates"],
+  "exclude": ["test/bench/apps", "test/.tmp-*"]
 }

@@ -12,6 +12,8 @@ import { target } from "./project.ts";
 const USAGE = `usage:
   kasbah init [dir]              a new indexer: asks for the RPC, a contract (its ABI and deployment block
                                         are read from the chain), events and Postgres
+    [--template erc20|ekubo|jediswap]   or start from a template: LORDS with relations, Ekubo's pools and swaps,
+                                        JediSwap's pairs from its factory (mainnet)
     [--rpc <url>] [--address <0x…>] [--name <Name>] [--handle <A,B>] [--start <block>] [--database <url>]
     [--timestamps] [--no-ws] [--yes]    answers as flags; --yes takes the defaults, asks nothing
   kasbah start [app.ts]          index, then follow the head (until --to, or Ctrl-C); without app.ts, the
@@ -72,6 +74,7 @@ const { positionals, values } = parseArgs({
     timestamps: { type: "boolean" },
     yes: { type: "boolean", short: "y" },
     dependency: { type: "string" },
+    template: { type: "string" },
     handle: { type: "string" },
     help: { type: "boolean", short: "h" },
   },

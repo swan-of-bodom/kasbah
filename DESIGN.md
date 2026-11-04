@@ -547,7 +547,7 @@ JediSwap v1's factory and all 1,051 pairs are such proxies, as were Argent accou
   `from_address`) is accepted, the first declaration wins; two layouts for one selector are refused.
 - A factory `parameter` that is a Cairo 0 `felt` (a bigint once decoded) is read as an address too.
 
-Checked on mainnet (`examples/jediswap`, `check.ts`): JediSwap v1 to block 400k, 15.9M events, 89
+Checked on mainnet (`templates/jediswap`, `scripts/jediswap-check.ts`): JediSwap v1 to block 400k, 15.9M events, 89
 pairs found by the factory pre-pass in 3.9 s, 7.3M swaps; every pair's reserves and tokens equal
 `get_reserves`/`token0`/`token1` read through the proxy at block 400k (0 mismatches). 885 s at 1.8 GB peak.
 
@@ -743,7 +743,7 @@ inactive ones) can follow, with the stable views TODO above.
 `serve`: `kasbah serve <app>` (`app.serve()`) runs the API alone over the app's schema,
 like `ponder serve`: an index finished with `--to`, or API processes next to one indexer.
 
-Ekubo example (`examples/ekubo/`): candles per pool per hour and day (OHLC from `sqrt_ratio`,
+Ekubo example (before it became the `ekubo` template, which keeps only pools and swaps): candles per pool per hour and day (OHLC from `sqrt_ratio`,
 volume, fees on the input side, balances after the last event, so TVL per candle), balances from the signed deltas
 of swaps, positions, collected fees and accumulated fees, protocol totals snapshotted by a block handler. A handler's
 `db` only reads by key, so "every changed pool" can't be listed in a block handler: per-candle TVL does that job.

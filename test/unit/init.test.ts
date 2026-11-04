@@ -1,6 +1,8 @@
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { expect, test } from "vitest";
 import type { Abi } from "../../src/abi/abi.ts";
-import { generate } from "../../src/cli/commands/init.ts";
+import { generate, TEMPLATES, type Template, templateFiles } from "../../src/cli/commands/init.ts";
 
 const abi = [
   { type: "struct", name: "x::Key", members: [{ name: "a", type: "core::felt252" }] },
@@ -86,3 +88,34 @@ test("secrets only in .env, which git and Docker ignore; .env.example has the na
   for (const [path, content] of Object.entries(files))
     if (path !== ".env") expect(content).not.toContain("http://rpc");
 });
+
+test.each(Object.keys(TEMPLATES) as Template[])(
+  "the %s template is written as templates/ has it, importing kasbah by name, with the project's files around it",
+  (template) => {
+    const written = templateFiles(template, {
+      dir: "/x/mine",
+      rpc: "http://rpc",
+      database: undefined,
+      dependency: "^0.0.0",
+    });
+    const root = join("templates", template);
+    const own = (readdirSync(root, { recursive: true }) as string[]).filter((f) =>
+      statSync(join(root, f)).isFile(),
+    );
+    expect(own).toEqual(
+      expect.arrayContaining(["kasbah.config.ts", "kasbah.schema.ts", "src/index.ts"]),
+    );
+    for (const f of own) {
+      const content = readFileSync(join(root, f), "utf8");
+      expect(written[f]).toBe(content);
+      // A relative import into this repo would break once the project is outside it.
+      expect(content).not.toMatch(/from "(\.\.\/)+src\//);
+    }
+    expect(JSON.parse(written["package.json"]!).dependencies).toEqual({
+      kasbah: "^0.0.0",
+      hono: "^4.13.0",
+    });
+    expect(written["README.md"]).toContain(TEMPLATES[template]);
+    expect(written[".env"]).toContain("KASBAH_RPC_URL=http://rpc\n# DATABASE_URL=");
+  },
+);

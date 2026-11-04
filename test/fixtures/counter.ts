@@ -33,19 +33,56 @@ export function counterNode(
     chainId = testChain(),
   }: { deployed?: number; addresses?: string[]; l1?: number; chainId?: string } = {},
 ) {
-  const abi = counterAbi;
-  const BLOCKS = blocks;
-  const hash = (n: number) => `0x${(n + 1).toString(16)}aa`;
-  const events = Array.from({ length: BLOCKS }, (_, n) => ({
-    from_address: addresses[n % addresses.length]!,
+  const events = Array.from({ length: blocks }, (_, n) => ({
+    address: addresses[n % addresses.length]!,
+    block: n,
     keys: [selector("Counted")],
     data: [`0x${(n + 1).toString(16)}`],
-    block_number: n,
-    block_hash: hash(n),
-    transaction_hash: `0x${n}`,
-    transaction_index: 0,
-    event_index: 0,
+    transaction: `0x${n}`,
   }));
+  return eventNode(blocks, events, { abi: counterAbi, deployed, l1, chainId });
+}
+
+/** An event as `eventNode` serves it; `transaction` defaults to one per event. */
+export type NodeEvent = {
+  address: string;
+  block: number;
+  keys: string[];
+  data: string[];
+  transaction?: string;
+};
+
+/**
+ * A node of `blocks` blocks serving `events` (in block order), every contract of class `abi` from block `deployed`;
+ * L1 accepted blocks through `l1`; a chain id of its own unless given one. Listen on it, then point `rpc` at it.
+ */
+export function eventNode(
+  blocks: number,
+  served: NodeEvent[],
+  {
+    abi,
+    deployed = 0,
+    l1 = 0,
+    chainId = testChain(),
+  }: { abi: unknown; deployed?: number; l1?: number; chainId?: string },
+) {
+  const BLOCKS = blocks;
+  const hash = (n: number) => `0x${(n + 1).toString(16)}aa`;
+  const inBlock = new Map<number, number>();
+  const events = served.map((e, i) => {
+    const index = inBlock.get(e.block) ?? 0;
+    inBlock.set(e.block, index + 1);
+    return {
+      from_address: e.address,
+      keys: e.keys,
+      data: e.data,
+      block_number: e.block,
+      block_hash: hash(e.block),
+      transaction_hash: e.transaction ?? `0x${(i + 1).toString(16)}ee`,
+      transaction_index: 0,
+      event_index: index,
+    };
+  });
 
   return createServer((req, res) => {
     let body = "";

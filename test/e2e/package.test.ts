@@ -230,3 +230,43 @@ test.skipIf(url === undefined)(
   },
   120_000,
 );
+
+test("kasbah init --template writes each template from the installed package, and each typechecks there", async () => {
+  const tarball = readdirSync(dir).find((f) => f.endsWith(".tgz"))!;
+  const bin = join(dir, "node_modules/.bin/kasbah");
+  const run = promisify(execFile);
+  // init only asks the node its chain: no events, so nothing reaches mainnet's cache.
+  const mainnet = counterNode(1, { chainId: "0x534e5f4d41494e" });
+  await new Promise<void>((r) => mainnet.listen(0, "127.0.0.1", r));
+  const mainnetUrl = `http://127.0.0.1:${(mainnet.address() as { port: number }).port}`;
+  try {
+    await expect(
+      run(bin, ["init", "x", "--template", "erc20", "--rpc", rpcUrl, "--yes"], { cwd: dir }),
+    ).rejects.toThrow(/the erc20 template indexes mainnet contracts/);
+    await expect(
+      run(bin, ["init", "x", "--template", "nope", "--rpc", mainnetUrl, "--yes"], { cwd: dir }),
+    ).rejects.toThrow(/no template nope \(there are erc20, ekubo, jediswap\)/);
+    for (const template of ["erc20", "ekubo", "jediswap"]) {
+      const name = `kasbah_test_${template}`;
+      const args = ["init", name, "--template", template, "--rpc", mainnetUrl, "--yes"];
+      args.push("--database", "", "--dependency", `file:../${tarball}`);
+      await run(bin, args, { cwd: dir });
+      const project = join(dir, name);
+      const pnpm = (a: string[]) =>
+        execFileSync("pnpm", a, {
+          cwd: project,
+          encoding: "utf8",
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      pnpm([
+        "install",
+        "--prefer-offline",
+        "--store-dir",
+        execFileSync("pnpm", ["store", "path"], { cwd: root, encoding: "utf8" }).trim(),
+      ]);
+      pnpm(["typecheck"]);
+    }
+  } finally {
+    mainnet.close();
+  }
+}, 180_000);

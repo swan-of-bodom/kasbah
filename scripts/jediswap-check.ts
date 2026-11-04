@@ -1,19 +1,20 @@
 // Compares every indexed pair with the chain at the checkpoint: reserves from `get_reserves`, tokens from
 // `token0`/`token1`, both through the proxy (whose ABI is the implementation's).
-//   node --env-file=.env --no-warnings examples/jediswap/check.ts
+//   DATABASE_SCHEMA=<the jediswap template's schema> node --env-file=.env --no-warnings scripts/jediswap-check.ts
 import pg from "pg";
-import { CallClient } from "../../src/indexer/client.ts";
-import { RpcClient } from "../../src/rpc/client.ts";
-import pairAbi from "./pair-abi.ts";
+import { CallClient } from "../src/indexer/client.ts";
+import { RpcClient } from "../src/rpc/client.ts";
+import pairAbi from "../templates/jediswap/abis/Pair.ts";
 
+const schema = process.env.DATABASE_SCHEMA ?? "jediswap";
 const db = new pg.Pool({ connectionString: process.env.DATABASE_URL });
 const block = Number(
-  (await db.query(`SELECT value FROM jediswap._kasbah_meta WHERE key = 'checkpoint'`)).rows[0]
+  (await db.query(`SELECT value FROM "${schema}"._kasbah_meta WHERE key = 'checkpoint'`)).rows[0]
     .value,
 );
 const rows = (
   await db.query(
-    `SELECT address, token0, token1, reserve0::text, reserve1::text, swaps FROM jediswap.pairs`,
+    `SELECT address, token0, token1, reserve0::text, reserve1::text, swap_count AS swaps FROM "${schema}".pair`,
   )
 ).rows;
 const client = new CallClient(new RpcClient(process.env.KASBAH_RPC_URL!), {

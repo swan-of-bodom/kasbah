@@ -1,0 +1,286 @@
+// LORDS (Cairo 1), the class at 0x0124aeb4…3b49 since its deployment.
+export default [
+  {
+    type: "function",
+    name: "constructor",
+    inputs: [
+      {
+        name: "l2_bridge",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+    ],
+    outputs: [],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "name",
+    inputs: [],
+    outputs: [
+      {
+        type: "core::felt252",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "symbol",
+    inputs: [],
+    outputs: [
+      {
+        type: "core::felt252",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "decimals",
+    inputs: [],
+    outputs: [
+      {
+        type: "core::integer::u8",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "total_supply",
+    inputs: [],
+    outputs: [
+      {
+        type: "core::integer::u256",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "totalSupply",
+    inputs: [],
+    outputs: [
+      {
+        type: "core::integer::u256",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "balance_of",
+    inputs: [
+      {
+        name: "account",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::integer::u256",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "balanceOf",
+    inputs: [
+      {
+        name: "account",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::integer::u256",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "allowance",
+    inputs: [
+      {
+        name: "owner",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "spender",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::integer::u256",
+      },
+    ],
+    state_mutability: "view",
+  },
+  {
+    type: "function",
+    name: "approve",
+    inputs: [
+      {
+        name: "spender",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "transfer",
+    inputs: [
+      {
+        name: "recipient",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "transfer_from",
+    inputs: [
+      {
+        name: "sender",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "recipient",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "transferFrom",
+    inputs: [
+      {
+        name: "sender",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "recipient",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "mint",
+    inputs: [
+      {
+        name: "recipient",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "function",
+    name: "burn",
+    inputs: [
+      {
+        name: "owner",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "amount",
+        type: "core::integer::u256",
+      },
+    ],
+    outputs: [
+      {
+        type: "core::bool",
+      },
+    ],
+    state_mutability: "external",
+  },
+  {
+    type: "event",
+    name: "Transfer",
+    inputs: [
+      {
+        name: "from",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "to",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "value",
+        type: "core::integer::u256",
+      },
+    ],
+  },
+  {
+    type: "event",
+    name: "Approval",
+    inputs: [
+      {
+        name: "owner",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "spender",
+        type: "core::starknet::contract_address::ContractAddress",
+      },
+      {
+        name: "value",
+        type: "core::integer::u256",
+      },
+    ],
+  },
+] as const;
