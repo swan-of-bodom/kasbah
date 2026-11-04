@@ -4,6 +4,13 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- GraphQL is Ponder's: the same schema, filters, ordering, cursors and errors, so a Ponder client or query works
+  as is. This breaks queries written for 0.1: field names come from the table's key as written (`export const pool`
+  gives `pool` and `pools`; `pools` would give `pools` and `poolss`), `orderBy` and `orderDirection` are strings
+  (`orderBy: "swaps"`), the default page is 50 rows, `pageInfo` adds `hasPreviousPage` and `startCursor`, pages
+  take `before` and `offset` and have `totalCount`, strings have `_contains`, `_starts_with`, `_ends_with` and
+  `_nocase` filters, arrays `_has`, and `_meta { checkpoint phase }` is now `_meta { status }`, the JSON of
+  `GET /status`. A request whose rows would take more than a sixteenth of the API's heap gets an error.
 - A lost database connection no longer ends the run: kasbah retries for about a minute, waiting longer each time,
   and says so on the screen ("database connection lost …: retry 3 of 9", then "database: connected again"). A
   Postgres restart, a failover or a network drop used to stop it, and a connection dying while idle could crash

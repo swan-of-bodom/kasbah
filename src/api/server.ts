@@ -13,6 +13,7 @@ import { liveChannel, liveTables } from "./channel.ts";
 import { type ApiApp, type ApiContext, apiContext, type Tables } from "./context.ts";
 import { prometheus } from "./prometheus.ts";
 import { Reader, type ReaderOptions } from "./reader.ts";
+import { type Meta, readMeta, readStatus } from "./status.ts";
 
 export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   /** Tables, and Drizzle `relations()` between them: a schema module works as is. */
@@ -33,8 +34,6 @@ const CLOSE_GRACE_MS = 1_000;
 
 /** The phases in which the backfill is done: `/ready` answers 200. */
 const READY_PHASES = new Set(["live", "done"]);
-
-type Meta = { checkpoint?: number; checkpointTime?: number; chain?: string; phase?: string };
 
 /**
  * The HTTP API: `/health`, `/ready`, `/status` and `/metrics`, then the app's Hono app. Each request runs with its
@@ -73,7 +72,7 @@ export class Api {
         commits.add(listener);
         return () => commits.delete(listener);
       },
-      ready: async () => READY_PHASES.has((await meta(reader)).phase ?? ""),
+      ready: async () => READY_PHASES.has((await readMeta(reader)).phase ?? ""),
       state: <T>(key: object, make: () => T): T => {
         if (!states.has(key)) states.set(key, make());
         return states.get(key) as T;
@@ -132,38 +131,20 @@ export class Api {
 function routes(reader: Reader, o: ApiOptions): Hono {
   const root = new Hono()
     .use(cors({ origin: "*", maxAge: CORS_MAX_AGE }))
-    .get("/metrics", async (c) => c.text(o.metrics?.() ?? storedMetrics(await meta(reader))))
+    .get("/metrics", async (c) => c.text(o.metrics?.() ?? storedMetrics(await readMeta(reader))))
     .get("/health", (c) => c.text("", 200))
     .get("/ready", async (c) =>
-      READY_PHASES.has((await meta(reader)).phase ?? "")
+      READY_PHASES.has((await readMeta(reader)).phase ?? "")
         ? c.text("", 200)
         : c.text("Historical indexing is not complete.", 503),
     )
-    .get("/status", async (c) => {
-      const m = await meta(reader);
-      if (m.chain === undefined || m.checkpoint === undefined) return c.json({});
-      return c.json({
-        [m.chain]: {
-          id: m.chain,
-          block: { number: m.checkpoint, timestamp: m.checkpointTime ?? 0 },
-        },
-      });
-    });
+    .get("/status", async (c) => c.json(await readStatus(reader)));
   if (o.app instanceof Hono) root.route("/", o.app);
   else if (o.app !== undefined) {
     const app = o.app;
     root.all("*", (c) => app.fetch(c.req.raw));
   }
   return root.onError(onError);
-}
-
-async function meta(reader: Reader): Promise<Meta> {
-  return reader.transaction(async (client) => {
-    const { rows } = await client.query<{ key: string; value: unknown }>(
-      `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'checkpointTime', 'chain', 'phase')`,
-    );
-    return Object.fromEntries(rows.map((r) => [r.key, r.value])) as Meta;
-  });
 }
 
 function storedMetrics(m: Meta): string {
