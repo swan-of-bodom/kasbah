@@ -342,6 +342,13 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   rows), not what dies. At 4 GB, V8's default semi-space is 64 MB (~1,430 scavenges of 13 ms, ~19 s); 128 MB
   gave half as many of 24.5 ms and 256 MB a third as many of 44.5 ms, the same GC time, with more stops over
   400 ms and RSS +4% and +12% (`--node-b=--max-semi-space-size=…`, 5 and 2 pairs: +2.3%, 2 of 5).
+- Rows waiting for their commit stay objects. Kept instead as their COPY line in a table no handler reads (one
+  string, not an Ekubo swap row's ~17 objects), and turned back into rows through Postgres when a handler first
+  reads the table: GC 9.5 → 8.1 s and loop stops over 100 ms 6–8 → 1–3, but the run the same (×0.99, 3 pairs on a
+  throttling CPU) and main-thread CPU unchanged, so not worth its code (2026-11-04). Nor were 4 MB COPY chunks
+  instead of 64 KB (slower, 3× the loop stops) or `synchronous_commit = off` (no change: a backfill commits every
+  100k events). A JSON column is converted twice, to a frozen copy at the insert and to text at the commit, and
+  stays so: a plain insert returns the frozen row.
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
 - The same transaction saves each handler's calls and time so far (`handlers` in `_kasbah_meta`), taken with the
