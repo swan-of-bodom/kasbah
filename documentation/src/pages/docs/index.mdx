@@ -24,11 +24,13 @@ nothing to sign up for.
 kasbah stands on the work of [Ponder](https://ponder.sh), the open-source TypeScript indexer for EVM chains,
 built by the Ponder team and released under the MIT license.
 
-kasbah is its own code, written for Starknet, but its design is Ponder's: the project layout, `app.on(…)`
-handlers, Drizzle tables, the read API, and many choices about running in production, such as load-balanced RPCs,
+kasbah is written for Starknet, and its design is Ponder's: the project layout, `app.on(…)` handlers, Drizzle
+tables, the read API, and many choices about running in production, such as load-balanced RPCs,
 one indexer per schema and zero-downtime deploys. When we weren't sure how something should work, we looked at
 how Ponder does it, and usually did the same. If you know Ponder, most of kasbah will feel familiar, and
-Ponder's documentation is worth reading too.
+Ponder's documentation is worth reading too. The GraphQL API and the built-in endpoints are adapted from Ponder's
+code, with its MIT notice in
+[THIRD_PARTY_NOTICES.md](https://github.com/swan-of-bodom/kasbah/blob/main/THIRD_PARTY_NOTICES.md).
 
 If you index EVM chains, use Ponder. We're grateful to its authors for building it in the open and sharing what they
 learned.

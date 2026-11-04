@@ -644,16 +644,24 @@ Target size: under 10k lines for v1.
    block's events; headers are fetched only for the blocks it fires on.
 4. Live polling, undo journal, crash recovery. Done.
 5. Read API. Done (`src/api/`):
-   - `POST /sql` `{ sql, params }` → `{ columns, rows }`. Runs as `<schema>_reader`, a login role kasbah creates
-     (or `api.readDatabase`) with SELECT on the app's tables and `_kasbah_meta` only. Its password is an HMAC
-     of the database URL and the role's name, so every process on the schema sets the same one (at first
-     each start set a random one, locking out the processes already running: a zero-downtime deploy's old
-     instance, `serve` replicas). The setup runs in one transaction under an advisory lock, so processes starting
-     at once don't race. Ponder instead reads with the indexer's own login on read-only connections and checks
-     each query against a 1,200-line SQL allow list; a role keeps Postgres as the guard. Each query: one read-only
-     transaction with a timeout (10 s), always rolled back, so nothing it sets outlives it; sent wrapped as
-     `SELECT * FROM (<sql>) LIMIT $n` with the extended protocol, so only one SELECT/WITH/VALUES statement parses;
-     at most 10,000 rows.
+   - The API is a Hono app (`src/api/server.ts`): kasbah's `/health`, `/ready`, `/status` and `/metrics`, then the
+     app's own (the default export of `src/api/index.ts`), as in Ponder. `db` and `graphql()` come from
+     `kasbah/api`; they find the API serving the request through `AsyncLocalStorage`, so two APIs in one process
+     (tests, `serve` next to an indexer) never mix. An earlier `app.get`/`app.post` kept the API dependency-free,
+     but an app wanting middleware, validation or its own errors had to wait for kasbah; Hono gives them, and
+     `hono` is an optional peer, needed only by an app with an API.
+   - Every query runs as `<schema>_reader`, a login role kasbah creates (or `api.readDatabase`) with SELECT on the
+     app's tables and `_kasbah_meta` only. Its password is an HMAC of the database URL and the role's name, so
+     every process on the schema sets the same one (at first each start set a random one, locking out the
+     processes already running: a zero-downtime deploy's old instance, `serve` replicas). The setup runs in one
+     transaction under an advisory lock, so processes starting at once don't race. Its connections start
+     read-only, with a 30 s statement timeout and a 500 ms lock timeout, so a route's query fails rather than
+     writes or queues behind a migration. Ponder reads with the indexer's own login on read-only connections; a
+     role keeps Postgres as the guard.
+   - SQL over HTTP (Ponder's `client()`, which `@ponder/client` queries) was ported and left out (2026-11-04): its
+     safety rests on a SQL parser (a WebAssembly build of Postgres' own, 4.5 MB) and a 1,200-line allow list, and
+     no app used it; apps write endpoints. Its branch keeps the port. With it went live queries and the commit
+     `NOTIFY` they listened to.
    - `POST /graphql` (`graphql()` from `kasbah/api`, `src/api/graphql/`): Ponder's schema builder, ported, so the
      schema, filters, ordering, cursors, `totalCount`, relations, `_meta { status }` and errors are Ponder's; a
      Ponder client works unchanged. Per table key `pool`: `pool(<primary key>)` and
@@ -665,37 +673,19 @@ Target size: under 10k lines for v1.
      refuses, a limit over 1,000) are GraphQL errors that keep their message in production too. And, to run
      anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages multiply:
      1,000 × 1,000 × …), and all its statements the query timeout.
-   - `GET /status`: checkpoint and phase (backfill or live).
-   - Live queries: `GET /live` streams server-sent events. Every commit (backfill batch, live
-     block, reorg revert) runs `pg_notify('kasbah_<schema>', {"checkpoint": n})` inside its transaction, so
-     the notice only arrives once the data is visible, and an API process anywhere on the same database gets it
-     via `LISTEN`. Plain `/live` sends `event: checkpoint`; with `?sql=…&params=[…]` or
-     `?query=…&variables={…}` (GraphQL), the query runs at once and after each commit, and `event: result` is
-     sent only when the result changed (one run at a time per stream, commits during a run coalesce). A bad query
-     is a plain 400 before the stream opens. Readers can't fake a notice: their transactions always roll back,
-     and Postgres delivers notices only on commit (mutation-checked). Checked on mainnet with Ekubo live.
-     TODO, when many clients watch at once (to revisit later):
-     - Re-run only the streams a commit affects, as Ponder does, without a SQL parser: the commit's notice names the
-       tables it wrote (the store knows them), and each stream learns the tables its query reads once, from
-       Postgres' `EXPLAIN` when it opens. Today every open stream re-runs after every commit.
-     - An API cache: a route's or query's result kept in memory until the next commit, so N visitors in one block
-       cost one query.
+   - `GET /status`: `{ "<chain>": { id, block: { number, timestamp } } }`, the checkpoint and its block's time,
+     Ponder's shape (the chain's name as its id: kasbah stores no numeric one).
    - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables` takes both, so
      `import * as schema` works). A `one()` field is the related row, through a per-request DataLoader: a page's
      lookups go out as one statement. A `many()` field is a page with the list's arguments, one statement per
      parent, as in Ponder (a `LATERAL` join over the parents' keys would batch them, but cursors, `before` and
      `totalCount` per parent make it another query planner's worth of code).
    - GraphQL limits: before a query runs, at most 1,000 tokens, depth 100 and 30 aliases (Ponder's, from Apollo).
-   - The app's routes: `app.get(path, handler)` / `app.post`, `:name` path segments, matched
-     after the built-in paths (which they can't take). The handler gets `db`, a Drizzle database typed with the
-     app's tables (relational queries included) on the reader's read-only transaction and timeout, plus `params`,
-     `query`, `body` and the request; what it returns is sent as JSON, a `Response` as is, an `HttpError` as its
-     status. Ponder's equivalent is a user Hono app; this keeps the API dependency-free.
-   - `GET /health`: 200 while the process and its database answer. `GET /ready`: 200 once the phase is live (or
-     done: a run with `to` that indexed through it, keys built), else 503 with the phase. `GET /metrics`: the
-     `Status` in Prometheus' text format (`src/indexer/metrics.ts`), or, with no indexer in the process, the
-     stored checkpoint and phase. Auth, rate limits and TLS are left to a proxy in front, as in Ponder.
-   - Not yet: sharing one live run between streams with the same query.
+   - `GET /health`: 200 while the process answers. `GET /ready`: 200 once the phase is live (or done: a run with
+     `to` that indexed through it, keys built), else 503. `GET /metrics`: the `Status` in Prometheus' text format
+     (`src/indexer/metrics.ts`), or, with no indexer in the process, the stored checkpoint and phase. A route's
+     error is a 500 naming the route, an `HTTPException` its own status. Auth, rate limits and TLS are left to a
+     proxy in front, as in Ponder.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 
 Project defaults (`src/cli/project.ts`, `useProject`): loading a project's `kasbah.config.ts`, the

@@ -124,5 +124,6 @@ its authors for building it in the open. For EVM chains, use Ponder.
 
 ## License
 
-[Apache-2.0](LICENSE). Versions follow semver: while at 0.x, a minor version may break things and a patch never
+[Apache-2.0](LICENSE), with code adapted from MIT projects listed in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Versions follow semver: while at 0.x, a minor version may break things and a patch never
 does. See [CHANGELOG.md](CHANGELOG.md).

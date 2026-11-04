@@ -47,7 +47,8 @@
     "dist",
     "src",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "scripts": {
     "test": "node --env-file-if-exists=.env node_modules/vitest/vitest.mjs run",
