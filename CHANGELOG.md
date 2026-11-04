@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `kasbah list` and `kasbah prune` no longer fail when another process drops a schema while they read it (a
+  prune, a reset): that schema is left out.
 - A restart no longer asks the node for every contract's class history and ABIs again: the event cache keeps them,
   through a final block, and a restart asks only from there. Ekubo Core's startup went from ~370 RPC calls to 1.
 - During a backfill, autovacuum skips the app's tables while they only receive inserts, and their key, built at the

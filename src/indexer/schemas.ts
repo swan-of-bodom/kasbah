@@ -1,7 +1,12 @@
 import type pg from "pg";
 import { transaction } from "../db/transaction.ts";
+import { errorCode } from "../utils/errors.ts";
 import { quote } from "../utils/quote.ts";
 import { LOCK } from "./lock.ts";
+
+/** Postgres's codes for a table, and a schema, that doesn't exist. */
+const UNDEFINED_TABLE = "42P01";
+const INVALID_SCHEMA = "3F000";
 
 /** An app schema in a database, as `kasbah list` shows it and `kasbah prune` decides on it. */
 export type SchemaInfo = {
@@ -59,13 +64,19 @@ export async function listSchemas(
       });
       continue;
     }
-    const meta = new Map(
-      (
+    let found: { key: string; value: unknown }[];
+    try {
+      found = (
         await pool.query<{ key: string; value: unknown }>(
           `SELECT key, value FROM ${quote(r.schema)}._kasbah_meta WHERE key IN ('lock', 'phase', 'checkpoint')`,
         )
-      ).rows.map((m) => [m.key, m.value]),
-    );
+      ).rows;
+    } catch (e) {
+      // Dropped since the query above (a prune, a reset): it's no longer there to list.
+      if (errorCode(e) === UNDEFINED_TABLE || errorCode(e) === INVALID_SCHEMA) continue;
+      throw e;
+    }
+    const meta = new Map(found.map((m) => [m.key, m.value]));
     const lock = meta.get("lock") as LockRow | undefined;
     const checkpoint = meta.get("checkpoint");
     const phase = meta.get("phase");

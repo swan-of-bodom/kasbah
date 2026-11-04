@@ -206,6 +206,37 @@ test.skipIf(url === undefined)(
   },
 );
 
+test.skipIf(url === undefined)(
+  "a schema dropped while list reads it is left out, not an error",
+  async () => {
+    const pool = new pg.Pool({ connectionString: url, max: 2 });
+    const gone = "list_test_gone";
+    try {
+      await pool.query(`DROP SCHEMA IF EXISTS ${gone} CASCADE; CREATE SCHEMA ${gone}`);
+      await pool.query(
+        `CREATE TABLE ${gone}._kasbah_meta (key text PRIMARY KEY, value jsonb NOT NULL)`,
+      );
+      // Another process drops it right after list found it.
+      let first = true;
+      const racing = {
+        query: async (...args: Parameters<pg.Pool["query"]>) => {
+          const r = await (pool.query as (...a: unknown[]) => Promise<unknown>)(...args);
+          if (first) {
+            first = false;
+            await pool.query(`DROP SCHEMA ${gone} CASCADE`);
+          }
+          return r;
+        },
+      } as unknown as pg.Pool;
+      const { schemas } = await listSchemas(racing);
+      expect(schemas.map((s) => s.schema)).not.toContain(gone);
+    } finally {
+      await pool.query(`DROP SCHEMA IF EXISTS ${gone} CASCADE`);
+      await pool.end();
+    }
+  },
+);
+
 test("in a dev container, list doesn't point at prune, and says a stopped container's schemas need it running", () => {
   const stopped = { schema: "app", running: false, tables: 1, bytes: 1e6 };
   expect(renderSchemas([stopped], [], "kasbah-app-1a2b3c", { prune: false }).at(-1)).toMatch(/^╰/);
