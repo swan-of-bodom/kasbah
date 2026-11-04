@@ -188,7 +188,10 @@ export type RunOptions = {
    * `"reset"` drops it and indexes from scratch (what `kasbah dev` does).
    */
   onBuildChange?: "error" | "reset";
-  /** Part of the build id: the CLI passes a hash of the app's source files, so a change in any helper counts. */
+  /**
+   * Part of the build id: the CLI passes a hash of the app's indexing code (`sourceHash`), so a change in a helper
+   * counts, and one in an API route doesn't.
+   */
   buildSalt?: string;
   signal?: AbortSignal;
   /**

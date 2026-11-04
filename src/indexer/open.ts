@@ -113,7 +113,7 @@ export async function open(
   const chainId = await chainOf(rpc, configured);
   if (configured.network !== undefined) checkNetwork(configured.network, chainId!);
   const config = await deployments(configured, rpc, status);
-  const buildId = buildIdOf(config, handlers, blockSources, tables, options.buildSalt);
+  const buildId = buildIdOf(config, chainId, handlers, blockSources, tables, options.buildSalt);
   const { pool, lock } = await openSchema(config, options, status, buildId, signal, closers);
   const stored = await startup(pool, schema, tables, buildId);
   // For the API's `/status`, which another process may serve.
@@ -381,6 +381,7 @@ function validate(
 
 function buildIdOf(
   config: Resolved,
+  chain: string,
   handlers: ReadonlyMap<string, AnyHandler>,
   blockSources: BlockSource[],
   tables: PgTable[],
@@ -390,17 +391,20 @@ function buildIdOf(
     .update(
       JSON.stringify(
         {
+          chain,
           contracts: Object.entries(config.contracts).map(([k, c]) => [
             k,
             c.address === undefined
-              ? [canonical(c.factory.address), c.factory.event, c.factory.parameter]
+              ? [canonical(c.factory.address), c.factory.event, c.factory.parameter, c.factory.abi]
               : typeof c.address === "string"
                 ? canonical(c.address)
                 : c.address.map(canonical),
             c.startBlock,
-            // Only when set, so a config without them keeps its build id.
-            ...(c.endBlock === undefined ? [] : [{ endBlock: c.endBlock }]),
-            ...(c.filter === undefined ? [] : [{ filter: c.filter }]),
+            c.endBlock ?? null,
+            c.filter ?? null,
+            c.include ?? null,
+            // How events decode: the source hash covered it while it hashed the whole directory.
+            c.abi,
           ]),
           blocks: blockSources.map((b) => [b.name, b.interval, b.startBlock, b.endBlock ?? null]),
           tables: tables.map((t) => createTableSql(tableInfo(t))),

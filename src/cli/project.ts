@@ -62,13 +62,22 @@ export const IGNORED = /(^|\/)(node_modules|\.git)(\/|$)/;
 export const CODE = /\.(ts|mts|js|mjs|cjs|json)$/;
 /** Not code: reinstalling a dependency rewrites it, and that alone mustn't re-index. */
 const NOT_HASHED = /(^|\/)package\.json$/;
+/** A project's files that don't decide rows: its API, and tests. */
+const NOT_INDEXING = /^src\/api\/|\.(test|spec)\.[a-z]+$/;
 
-/** A hash of the code files under the app's directory: part of the build id. */
+/**
+ * A hash of the code that decides which rows get written: part of the build id, with the config's contracts and
+ * the tables (`buildIdOf`). In a project, the files under `src/` but `src/api/` and tests, so editing a route or
+ * the config's settings keeps the indexed data. A single-file app hashes every code file beside it.
+ */
 export function sourceHash(file: string): string {
-  const root = dirname(resolve(file));
+  const project = file.endsWith(CONFIG);
+  const root = project ? join(dirname(resolve(file)), "src") : dirname(resolve(file));
   const h = createHash("sha256");
-  const files = (readdirSync(root, { recursive: true }) as string[])
+  const files = (existsSync(root) ? (readdirSync(root, { recursive: true }) as string[]) : [])
+    .map((f) => f.replaceAll("\\", "/"))
     .filter((f) => !IGNORED.test(f) && CODE.test(f) && !NOT_HASHED.test(f))
+    .filter((f) => !project || !NOT_INDEXING.test(`src/${f}`))
     .sort();
   for (const f of files)
     h.update(relative(root, join(root, f)))

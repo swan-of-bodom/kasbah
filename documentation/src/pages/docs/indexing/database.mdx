@@ -72,5 +72,5 @@ one.
 Writes stay in memory and are written in one transaction per batch of blocks. Near the head, each block's writes are
 journaled, so a reorg can undo them.
 
-Changing a table, the config or a handler changes the build: `dev` re-indexes, and `start` refuses to run over data
-built by different code.
+Changing a table, a contract in the config or a file under `src/` (outside `src/api/`) changes the build: `dev`
+re-indexes, and `start` refuses to run over data built by different code. See [Builds](/docs/database#builds).

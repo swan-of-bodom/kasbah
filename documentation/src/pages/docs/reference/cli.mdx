@@ -33,7 +33,8 @@ isn't given as a flag. `pnpm create kasbah` (`npm create kasbah@latest`, `yarn c
 kasbah dev [--reset] [--no-ui] [--debug]
 ```
 
-Indexes, follows the head and restarts on every file change. A new build drops the old data. Without
+Indexes, follows the head and restarts on every file change. A new [build](/docs/database#builds) drops the old
+data; an API or settings change keeps it, and the restart resumes from the last block. Without
 `DATABASE_URL`, runs Postgres in a container. `--reset` drops everything first (`pnpm fresh`).
 
 ## start

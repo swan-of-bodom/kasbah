@@ -38,7 +38,16 @@ indexer takes over where the crashed one stopped. `clean` refuses a schema a run
 
 ## Builds
 
-A build is your config, tables and source files. Change any of them and the build changes:
+A build is what decides which rows get written:
+
+- the config's contracts (address or factory, ABI, `startBlock`, `endBlock`, `filter`, `include`) and `blocks`, and
+  the chain;
+- your tables;
+- the files under `src/`, except `src/api/` and tests (`*.test.ts`, `*.spec.ts`).
+
+Editing an API route, or a setting such as `rpc`, `concurrency` or the port, keeps the build and the indexed data. A
+helper your handlers import counts only if it lives under `src/` (outside `src/api/`). Change any part of the build and
+it changes:
 
 - `dev` drops the schema and indexes again from scratch.
 - `start` refuses to run over data from another build:

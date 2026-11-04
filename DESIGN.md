@@ -732,7 +732,13 @@ CLI (`src/cli/main.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache
 module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
 on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the
 reliable reload), with `onBuildChange: "reset"`. The build id now includes each handler's source and the CLI's
-hash of the app's code files: before, a handler body edit kept stale results. The compiled build for a registry
+hash of the app's code files: before, a handler body edit kept stale results. That hash first took every code file in
+the app's directory, so a new API route or a new RPC URL re-indexed everything (Ekubo's whole history, in `dev` and in
+a production deploy). It now takes what decides rows, as Ponder's does: the files under `src/` but `src/api/` and
+tests, with the config's contracts (ABI, `include` and the chain added, which only the directory hash covered) and
+the tables' SQL. A helper outside `src/` that handlers import escapes it, as in Ponder; tracking the files Node loads
+(`module.registerHooks`) would catch it, for more machinery and a Node API still in development. A single-file app
+hashes every code file beside it, since its handlers, API and config share one file. The compiled build for a registry
 was done the same day (`dist/`, `pnpm pack`).
 
 Database for `dev` (`src/cli/devdb.ts`): without `DATABASE_URL`, `dev` runs `postgres:17` in Docker

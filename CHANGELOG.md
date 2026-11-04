@@ -4,6 +4,10 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- The build covers only what decides rows: the config's contracts and blocks, the chain, the tables and the files under
+  `src/` except `src/api/` and tests. Editing an API route or a setting (`rpc`, `concurrency`, the port) no longer
+  re-indexes in `dev` or refuses `start`. A helper outside `src/` no longer counts; a contract's ABI or `include` now
+  does. An app already indexed gets a new build once, when it upgrades.
 - API errors: outside `kasbah dev`, an error a route or GraphQL didn't expect reaches the client as a plain 500
   (`Internal Server Error`, or GraphQL's `Unexpected error.`) and is logged; `dev` shows it in full. A request body
   over 1 MB gets a 413. A GraphQL request runs at most 500 statements, four at a time.

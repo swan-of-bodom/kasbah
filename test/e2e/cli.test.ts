@@ -100,6 +100,71 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
+  "a project's API or config settings change keeps its data; a helper under src/ is another build",
+  async () => {
+    await dropSchema();
+    const project = join(dir, "project");
+    const write = (name: string, text: string) => {
+      mkdirSync(join(project, name, ".."), { recursive: true });
+      writeFileSync(join(project, name), text);
+    };
+    const config = (pollMs: number) =>
+      appSource(1)
+        .replace('"RPC"', JSON.stringify(rpcUrl))
+        .replace("pollMs: 50", `pollMs: ${pollMs}`)
+        .replace("const totals", "export const totals")
+        .replace("reorgWindow: 4 }", "reorgWindow: 4, api: { port: 0 } }")
+        .replace(/app\.on\([\s\S]*?\n\}\);\n/, "");
+    const handlers = `import app, { totals } from "../kasbah.config.ts";
+import { factor } from "./utils/factor.ts";
+app.on("C:Counted", async ({ event, context }) => {
+  const v = event.args.amount * factor;
+  await context.db.insert(totals).values({ id: "all", total: v, n: 1 }).onConflictDoUpdate((r) => ({ total: r.total + v, n: r.n + 1 }));
+});
+`;
+    write("kasbah.config.ts", config(50));
+    write("src/index.ts", handlers);
+    write("src/utils/factor.ts", "export const factor = 1n;\n");
+    write(
+      "src/api/index.ts",
+      `import { Hono } from "hono";\nexport default new Hono().get("/a", (c) => c.text("a"));\n`,
+    );
+    const start = () => cli("start", join(project, "kasbah.config.ts"), "--to", String(BLOCKS - 1));
+    const first = start();
+    expect(await first.exited, first.out.join("")).toBe(0);
+    expect(await total()).toBe(String((36 * 37) / 2));
+
+    write("kasbah.config.ts", config(80));
+    write(
+      "src/api/index.ts",
+      `import { Hono } from "hono";\nexport default new Hono().get("/b", (c) => c.text("b"));\n`,
+    );
+    const kept = start();
+    expect(await kept.exited, kept.out.join("")).toBe(0);
+    expect(kept.out.join("")).not.toMatch(/another build/);
+
+    write("src/utils/factor.ts", "export const factor = 2n;\n");
+    const refused = start();
+    expect(await refused.exited).toBe(1);
+    expect(refused.out.join("")).toMatch(/holds another build/);
+
+    // The ABI decides how events decode: it counts though it lives outside src/.
+    write("src/utils/factor.ts", "export const factor = 1n;\n");
+    write(
+      "kasbah.config.ts",
+      config(80).replace(
+        "] as const",
+        ', {"type":"event","name":"x::Other","kind":"struct","members":[]}] as const',
+      ),
+    );
+    const abiChanged = start();
+    expect(await abiChanged.exited).toBe(1);
+    expect(abiChanged.out.join("")).toMatch(/holds another build/);
+  },
+  60_000,
+);
+
+test.skipIf(url === undefined)(
   "dev: restarts on a change and re-indexes a changed build",
   async () => {
     await dropSchema();
