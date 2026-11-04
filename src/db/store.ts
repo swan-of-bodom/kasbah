@@ -1,13 +1,14 @@
-import { and, eq, type InferInsertModel, type InferSelectModel, sql } from "drizzle-orm";
+import { and, eq, type InferInsertModel, type InferSelectModel } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type { PgTable } from "drizzle-orm/pg-core";
-import type { PoolClient } from "pg";
+import type { Pool, PoolClient } from "pg";
 import { ConfigError } from "../config/errors.ts";
 import { chunks } from "../utils/chunks.ts";
 import { errorCode } from "../utils/errors.ts";
 import { approxBytes, heapLimit } from "../utils/memory.ts";
 import { copyRows } from "./copy.ts";
 import { primaryKeySql, quote, type Row, storedJson, type TableInfo, tableInfo } from "./table.ts";
+import { transaction } from "./transaction.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
@@ -83,14 +84,14 @@ function driverValues(row: Row, columns: TableInfo["columns"]): Record<string, u
 export class Store {
   readonly db: Db;
   readonly #tables = new Map<PgTable, State>();
-  readonly #orm: NodePgDatabase;
+  readonly #orm: NodePgDatabase & { $client: Pool };
   readonly #maxCachedBytes: number;
   /** Record pre-images for the undo journal (blocks inside the reorg window). */
   journal = false;
   /** What `take` moved out for the commit in flight, and how to wake whoever waits for it, until `written`. */
   #taken: { tables: Map<State, Taken>; written: () => void; settled: Promise<void> } | undefined;
 
-  constructor(orm: NodePgDatabase, tables: PgTable[], options: StoreOptions) {
+  constructor(orm: NodePgDatabase & { $client: Pool }, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
     this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * CACHE_SHARE);
     for (const t of tables) {
@@ -124,9 +125,14 @@ export class Store {
       return cached;
     }
     if (s.complete) return null;
-    // The commit in flight may be adding this key in its transaction: both would add it.
-    if (!s.keyed) await this.#taken?.settled;
-    await this.#addKey(s, (text) => this.#orm.execute(sql.raw(text)));
+    if (!s.keyed) {
+      // The commit in flight may be adding this key in its transaction: both would add it.
+      await this.#taken?.settled;
+      await transaction(this.#orm.$client, async (tx, attempt) => {
+        if (attempt > 0) await this.recheckKeys(tx, [s.info.table]);
+        await this.#addKey(s, (text) => tx.query(text));
+      });
+    }
     const where = and(...s.info.primaryKey.map((c) => eq(c.column, key[c.key])));
     const [found] = await this.#orm.select().from(s.info.table).where(where).limit(1);
     const row = found === undefined ? null : this.#asStored(s, found as Row);
@@ -372,7 +378,7 @@ export class Store {
       tables === undefined ? [...this.#tables.values()] : tables.map((t) => this.#state(t));
     const { rows } = await client.query<{ name: string }>(
       `SELECT c.relname AS name FROM pg_class c
-       WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = ANY($1)
+       WHERE c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = current_schema()) AND c.relname = ANY($1)
          AND EXISTS (SELECT 1 FROM pg_constraint p WHERE p.conrelid = c.oid AND p.contype = 'p')`,
       [states.map((s) => s.info.name)],
     );

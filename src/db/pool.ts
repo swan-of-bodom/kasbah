@@ -26,6 +26,18 @@ export class RetryingPool extends pg.Pool {
   }
 }
 
+/** One statement sent once, even on a `RetryingPool`: for callers that retry it themselves. */
+export const queryOnce = <R extends pg.QueryResultRow>(
+  pool: pg.Pool,
+  text: string,
+  values: unknown[],
+): Promise<pg.QueryResult<R>> =>
+  (pg.Pool.prototype.query as (t: string, v: unknown[]) => Promise<pg.QueryResult<R>>).call(
+    pool,
+    text,
+    values,
+  );
+
 /** How `pool` retries: its own settings if it's a `RetryingPool`, else the defaults. */
 export const retryOf = (pool: pg.Pool): Partial<Retry> =>
   pool instanceof RetryingPool ? pool.retry : {};

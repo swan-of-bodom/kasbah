@@ -110,9 +110,11 @@ export class SchemaLock {
     });
   }
 
+  /** A beat retried through an outage may land after a newer one: the heartbeat only moves forward. */
   async #beat(): Promise<void> {
     await this.#pool.query(
-      `UPDATE _kasbah_meta SET value = jsonb_set(value, '{heartbeat}', to_jsonb($1::bigint)) WHERE key = 'lock' AND value->>'owner' = $2`,
+      `UPDATE _kasbah_meta SET value = jsonb_set(value, '{heartbeat}', to_jsonb(GREATEST((value->>'heartbeat')::bigint, $1::bigint)))
+       WHERE key = 'lock' AND value->>'owner' = $2`,
       [Date.now(), this.owner],
     );
   }

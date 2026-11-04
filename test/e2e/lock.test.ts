@@ -3,7 +3,7 @@ import { pgTable, text } from "drizzle-orm/pg-core";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, expect, test } from "vitest";
 import { bignum, kasbah } from "../../src/index.ts";
-import { LOCK } from "../../src/indexer/lock.ts";
+import { LOCK, SchemaLock } from "../../src/indexer/lock.ts";
 import { type Notice, Status } from "../../src/indexer/status.ts";
 import { counterAbi, counterNode } from "../fixtures/counter.ts";
 
@@ -187,4 +187,31 @@ test.skipIf(url === undefined)("clean refuses a schema a running indexer holds",
   first.stop();
   await first.done;
   expect(await app().drop()).toBe(schema);
+});
+
+test.skipIf(url === undefined)("a heartbeat never moves the lock's back", async () => {
+  const pool = new pg.Pool({ connectionString: url, max: 2, options: `-c search_path=${schema}` });
+  try {
+    const claim = { dev: false, reset: false, buildId: "b" };
+    const lock = await SchemaLock.acquire(
+      pool,
+      schema,
+      claim,
+      new Status(),
+      new AbortController().signal,
+    );
+    const later = Date.now() + 3_600_000;
+    await pool.query(
+      `UPDATE _kasbah_meta SET value = jsonb_set(value, '{heartbeat}', to_jsonb($1::bigint)) WHERE key = 'lock'`,
+      [later],
+    );
+    await new Promise((r) => setTimeout(r, LOCK.intervalMs * 3));
+    const { rows } = await pool.query(
+      `SELECT value->'heartbeat' AS h FROM _kasbah_meta WHERE key = 'lock'`,
+    );
+    await lock.release();
+    expect(rows[0].h).toBe(later);
+  } finally {
+    await pool.end();
+  }
 });

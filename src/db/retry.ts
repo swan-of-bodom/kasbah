@@ -47,9 +47,16 @@ const LOST_CODES = new Set([
 const LOST_MESSAGES =
   /Connection terminated|connection to client lost|timeout exceeded when trying to connect|not queryable|Client was closed/i;
 
+/**
+ * A COMMIT whose answer was lost, and whose outcome Postgres couldn't be asked: it ends the run even when a lost
+ * connection caused it, since running the transaction again might write it twice.
+ */
+export class CommitUnknown extends Error {}
+
 /** The error, or what caused it, says the connection to Postgres was lost: worth trying again. */
 export function lostConnection(e: unknown): boolean {
   for (let x = e, depth = 0; x !== undefined && x !== null && depth < 4; depth++) {
+    if (x instanceof CommitUnknown) return false;
     const code = errorCode(x);
     if (code !== undefined && LOST_CODES.has(code)) return true;
     if (LOST_MESSAGES.test(String((x as { message?: unknown }).message ?? ""))) return true;

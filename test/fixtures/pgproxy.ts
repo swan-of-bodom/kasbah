@@ -1,7 +1,11 @@
 import { connect, createServer, type Socket } from "node:net";
 
-/** Where `cutCommit` drops a connection: before Postgres sees the COMMIT, or after it ran it, before its answer. */
-export type CommitCut = "before" | "after";
+/**
+ * Where `cutCommit` drops a connection: before Postgres sees the COMMIT, or after it ran it, before its answer. `half-open`
+ * drops only the client's side before the COMMIT, as a network drop that never reaches the server: Postgres keeps
+ * the transaction open.
+ */
+export type CommitCut = "before" | "after" | "half-open";
 
 /** The startup message's code when the client first asks for TLS: Postgres answers one byte, then the real startup. */
 const SSL_REQUEST = 80877103;
@@ -14,6 +18,7 @@ const SSL_REQUEST = 80877103;
 export async function pgProxy(database: string) {
   const target = new URL(database);
   const open = new Set<() => void>();
+  const halfOpen = new Set<Socket>();
   let downUntil = 0;
   let commitCut: CommitCut | undefined;
   const counts = { connections: 0, refused: 0, cuts: 0, commits: 0 };
@@ -27,7 +32,7 @@ export async function pgProxy(database: string) {
     const upstream = connect(Number(target.port || 5432), target.hostname);
     const drop = () => {
       client.destroy();
-      upstream.destroy();
+      if (!halfOpen.has(upstream)) upstream.destroy();
       open.delete(drop);
     };
     open.add(drop);
@@ -58,6 +63,12 @@ export async function pgProxy(database: string) {
           /^\s*COMMIT\b/i.test(message.subarray(5, length - 1).toString())
         ) {
           counts.commits++;
+          if (commitCut === "half-open") {
+            commitCut = undefined;
+            counts.cuts++;
+            halfOpen.add(upstream);
+            return drop();
+          }
           if (commitCut === "before") {
             commitCut = undefined;
             counts.cuts++;
@@ -107,6 +118,7 @@ export async function pgProxy(database: string) {
     close: () =>
       new Promise<void>((r) => {
         cut();
+        for (const s of halfOpen) s.destroy();
         server.close(() => r());
       }),
   };

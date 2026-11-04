@@ -4,7 +4,7 @@ import pg from "pg";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import { bignum } from "../../src/config/schema.ts";
 import { Store } from "../../src/db/store.ts";
-import { createTableSql, storedJson, tableInfo } from "../../src/db/table.ts";
+import { createTableSql, primaryKeySql, storedJson, tableInfo } from "../../src/db/table.ts";
 import { approxBytes } from "../../src/utils/memory.ts";
 
 const url = process.env.DATABASE_URL;
@@ -487,5 +487,28 @@ test.skipIf(url === undefined)(
     await commit(store);
     const { rows: back } = await pool.query(`SELECT id, body, meta FROM notes ORDER BY id`);
     expect(back).toEqual([rows[3], rows[1], rows[2], rows[0]]);
+  },
+);
+
+test.skipIf(url === undefined)(
+  "after a lost connection, keys are found again in a schema whose name needs quotes",
+  async () => {
+    const quoted = `"Kasbah_Test_Store"`;
+    const p = new pg.Pool({ connectionString: url, max: 1, options: `-c search_path=${quoted}` });
+    const c = await p.connect();
+    try {
+      await c.query(`DROP SCHEMA IF EXISTS ${quoted} CASCADE; CREATE SCHEMA ${quoted}`);
+      await c.query(createTableSql(tableInfo(balances), { primaryKey: false }));
+      const store = new Store(drizzle(p), [balances], { complete: true });
+      await store.recheckKeys(c);
+      expect(store.unkeyed).toBe(1);
+      for (const statement of primaryKeySql(tableInfo(balances))) await c.query(statement);
+      await store.recheckKeys(c);
+      expect(store.unkeyed).toBe(0);
+    } finally {
+      await c.query(`DROP SCHEMA IF EXISTS ${quoted} CASCADE`);
+      c.release();
+      await p.end();
+    }
   },
 );

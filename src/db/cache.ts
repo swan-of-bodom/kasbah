@@ -291,11 +291,14 @@ export class EventCache {
   ): Promise<EventCache> {
     const cache = new EventCache(pool, chainId, o.maxCalls ?? DEFAULTS.maxCalls);
     for (const sql of SCHEMA_SQL(cache.#schema)) await pool.query(sql);
-    cache.#callRows = Number(
+    const counted = Number(
       (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${cache.#schema}.calls`)).rows[0]!
         .n,
     );
-    await cache.#pruneCalls(pool);
+    await transaction(pool, async (tx) => {
+      cache.#callRows = counted;
+      await cache.#pruneCalls(tx);
+    });
     cache.#committedCallRows = cache.#callRows;
     return cache;
   }

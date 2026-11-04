@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import { RetryingPool } from "../../src/db/pool.ts";
-import { lostConnection, retrying } from "../../src/db/retry.ts";
+import { CommitUnknown, lostConnection, retrying } from "../../src/db/retry.ts";
 import { transaction } from "../../src/db/transaction.ts";
 import { Stopped } from "../../src/utils/errors.ts";
 import { pgProxy } from "../fixtures/pgproxy.ts";
@@ -19,6 +19,7 @@ test("a lost connection is told apart from other errors", () => {
   expect(lostConnection(new Error("query failed", { cause: lost() }))).toBe(true);
   expect(lostConnection(Object.assign(new Error("duplicate key"), { code: "23505" }))).toBe(false);
   expect(lostConnection(new Error('syntax error at or near "SELEC"'))).toBe(false);
+  expect(lostConnection(new CommitUnknown("unknown", { cause: lost() }))).toBe(false);
 });
 
 test("retries wait about 125 ms and twice as long each time (half to all of it, at random), then the last try's error is thrown", async () => {
@@ -127,6 +128,38 @@ describe.skipIf(url === undefined)("through a proxy that loses connections", () 
       await tx.query(`INSERT INTO ${schema}.before_commit VALUES (1)`);
     });
     expect([attempts, await rows()]).toEqual([[0, 1], 1]);
+  });
+
+  test("a COMMIT lost on a connection Postgres keeps open ends that transaction, then runs it again", async () => {
+    const rows = await keylessTable("half_open");
+    const attempts: number[] = [];
+    proxy.cutCommit("half-open");
+    await transaction(pool, async (tx, attempt) => {
+      attempts.push(attempt);
+      await tx.query(`INSERT INTO ${schema}.half_open VALUES (1)`);
+    });
+    expect([attempts, await rows()]).toEqual([[0, 1], 1]);
+  });
+
+  test("a COMMIT whose outcome Postgres can't be asked fails without running the transaction again", async () => {
+    const rows = await keylessTable("unknown");
+    const p = new RetryingPool(
+      { connectionString: proxy.url, max: 1 },
+      { tries: 3, firstWaitMs: 10 },
+    );
+    const attempts: number[] = [];
+    try {
+      const e = await transaction(p, async (tx, attempt) => {
+        attempts.push(attempt);
+        await tx.query(`INSERT INTO ${schema}.unknown VALUES (1)`);
+        proxy.down(1_000);
+      }).catch((x: unknown) => x);
+      expect([e instanceof CommitUnknown, attempts]).toEqual([true, [0]]);
+    } finally {
+      await p.end();
+      proxy.down(0);
+    }
+    expect(await rows()).toBe(0);
   });
 
   test("a connection lost in the middle of a transaction runs all of it again", async () => {

@@ -426,19 +426,24 @@ queries, and an `error` nobody listens to throws. As Ponder does (`queryBuilder.
   random half to all of its step: with fixed steps, retries fell in step with a test's outages (waits of 250, 500,
   1,000 ms against a 240 ms cycle) and every one landed while the database was down.
 - `RetryingPool` (`src/db/pool.ts`): listens for `error`, and sends a single `query` again, so every statement
-  kasbah sends that way is a read or an idempotent write (`IF NOT EXISTS`, `ON CONFLICT`, the lock's heartbeat).
+  kasbah sends that way is a read or an idempotent write (`IF NOT EXISTS`, `ON CONFLICT`, the lock's heartbeat,
+  which only moves forward: a beat retried through an outage may land after a newer one). Writes that can't be
+  sent twice (the calls pruned at open, a key a handler's `find` adds) go through `transaction()`.
 - `transaction()` retries the whole transaction, listening on its connection meanwhile; its body gets the
   attempt and leaves memory as it found it until COMMIT: the store and the cache let go of a batch after the
   transaction ends (`written`), and a retried commit or key build reads which tables have keys from Postgres
   first (`recheckKeys`). A COMMIT whose answer was lost may or may not have happened: the transaction asked
   `txid_current()` after BEGIN, and Postgres says whether that id committed (`txid_status`), so a batch is never
-  written twice nor dropped. Ponder retries such a COMMIT blindly; its keys refuse a batch written twice, kasbah's
+  written twice nor dropped. One still in progress belongs to a backend that hasn't seen its client go (a network
+  drop that never reached the server): kasbah ends it (`pg_terminate_backend`), which settles it. When Postgres
+  can't be asked, or no longer keeps the outcome, the run ends (`CommitUnknown`) rather than guess; a restart
+  reads the checkpoint, which says. Ponder retries such a COMMIT blindly; its keys refuse a batch written twice, kasbah's
   tables have none during a backfill. Measured with a real `docker restart` mid-run: refused, "the database system
   is starting up", back after 3 retries, the transaction caught in its COMMIT found committed, 400 of 400 rows.
 - The screen says so: "database connection lost (…): retry 3 of 9 in 0.5s", then "database: connected again".
   The API's pool only stops crashing; a request that loses its connection fails, and the client asks again.
 - Tested through `test/fixtures/pgproxy.ts`, a TCP proxy that drops every connection, refuses new ones for a
-  while, or drops the next COMMIT before Postgres sees it or after it ran it. A run with each fault twice ends on
+  while, or drops the next COMMIT before Postgres sees it, after it ran it, or on the client's side only. A run with each fault twice ends on
   the chain's state, every event stored once. With a fault every 150 ms or less, a transaction can't finish
   between two of them and the run gives up after the last retry: a database that unusable is an outage.
 - A transaction retries from its start, so the longest is the most fragile: the key build after a backfill
