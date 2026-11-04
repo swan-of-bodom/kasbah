@@ -7,12 +7,10 @@ export type Meta = { checkpoint?: number; checkpointTime?: number; chain?: strin
 export type Status = Record<string, { id: string; block: { number: number; timestamp: number } }>;
 
 export async function readMeta(reader: Reader): Promise<Meta> {
-  return reader.transaction(async (client) => {
-    const { rows } = await client.query<{ key: string; value: unknown }>(
-      `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'checkpointTime', 'chain', 'phase')`,
-    );
-    return Object.fromEntries(rows.map((r) => [r.key, r.value])) as Meta;
-  });
+  const { rows } = await reader.pool.query<{ key: string; value: unknown }>(
+    `SELECT key, value FROM _kasbah_meta WHERE key IN ('checkpoint', 'checkpointTime', 'chain', 'phase')`,
+  );
+  return Object.fromEntries(rows.map((r) => [r.key, r.value])) as Meta;
 }
 
 export async function readStatus(reader: Reader): Promise<Status> {

@@ -5,11 +5,18 @@ import { DrizzleQueryError } from "drizzle-orm/errors";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { PgTable } from "drizzle-orm/pg-core";
 import { type Context, Hono } from "hono";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { HTTPException } from "hono/http-exception";
 import { ConfigError } from "../config/errors.ts";
 import { tableInfo } from "../db/table.ts";
-import { type ApiApp, type ApiContext, apiContext, type Tables } from "./context.ts";
+import {
+  type ApiApp,
+  type ApiContext,
+  apiContext,
+  detailedErrors,
+  type Tables,
+} from "./context.ts";
 import { prometheus } from "./prometheus.ts";
 import { Reader, type ReaderOptions } from "./reader.ts";
 import { type Meta, readMeta, readStatus } from "./status.ts";
@@ -24,6 +31,9 @@ export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   /** `GET /metrics` in Prometheus' format: the indexer's, when it runs the API; else the checkpoint and phase. */
   metrics?: () => string;
 };
+
+/** A request body's size at most: a GraphQL query or a route's JSON is far smaller, and the body is read whole. */
+const MAX_BODY = 1 << 20;
 
 /** Browsers may cache a CORS preflight's answer this long (seconds). */
 const CORS_MAX_AGE = 86_400;
@@ -102,6 +112,12 @@ export class Api {
 function routes(reader: Reader, o: ApiOptions): Hono {
   const root = new Hono()
     .use(cors({ origin: "*", maxAge: CORS_MAX_AGE }))
+    .use(
+      bodyLimit({
+        maxSize: MAX_BODY,
+        onError: (c) => c.text(`request body over ${MAX_BODY / 2 ** 20} MB`, 413),
+      }),
+    )
     .get("/metrics", async (c) => c.text(o.metrics?.() ?? storedMetrics(await readMeta(reader))))
     .get("/health", (c) => c.text("", 200))
     .get("/ready", async (c) =>
@@ -146,6 +162,7 @@ function onError(thrown: Error, c: Context): Response {
   const found = error.stack?.match(FILE)?.[0]?.trim();
   const file = found?.replace(/^\(/, "").replace(/^file:\/\//, "");
   console.error(`[kasbah api] ${c.req.method} ${c.req.path}:`, thrown);
+  if (!detailedErrors()) return c.text("Internal Server Error", 500);
   return c.text(
     `${error.name}: ${error.message} occurred in '${file}' while handling a '${c.req.method}' request to the route '${c.req.path}'`,
     500,

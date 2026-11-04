@@ -648,8 +648,11 @@ Target size: under 10k lines for v1.
      app's own (the default export of `src/api/index.ts`), as in Ponder. `db` and `graphql()` come from
      `kasbah/api`; they find the API serving the request through `AsyncLocalStorage`, so two APIs in one process
      (tests, `serve` next to an indexer) never mix. An earlier `app.get`/`app.post` kept the API dependency-free,
-     but an app wanting middleware, validation or its own errors had to wait for kasbah; Hono gives them, and
-     `hono` is an optional peer, needed only by an app with an API.
+     but an app wanting middleware, validation or its own errors had to wait for kasbah; Hono gives them. `hono` is a
+     dependency (as an optional peer, a project without it, from npm or an older `init`, crashed when the built-in
+     endpoints loaded it). A request body may take 1 MB. An error a route throws reaches the client in full only in
+     `kasbah dev` (`NODE_ENV=development`, which `dev` sets); elsewhere it's a plain 500 and a log line, so a lock
+     timeout or a bug doesn't show a server path to anyone.
    - Every query runs as `<schema>_reader`, a login role kasbah creates (or `api.readDatabase`) with SELECT on the
      app's tables and `_kasbah_meta` only. Its password is an HMAC of the database URL and the role's name, so
      every process on the schema sets the same one (at first each start set a random one, locking out the
@@ -670,9 +673,15 @@ Target size: under 10k lines for v1.
      as written where Ponder lowercases them, so filters match as stored; no enums or views, which kasbah doesn't
      create; `status` is `/status`'s (the chain's name as its id); two tables whose fields would collide, or a
      relation named like a column, are refused at startup; a query's own mistakes (a bad cursor, a value Postgres
-     refuses, a limit over 1,000) are GraphQL errors that keep their message in production too. And, to run
-     anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages multiply:
-     1,000 × 1,000 × …), and all its statements the query timeout.
+     refuses, a limit over 1,000) are GraphQL errors that keep their message, and everything else is masked unless
+     in `kasbah dev`, judged by the error's name since a plugin may load another copy of graphql (the token limit's
+     message was masked so); an int8 read as a number is a `Float`, not Ponder's 32-bit `Int`; a column type of the
+     app's own reads back as `JSON` with no filters, where Ponder refuses the schema; a date column's filters and
+     keys take the milliseconds it reads back as, or an ISO date (Ponder passes the string to Drizzle, which fails).
+     And, to run anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages
+     multiply: 1,000 × 1,000 × …), it runs at most 500 statements, four at a time (half the pool, so one request
+     never holds every connection), and all within the query timeout; past a limit, its later statements fail
+     at once.
    - `GET /status`: `{ "<chain>": { id, block: { number, timestamp } } }`, the checkpoint and its block's time,
      Ponder's shape (the chain's name as its id: kasbah stores no numeric one).
    - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables` takes both, so
@@ -684,7 +693,7 @@ Target size: under 10k lines for v1.
    - `GET /health`: 200 while the process answers. `GET /ready`: 200 once the phase is live (or done: a run with
      `to` that indexed through it, keys built), else 503. `GET /metrics`: the `Status` in Prometheus' text format
      (`src/indexer/metrics.ts`), or, with no indexer in the process, the stored checkpoint and phase. A route's
-     error is a 500 naming the route, an `HTTPException` its own status. Auth, rate limits and TLS are left to a
+     error is a 500 (naming the route in `dev`), an `HTTPException` its own status. Auth, rate limits and TLS are left to a
      proxy in front, as in Ponder.
 6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
 

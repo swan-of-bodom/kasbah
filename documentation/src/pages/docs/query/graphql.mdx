@@ -53,7 +53,8 @@ Pass `endCursor` as `after` until `hasNextPage` is false; `startCursor` as `befo
 ## Relations
 
 Drizzle `relations()` exported from `kasbah.schema.ts` become fields: a `one()` is the related row (a page's are
-loaded in one statement), a `many()` a page with the same arguments as `pools`. A `many()` needs the `one()` back.
+loaded in one statement), a `many()` a page with the same arguments as `pools`. A `many()`, and a `one()` without
+`fields`, take their columns from the `one()` back.
 
 ## Indexing status
 
@@ -67,4 +68,10 @@ loaded in one statement), a `many()` a page with the same arguments as `pools`. 
 
 A request can have at most 1,000 tokens, a depth of 100 and 30 aliases (`graphql({ db, schema }, { maxOperationTokens,
 maxOperationDepth, maxOperationAliases })` changes them). The rows one request reads may take at most a sixteenth of
-the API's heap, and its statements the query timeout in total; past either, it gets an error instead.
+the API's heap, it may run at most 500 SQL statements (a `many()` runs one per parent row), four at a time, and all
+of them within the query timeout; past any of these, it gets an error instead.
+
+## Errors
+
+A mistake in the query (a bad cursor, a limit over 1,000, a value Postgres refuses, a limit above) comes back with its
+message. Any other error comes back as `Unexpected error.`, and the process logs it; `kasbah dev` shows it in full.

@@ -11,7 +11,6 @@ import {
   eq,
   extractTablesRelationalConfig,
   getTableColumns,
-  getTableName,
   gt,
   gte,
   ilike,
@@ -30,12 +29,13 @@ import {
   notLike,
   One,
   or,
+  type Relation,
   type SQL,
   type TableRelationalConfig,
 } from "drizzle-orm";
 import { DrizzleQueryError } from "drizzle-orm/errors";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { PgBigInt53, PgInteger, PgSerial, type PgTable } from "drizzle-orm/pg-core";
+import { PgInteger, PgSerial, type PgTable } from "drizzle-orm/pg-core";
 import {
   GraphQLBoolean,
   GraphQLEnumType,
@@ -55,6 +55,8 @@ import {
   GraphQLScalarType,
   GraphQLSchema,
   GraphQLString,
+  Kind,
+  type SelectionNode,
 } from "graphql";
 import superjson from "superjson";
 import { ConfigError } from "../../config/errors.ts";
@@ -96,6 +98,10 @@ const MAX_LIMIT = 1000;
 const MAX_BATCH_SIZE = 1_000;
 /** Share of the heap one request's rows may take: lists nested in lists multiply, and one request must not exhaust it. */
 const REQUEST_HEAP_SHARE = 1 / 16;
+/** Statements one request may run: a list in a list runs one per parent row, which nesting multiplies. */
+const MAX_STATEMENTS = 500;
+/** Statements one request runs at once: half the API's pool, so one request never holds every connection. */
+const MAX_PARALLEL_STATEMENTS = 4;
 
 /** A mistake in the query: its message reaches the client, in production too. */
 function fail(message: string): never {
@@ -109,32 +115,67 @@ function fail(message: string): never {
  */
 export class RequestBudget {
   #bytes = 0;
+  #statements = 0;
+  #running = 0;
+  readonly #waiting: (() => void)[] = [];
+  /** The limit a statement crossed: every later one fails with it, so siblings stop too. */
+  #over: string | undefined;
   readonly #maxBytes: number;
+  readonly #maxStatements: number;
   readonly #timeoutMs: number;
   readonly #deadline: number;
 
-  constructor({ timeoutMs, maxBytes }: { timeoutMs: number; maxBytes?: number }) {
+  constructor({
+    timeoutMs,
+    maxBytes,
+    maxStatements,
+  }: { timeoutMs: number; maxBytes?: number; maxStatements?: number }) {
     this.#timeoutMs = timeoutMs;
     this.#maxBytes = maxBytes ?? Math.floor(heapLimit() * REQUEST_HEAP_SHARE);
+    this.#maxStatements = maxStatements ?? MAX_STATEMENTS;
     this.#deadline = performance.now() + timeoutMs;
   }
 
+  /** Runs `query` (a Drizzle query, which starts only when awaited) within the request's limits. */
   async read<T>(query: PromiseLike<T>): Promise<T> {
-    if (performance.now() > this.#deadline) fail(`query cancelled after ${this.#timeoutMs} ms`);
+    this.#check();
+    if (++this.#statements > this.#maxStatements)
+      this.#fail(
+        `query needs more than ${this.#maxStatements} SQL statements: nest fewer lists, or ask for fewer rows in the outer ones`,
+      );
+    if (this.#running >= MAX_PARALLEL_STATEMENTS)
+      await new Promise<void>((resolve) => this.#waiting.push(resolve));
+    this.#running++;
     let result: T;
     try {
+      this.#check();
       result = await query;
     } catch (e) {
+      if (e instanceof GraphQLError) throw e;
       const error = asQueryError(e, this.#timeoutMs);
       if (error instanceof QueryError) throw new GraphQLError(error.message);
       throw error instanceof DrizzleQueryError ? (error.cause ?? error) : error;
+    } finally {
+      this.#running--;
+      this.#waiting.shift()?.();
     }
     this.#bytes += approxBytes(result);
     if (this.#bytes > this.#maxBytes)
-      fail(
+      this.#fail(
         `query reads more than ${(this.#maxBytes / 2 ** 20).toFixed(1)} MB of rows: ask for fewer (limit) or nest fewer lists`,
       );
     return result;
+  }
+
+  #check() {
+    if (this.#over !== undefined) fail(this.#over);
+    if (performance.now() > this.#deadline)
+      this.#fail(`query cancelled after ${this.#timeoutMs} ms`);
+  }
+
+  #fail(message: string): never {
+    this.#over = message;
+    return fail(message);
   }
 }
 
@@ -226,8 +267,15 @@ export function buildGraphQLSchema({ schema }: { schema: Tables }): GraphQLSchem
           const referencedEntityFilterType = entityFilterTypes[referencedTable.tsName]!;
 
           if (is(relation, One)) {
-            const fields = relation.config?.fields ?? [];
-            const references = relation.config?.references ?? [];
+            // An inverse one(), with no columns of its own, takes them from the one() back to this table.
+            const own = relation.config?.fields !== undefined && relation.config.fields.length > 0;
+            const back = own ? undefined : oneBack(relation, table, referencedTable);
+            if (!own && back === undefined)
+              throw new ConfigError(
+                `relation ${table.tsName}.${relationName}: give it fields and references, or give ${referencedTable.tsName} a one() back to ${table.tsName} that has them`,
+              );
+            const fields = own ? relation.config!.fields : back!.config!.references;
+            const references = own ? relation.config!.references : back!.config!.fields;
             if (fields.length !== references.length)
               throw new ConfigError(
                 `relation ${table.tsName}.${relationName}: fields and references must be as many`,
@@ -246,24 +294,7 @@ export function buildGraphQLSchema({ schema }: { schema: Tables }): GraphQLSchem
               },
             };
           } else if (is(relation, Many)) {
-            // The `one` on the other side gives the columns: the one named alike, else the first to this table.
-            let oneRelation: One | undefined;
-            if (relation.relationName !== undefined) {
-              for (const r of Object.values(referencedTable.relations)) {
-                if (is(r, One) && relation.relationName === r.relationName) {
-                  oneRelation = r;
-                  break;
-                }
-              }
-            }
-            if (oneRelation === undefined) {
-              for (const r of Object.values(referencedTable.relations)) {
-                if (is(r, One) && table.dbName === r.referencedTableName) {
-                  oneRelation = r;
-                  break;
-                }
-              }
-            }
+            const oneRelation = oneBack(relation, table, referencedTable);
             if (oneRelation === undefined)
               throw new ConfigError(
                 `relation ${table.tsName}.${relationName}: ${referencedTable.tsName} needs the one() relation back to ${table.tsName}`,
@@ -443,27 +474,21 @@ function columnToGraphQLCore(column: Column): GraphQLOutputType {
     case "bigint":
       return GraphQLBigInt;
     case "number":
-      return is(column, PgInteger) || is(column, PgSerial) || is(column, PgBigInt53)
-        ? GraphQLInt
-        : GraphQLFloat;
+      // GraphQL's Int is 32 bits: an int8 read as a number goes past it, a Float holds it exactly up to 2^53.
+      return is(column, PgInteger) || is(column, PgSerial) ? GraphQLInt : GraphQLFloat;
     case "buffer":
       return new GraphQLList(new GraphQLNonNull(GraphQLInt));
     case "array": {
       if (column.columnType === "PgVector" || column.columnType === "PgGeometry")
         return new GraphQLList(new GraphQLNonNull(GraphQLFloat));
       const base = (column as unknown as { baseColumn?: Column }).baseColumn;
-      if (base === undefined) return unsupported(column);
+      if (base === undefined) return GraphQLJSON;
       return new GraphQLList(new GraphQLNonNull(columnToGraphQLCore(base)));
     }
     default:
-      return unsupported(column);
+      // A customType of the app's own: read back as it is, without filters.
+      return GraphQLJSON;
   }
-}
-
-function unsupported(column: Column): never {
-  throw new ConfigError(
-    `${getTableName(column.table)}.${column.name}: GraphQL has no type for ${column.getSQLType()}; use bignum(), hex() or another of Drizzle's column types`,
-  );
 }
 
 function innerType(type: GraphQLOutputType): GraphQLScalarType | GraphQLEnumType {
@@ -724,8 +749,9 @@ function buildWhereConditions(
   return conditions;
 }
 
-function condition(column: Column, suffix: ConditionSuffix, value: any): SQL | undefined {
+function condition(column: Column, suffix: ConditionSuffix, given: any): SQL | undefined {
   const array = column.columnType === "PgArray";
+  const value = column.dataType === "date" ? dates(given) : given;
   switch (suffix) {
     case "":
       if (array) return and(arrayContains(column, value), arrayContained(column, value));
@@ -873,7 +899,9 @@ export function buildDataLoaderCache({ db, budget }: Pick<GraphqlContext, "db" |
               ),
             )
             .map((fragment) =>
-              rows.find((row) => Object.entries(fragment).every(([col, val]) => row[col] === val)),
+              rows.find((row) =>
+                Object.entries(fragment).every(([col, val]) => same(row[col], val)),
+              ),
             );
         },
         { maxBatchSize: MAX_BATCH_SIZE },
@@ -886,6 +914,7 @@ export function buildDataLoaderCache({ db, budget }: Pick<GraphqlContext, "db" |
 
 function normalizeColumn(column: Column, value: unknown): unknown {
   if (value === undefined || value === null) return null;
+  if (column.dataType === "date") return dates(value);
   if (Array.isArray(value) && column.columnType === "PgArray") {
     const base = (column as unknown as { baseColumn: Column }).baseColumn;
     return value.map((v) =>
@@ -900,10 +929,49 @@ function getColumnTsName(column: Column): string {
   return Object.entries(getTableColumns(column.table)).find(([, c]) => c.name === column.name)![0];
 }
 
-/** Whether the field's selection asks for `fieldName`, one level down. */
+/** Whether the field's selection asks for `fieldName`, one level down, fragments included. */
 function selectionIncludesField(info: GraphQLResolveInfo, fieldName: string): boolean {
-  for (const fieldNode of info.fieldNodes)
-    for (const selection of fieldNode.selectionSet?.selections ?? [])
-      if (selection.kind === "Field" && selection.name.value === fieldName) return true;
-  return false;
+  const visited = new Set<string>();
+  const has = (selections: readonly SelectionNode[]): boolean =>
+    selections.some((s) => {
+      if (s.kind === Kind.FIELD) return s.name.value === fieldName;
+      if (s.kind === Kind.INLINE_FRAGMENT) return has(s.selectionSet.selections);
+      if (visited.has(s.name.value)) return false;
+      visited.add(s.name.value);
+      const fragment = info.fragments[s.name.value];
+      return fragment !== undefined && has(fragment.selectionSet.selections);
+    });
+  return info.fieldNodes.some((node) => has(node.selectionSet?.selections ?? []));
 }
+
+/**
+ * The one() on `other` back to `table`, which gives the columns of a relation between them: the one named alike,
+ * else the first one to `table` that has columns.
+ */
+function oneBack(
+  relation: Relation,
+  table: TableRelationalConfig,
+  other: TableRelationalConfig,
+): One | undefined {
+  const ones = Object.values(other.relations).filter(
+    (r): r is One => is(r, One) && r !== relation && (r.config?.fields.length ?? 0) > 0,
+  );
+  if (relation.relationName !== undefined) {
+    const named = ones.find((r) => r.relationName === relation.relationName);
+    if (named !== undefined) return named;
+  }
+  return ones.find((r) => r.referencedTableName === table.dbName);
+}
+
+/** A date column's value from a query, read as the API writes it (milliseconds since 1970) or as an ISO date. */
+function dates(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(dates);
+  if (value === null || value instanceof Date) return value;
+  const date = /^-?\d+$/.test(String(value)) ? new Date(Number(value)) : new Date(String(value));
+  if (Number.isNaN(date.getTime())) fail(`Invalid date: ${String(value)}`);
+  return date;
+}
+
+/** Whether a row's value equals a key's: dates by their time. */
+const same = (a: unknown, b: unknown): boolean =>
+  a instanceof Date && b instanceof Date ? a.getTime() === b.getTime() : a === b;

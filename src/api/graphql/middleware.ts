@@ -4,10 +4,10 @@ import { maxAliasesPlugin } from "@escape.tech/graphql-armor-max-aliases";
 import { maxDepthPlugin } from "@escape.tech/graphql-armor-max-depth";
 import { maxTokensPlugin } from "@escape.tech/graphql-armor-max-tokens";
 import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
-import { type GraphQLSchema, printSchema } from "graphql";
+import { GraphQLError, type GraphQLSchema, printSchema } from "graphql";
 import { createYoga } from "graphql-yoga";
 import { createMiddleware } from "hono/factory";
-import { currentApi, type Tables } from "../context.ts";
+import { currentApi, detailedErrors, type Tables } from "../context.ts";
 import type { Reader } from "../reader.ts";
 import { readStatus } from "../status.ts";
 import { graphiQLHtml } from "./graphiql.ts";
@@ -65,8 +65,13 @@ export function graphql(
         status: () => readStatus(api.reader),
       };
     },
-    maskedErrors: process.env.NODE_ENV === "production",
-    logging: false,
+    maskedErrors: detailedErrors() ? false : { maskError },
+    logging: {
+      debug() {},
+      info() {},
+      warn() {},
+      error: (...a) => console.error("[kasbah graphql]", ...a),
+    },
     graphiql: false,
     parserAndValidationCache: false,
     plugins: [
@@ -87,6 +92,20 @@ export function graphql(
       headers: new Headers(response.headers),
     });
   });
+}
+
+/**
+ * Keeps the query's own mistakes (a limit, a bad cursor, a value Postgres refused) and hides the rest. A GraphQL
+ * error is known by its name, not `instanceof`: a plugin may load another copy of graphql.
+ */
+function maskError(error: unknown, message: string): Error {
+  const fromQuery = (e: unknown): boolean =>
+    e instanceof Error &&
+    e.name === "GraphQLError" &&
+    ((e as { originalError?: unknown }).originalError == null ||
+      fromQuery((e as { originalError?: unknown }).originalError));
+  if (fromQuery(error)) return error as Error;
+  return new GraphQLError(message, { extensions: { code: "INTERNAL_SERVER_ERROR" } });
 }
 
 /** `generated/schema.graphql`, for editors and code generators. */

@@ -73,20 +73,13 @@
     "@noble/hashes": "^2.0.0",
     "dataloader": "^2.2.3",
     "drizzle-orm": "0.45.4",
-    "graphql": "^16.8.2",
+    "graphql": "^16.14.2",
     "graphql-yoga": "5.17.1",
+    "hono": "^4.13.16",
     "pg": "^8.23.1",
     "pg-copy-streams": "^7.0.0",
     "pg-query-emscripten": "5.1.0",
     "superjson": "^2.2.6"
-  },
-  "peerDependencies": {
-    "hono": ">=4.5"
-  },
-  "peerDependenciesMeta": {
-    "hono": {
-      "optional": true
-    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
@@ -95,7 +88,6 @@
     "@types/pg": "^8.23.1",
     "@types/pg-copy-streams": "^1.2.5",
     "@types/ws": "^8.18.2",
-    "hono": "^4.13.16",
     "starknet": "^10.8.0",
     "typescript": "^5.9.0",
     "vitest": "^4.0.0",

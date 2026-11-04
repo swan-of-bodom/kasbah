@@ -29,8 +29,10 @@ export default app;
   locks tables). It works while kasbah serves a request; endpoints have no RPC client: read what handlers stored.
 - JSON has no bigints: `replaceBigInts(value, String)` turns every bigint in a value into a string.
 - Anything Hono does works: middleware, other HTTP methods, `c.req.query()`, a `Response` with your own headers.
-- `throw new HTTPException(status, { message })` answers with that status; any other error answers 500 with its
-  message, the file it came from and the route.
+- `throw new HTTPException(status, { message })` answers with that status. Any other error answers 500: in
+  `kasbah dev` with its message, the file it came from and the route; elsewhere with `Internal Server Error`, and
+  the process logs it.
+- A request body may be at most 1 MB; a larger one gets a 413 before your route runs.
 
 ## Built-in endpoints
 

@@ -4,6 +4,13 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- API errors: outside `kasbah dev`, an error a route or GraphQL didn't expect reaches the client as a plain 500
+  (`Internal Server Error`, or GraphQL's `Unexpected error.`) and is logged; `dev` shows it in full. A request body
+  over 1 MB gets a 413. A GraphQL request runs at most 500 statements, four at a time.
+- GraphQL: `totalCount` inside a fragment is counted; a `one()` without `fields` takes them from the `one()` back;
+  date columns filter and look up by the milliseconds they read back as, or an ISO date; an int8 read as a number is
+  a `Float`; a column type of the app's own is `JSON` instead of stopping the app. `replaceBigInts` leaves `Date`s
+  and `Buffer`s as they are.
 - Templates: `kasbah init --template erc20|ekubo|jediswap` (or `pnpm create kasbah --template …`, or pick one when
   `init` asks what to start from) writes a finished mainnet app: LORDS balances, transfers and allowances with GraphQL
   relations; Ekubo's pools and swaps; JediSwap's pairs found through its factory. They replace `examples/`.
@@ -16,8 +23,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   it after its own `/health`, `/ready`, `/status` and `/metrics`. `db` and `graphql()` come from the new `kasbah/api`
   entry: mount GraphQL with `app.use("/graphql", graphql({ db, schema }))`. Gone:
   `app.get`/`app.post` (write Hono routes: `app.get("/x", (c) => c.json(…))`, `HttpError` becomes Hono's
-  `HTTPException`), `POST /sql`, `GET /live`, the commit `NOTIFY` and `GET /graphql?query=`. Add `hono` to an app's dependencies;
-  an app without an API doesn't need it. `replaceBigInts(value, String)` turns bigints into strings for JSON.
+  `HTTPException`), `POST /sql`, `GET /live`, the commit `NOTIFY` and `GET /graphql?query=`. `hono` comes with kasbah; a
+  project whose `src/api/index.ts` imports it lists it too (`init` does). `replaceBigInts(value, String)` turns bigints into strings for JSON.
   API queries time out after 30 s (was 10 s) and wait at most 500 ms for a lock. `/health` and `/ready` answer
   with an empty body (`/ready` with "Historical indexing is not complete." before), and `/status` is
   `{ "<chain>": { id, block: { number, timestamp } } }`.

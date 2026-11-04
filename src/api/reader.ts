@@ -25,16 +25,14 @@ export const API_LOCK_TIMEOUT_MS = 500;
 /** Connections the API keeps to Postgres. */
 const API_POOL_SIZE = 8;
 
-export class QueryError extends Error {
-  readonly status: number;
-  constructor(message: string, status = 400) {
-    super(message);
-    this.status = status;
-  }
-}
+/** A Postgres error the client's query caused: its message reaches the client. */
+export class QueryError extends Error {}
 
-/** Names Postgres gives errors a reader can cause; everything else is ours (500). */
-const CLIENT_ERRORS = new Set(["42", "22", "0A", "21", "25", "54", "57014"]);
+/**
+ * Postgres error classes a GraphQL client can cause with the values it sends: a value out of a type's range (22), a
+ * filter too large (54), and the statement timeout. kasbah writes the SQL, so anything else is ours.
+ */
+const CLIENT_ERRORS = new Set(["22", "54", "57014"]);
 const clientError = (e: unknown) => {
   const code = errorCode(e);
   return code !== undefined && (CLIENT_ERRORS.has(code) || CLIENT_ERRORS.has(code.slice(0, 2)));
@@ -115,31 +113,6 @@ export class Reader {
       await owner.end();
     }
     return new Reader(url, o);
-  }
-
-  /** Runs `body` in a read-only transaction on the app's schema, then rolls it back. */
-  async transaction<T>(body: (client: pg.PoolClient) => Promise<T>): Promise<T> {
-    const client = await this.pool.connect();
-    // pg-pool listens on idle connections only: one that dies mid-request would otherwise end the process.
-    const ignore = () => {};
-    client.on("error", ignore);
-    let broken: Error | undefined;
-    try {
-      await client.query(
-        `BEGIN READ ONLY; SET LOCAL statement_timeout = ${this.timeoutMs}; SET LOCAL search_path TO ${quote(this.#schema)}`,
-      );
-      try {
-        return await body(client);
-      } catch (e) {
-        throw asQueryError(e, this.timeoutMs);
-      } finally {
-        // A failed ROLLBACK leaves the connection unusable: dropped, and the query's own error kept.
-        await client.query("ROLLBACK").catch((e: Error) => (broken = e));
-      }
-    } finally {
-      client.removeListener("error", ignore);
-      client.release(broken);
-    }
   }
 
   async close() {

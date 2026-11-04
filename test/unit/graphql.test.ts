@@ -2,6 +2,7 @@ import { relations } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/node-postgres";
 import {
   boolean,
+  customType,
   date,
   doublePrecision,
   bigint as int8,
@@ -13,6 +14,7 @@ import {
   primaryKey,
   real,
   text,
+  timestamp,
 } from "drizzle-orm/pg-core";
 import { execute, type GraphQLType, parse } from "graphql";
 import { Hono } from "hono";
@@ -529,14 +531,14 @@ it("each column type has its filters", () => {
     int_gte: "Int",
     int_lte: "Int",
 
-    int8Number: "Int",
-    int8Number_not: "Int",
-    int8Number_in: "[Int]",
-    int8Number_not_in: "[Int]",
-    int8Number_gt: "Int",
-    int8Number_lt: "Int",
-    int8Number_gte: "Int",
-    int8Number_lte: "Int",
+    int8Number: "Float",
+    int8Number_not: "Float",
+    int8Number_in: "[Float]",
+    int8Number_not_in: "[Float]",
+    int8Number_gt: "Float",
+    int8Number_lt: "Float",
+    int8Number_gte: "Float",
+    int8Number_lte: "Float",
 
     int8Bigint: "BigInt",
     int8Bigint_not: "BigInt",
@@ -1314,5 +1316,178 @@ it("a request that would read more rows than its share of the heap is refused", 
     expect((enough.data as any).persons.items).toHaveLength(50);
   } finally {
     await pool.end();
+  }
+});
+
+it("totalCount asked for through a fragment spread or an inline fragment is counted", async () => {
+  const person = pgTable("person", { id: text().primaryKey() });
+  const query = await setup({ person }, `INSERT INTO person VALUES ('a'), ('b'), ('c')`);
+  const spread = await query(
+    `query { persons { ...Page } } fragment Page on personPage { totalCount items { id } }`,
+  );
+  expect(spread.errors).toBeUndefined();
+  expect(spread.data.persons.totalCount).toBe(3);
+  const inline = await query(`query { persons { ... on personPage { totalCount } } }`);
+  expect(inline.errors).toBeUndefined();
+  expect(inline.data.persons.totalCount).toBe(3);
+});
+
+it("an inverse one() without columns takes them from the one() back, and finds each parent's row", async () => {
+  const person = pgTable("person", { id: text().primaryKey() });
+  const passport = pgTable("passport", {
+    id: text().primaryKey(),
+    holder: text().notNull(),
+    country: text().notNull(),
+  });
+  const query = await setup(
+    {
+      person,
+      passport,
+      personRelations: relations(person, ({ one }) => ({ passport: one(passport) })),
+      passportRelations: relations(passport, ({ one }) => ({
+        person: one(person, { fields: [passport.holder], references: [person.id] }),
+      })),
+    },
+    `INSERT INTO person VALUES ('ann'), ('bob'), ('cat');
+     INSERT INTO passport VALUES ('p1', 'bob', 'ES'), ('p2', 'ann', 'FR')`,
+  );
+  const result = await query(`{ persons(orderBy: "id") { items { id passport { country } } } }`);
+  expect(result.errors).toBeUndefined();
+  expect(result.data.persons.items).toEqual([
+    { id: "ann", passport: { country: "FR" } },
+    { id: "bob", passport: { country: "ES" } },
+    { id: "cat", passport: null },
+  ]);
+});
+
+it("timestamps filter and look up by the milliseconds the API returns or an ISO date, a relation's key included", async () => {
+  const tick = pgTable(
+    "tick",
+    { pool: text().notNull(), time: timestamp().notNull(), price: integer().notNull() },
+    (t) => [primaryKey({ columns: [t.pool, t.time] })],
+  );
+  const pool = pgTable("pool", { id: text().primaryKey(), lastTime: timestamp().notNull() });
+  const query = await setup(
+    {
+      tick,
+      pool,
+      poolRelations: relations(pool, ({ one }) => ({
+        last: one(tick, { fields: [pool.id, pool.lastTime], references: [tick.pool, tick.time] }),
+      })),
+    },
+    `INSERT INTO tick VALUES ('a', '2024-01-01 00:00:00', 1), ('a', '2024-01-02 00:00:00', 2);
+     INSERT INTO pool VALUES ('a', '2024-01-02 00:00:00')`,
+  );
+  const ok = async (q: string) => {
+    const r = await query(q);
+    expect(r.errors).toBeUndefined();
+    return r.data;
+  };
+  const first = Date.UTC(2024, 0, 1);
+  expect(
+    await ok(`{ ticks(where: { time_not: "2024-01-01T00:00:00Z" }) { items { price } } }`),
+  ).toEqual({
+    ticks: { items: [{ price: 2 }] },
+  });
+  expect(await ok(`{ ticks(where: { time: "${first}" }) { items { price time } } }`)).toEqual({
+    ticks: { items: [{ price: 1, time: String(first) }] },
+  });
+  expect(await ok(`{ ticks(where: { time_in: ["${first}"] }) { items { price } } }`)).toEqual({
+    ticks: { items: [{ price: 1 }] },
+  });
+  expect(await ok(`{ tick(pool: "a", time: "2024-01-02T00:00:00.000Z") { price } }`)).toEqual({
+    tick: { price: 2 },
+  });
+  expect(await ok(`{ pools { items { last { price } } } }`)).toEqual({
+    pools: { items: [{ last: { price: 2 } }] },
+  });
+  expect((await query(`{ tick(pool: "a", time: "soon") { price } }`)).errors?.[0]?.message).toBe(
+    "Invalid date: soon",
+  );
+});
+
+it("an app's own column type reads back as JSON, and an int8 read as a number goes past 32 bits", async () => {
+  const spot = customType<{ data: { x: number; y: number }; driverData: string }>({
+    dataType: () => "text",
+    toDriver: (v) => JSON.stringify(v),
+    fromDriver: (v) => JSON.parse(v),
+  });
+  const thing = pgTable("thing", {
+    id: text().primaryKey(),
+    at: spot(),
+    big: int8({ mode: "number" }).notNull(),
+  });
+  const query = await setup(
+    { thing },
+    `INSERT INTO thing VALUES ('t', '{"x":1,"y":2}', 9007199254740991)`,
+  );
+  const result = await query(
+    `{ thing(id: "t") { at big } things(where: { big_gt: 4294967296 }) { totalCount } }`,
+  );
+  expect(result.errors).toBeUndefined();
+  expect(result.data).toEqual({
+    thing: { at: { x: 1, y: 2 }, big: 9007199254740991 },
+    things: { totalCount: 1 },
+  });
+});
+
+it("a request runs at most its share of statements, a few at a time", async () => {
+  const tables = people();
+  await setup(
+    tables,
+    `INSERT INTO person SELECT 'p' || i FROM generate_series(1, 50) i;
+     INSERT INTO pet SELECT 'd' || i, i, 'p' || (i % 50 + 1) FROM generate_series(1, 100) i`,
+  );
+  const pool = new pg.Pool({ connectionString: url, options: `-c search_path=${pgSchema}` });
+  let running = 0;
+  let most = 0;
+  pool.on("acquire", () => (most = Math.max(most, ++running)));
+  pool.on("release", () => running--);
+  try {
+    const run = (maxStatements: number) => {
+      const db = drizzle(pool, { schema: tables });
+      const budget = new RequestBudget({ timeoutMs: 30_000, maxStatements });
+      return execute({
+        schema: buildGraphQLSchema({ schema: tables }),
+        contextValue: {
+          db,
+          budget,
+          getDataLoader: buildDataLoaderCache({ db, budget }),
+          status: async () => ({}),
+        },
+        document: parse(`{ persons { items { id pets { items { id } } } } }`),
+      });
+    };
+    const capped = await run(20);
+    expect(capped.errors?.[0]?.message).toMatch(/query needs more than 20 SQL statements/);
+    const enough = await run(500);
+    expect(enough.errors).toBeUndefined();
+    expect((enough.data as any).persons.items).toHaveLength(50);
+    expect(most).toBeLessThanOrEqual(4);
+  } finally {
+    await pool.end();
+  }
+});
+
+it("an error the query didn't cause reaches the client as unexpected, and the process logs it", async () => {
+  const person = pgTable("person", { id: text().primaryKey() });
+  const query = await setup({ person }, `INSERT INTO person VALUES ('a')`);
+  const owner = new pg.Client({ connectionString: url });
+  await owner.connect();
+  await owner.query(`DROP TABLE ${pgSchema}.person`);
+  await owner.end();
+  const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const result = await query(`{ persons { items { id } } }`);
+    expect(result.errors?.[0]?.message).toBe("Unexpected error.");
+    expect(JSON.stringify(result)).not.toMatch(/person|relation/);
+    expect(logged).toHaveBeenCalledWith(
+      "[kasbah graphql]",
+      expect.objectContaining({
+        message: expect.stringMatching(/relation "person" does not exist/),
+      }),
+    );
+  } finally {
+    logged.mockRestore();
   }
 });

@@ -109,6 +109,8 @@ const { positionals, values } = parseArgs({
 });
 const [command, arg] = positionals;
 // As environment variables, so `dev`'s child and `resolveConfig` read them like a deployment's.
+// `dev` shows API errors in full to the client (`detailedErrors`); elsewhere, unless set, they're masked.
+if (command === "dev") process.env.NODE_ENV ??= "development";
 if (command !== "init" && command !== "cache") {
   if (values.schema !== undefined) process.env.DATABASE_SCHEMA = values.schema;
   if (values.port !== undefined) process.env.PORT = values.port;

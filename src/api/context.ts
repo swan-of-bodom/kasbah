@@ -19,6 +19,12 @@ export type ApiContext = {
   tables: Tables;
 };
 
+/**
+ * Whether errors reach the client with their message and where they were thrown: in `kasbah dev`
+ * (`NODE_ENV=development`) only. Elsewhere the client gets a plain 500, and the process logs the error.
+ */
+export const detailedErrors = (): boolean => process.env.NODE_ENV === "development";
+
 /** The API serving the request (or loading the app's API file), so two in one process never mix. */
 export const apiContext = new AsyncLocalStorage<ApiContext>();
 

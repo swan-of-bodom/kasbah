@@ -4,7 +4,7 @@ import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import pg from "pg";
-import { afterAll, beforeAll, expect, test } from "vitest";
+import { afterAll, beforeAll, expect, test, vi } from "vitest";
 import { db } from "../../src/api/index.ts";
 import { Api } from "../../src/api/server.ts";
 import { bignum } from "../../src/config/schema.ts";
@@ -132,14 +132,37 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
-  "a route can't write or run past the timeout, and its error names the route",
+  "a route can't write or run past the timeout; its error reaches the client in full only in dev",
   async () => {
-    const [status, text] = await get("/write");
-    expect(status).toBe(500);
-    expect(text).toMatch(/read-only transaction/);
-    expect(text).toMatch(/while handling a 'GET' request to the route '\/write'/);
-    expect(await get("/slow")).toEqual([500, expect.stringMatching(/statement timeout/)]);
+    const quiet = vi.spyOn(console, "error").mockImplementation(() => {});
+    const before = process.env.NODE_ENV;
+    try {
+      expect(await get("/write")).toEqual([500, "Internal Server Error"]);
+      expect(quiet).toHaveBeenCalledWith(
+        "[kasbah api] GET /write:",
+        expect.objectContaining({ message: expect.stringMatching(/Failed query/) }),
+      );
+      process.env.NODE_ENV = "development";
+      const [status, text] = await get("/write");
+      expect(status).toBe(500);
+      expect(text).toMatch(/read-only transaction/);
+      expect(text).toMatch(/while handling a 'GET' request to the route '\/write'/);
+      expect(await get("/slow")).toEqual([500, expect.stringMatching(/statement timeout/)]);
+    } finally {
+      process.env.NODE_ENV = before;
+      quiet.mockRestore();
+    }
     expect(JSON.parse((await get("/count"))[1])).toEqual({ n: 3 });
+  },
+);
+
+test.skipIf(url === undefined)(
+  "a request body over 1 MB is refused before a route reads it",
+  async () => {
+    const big = await fetch(`${base}/echo`, { method: "POST", body: "x".repeat(2 ** 20 + 1) });
+    expect([big.status, await big.text()]).toEqual([413, "request body over 1 MB"]);
+    const small = await fetch(`${base}/echo`, { method: "POST", body: "x".repeat(2 ** 20) });
+    expect(small.status).toBe(201);
   },
 );
 
