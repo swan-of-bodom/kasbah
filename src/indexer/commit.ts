@@ -165,6 +165,8 @@ export class Position {
     const started = performance.now();
     const rows = c.kind === "batch" || c.kind === "block";
     if (rows) store.take();
+    // Taken with the rows, before the first await: the totals of exactly the events this commit writes.
+    const handled = rows ? Object.fromEntries(status.handlerTotals()) : undefined;
     if (rows || c.kind === "children") cache?.take();
     try {
       await transaction(pool, async (tx, attempt) => {
@@ -203,6 +205,7 @@ export class Position {
           for (const f of factories) await setMeta(tx, `discovered:${f.contract}`, m.watermark);
         if (m.phase !== undefined) await setMeta(tx, "phase", m.phase);
         if (m.checkpoint !== undefined) await setMeta(tx, "checkpoint", m.checkpoint);
+        if (handled !== undefined) await setMeta(tx, "handlers", handled);
       });
       if (rows || c.kind === "children") cache?.written();
     } finally {

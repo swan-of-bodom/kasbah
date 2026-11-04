@@ -597,6 +597,28 @@ test.skipIf(url === undefined)(
 );
 
 test.skipIf(url === undefined)(
+  "a resumed run's handler table counts every run on the schema, as one run to the same block would",
+  async () => {
+    const schema = "kasbah_test_handler_totals";
+    const final = node.blocks.length - 1 - 16;
+    const counts = (s: Status) =>
+      Object.fromEntries([...s.handlerTotals()].map(([name, h]) => [name, h.count]));
+    const whole = new Status();
+    await app(schema).run({ reset: true, to: final, status: whole });
+
+    await app(schema).run({ reset: true, to: Math.floor(final / 2), status: new Status() });
+    const resumed = new Status();
+    await app(schema).run({ to: final, status: resumed });
+    expect(resumed.handlersBefore.size).toBeGreaterThan(0);
+    expect(counts(resumed)).toEqual(counts(whole));
+    const p = new pg.Pool({ connectionString: url, max: 1 });
+    await p.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+    await p.end();
+  },
+  120_000,
+);
+
+test.skipIf(url === undefined)(
   "with a head subscription, new blocks are indexed without waiting for the poll",
   async () => {
     const schema = "kasbah_test_features";

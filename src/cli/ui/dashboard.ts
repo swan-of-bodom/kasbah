@@ -292,14 +292,14 @@ function timeShares({ p, line, label }: Box, status: Status) {
 }
 
 function handlerTable({ p, line }: Box, status: Status) {
-  const handlers = [...status.handlers].sort((a, b) => b[1].ms - a[1].ms);
+  const handlers = [...status.handlerTotals()].sort((a, b) => b[1].ms - a[1].ms);
   if (handlers.length === 0) return;
   line();
   const nameWidth = Math.min(32, Math.max(7, ...handlers.map(([n]) => n.length)));
   const spent = handlers.reduce((s, [, h]) => s + h.ms, 0) || 1;
   line(
     p.dim(
-      `${"HANDLER".padEnd(nameWidth)}  ${"EVENTS".padStart(8)}  ${"AVG".padStart(8)}  ${"TIME".padStart(5)}`,
+      `${"HANDLER".padEnd(nameWidth)}  ${"EVENTS".padStart(8)}  ${"AVG".padStart(8)}  ${"TIME".padStart(5)}${status.handlersBefore.size === 0 ? "" : "  every run on this schema"}`,
     ),
   );
   for (const [name, h] of handlers.slice(0, 6)) {

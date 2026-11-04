@@ -9,6 +9,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   every dev database on the machine (the Postgres containers `dev` makes without `DATABASE_URL`): running or
   stopped, port, volume size and the app directory. `dev` now labels the containers it makes with their directory;
   one made before shows none until `kasbah clean` and the next `dev`.
+- The progress screen's handler table counts every run on the schema: a run resumed after a stop shows the millions
+  its earlier runs handled, not only its own. Each commit saves the totals with its checkpoint. `/metrics` still
+  counts the process.
 - `kasbah prune` drops every schema in `DATABASE_URL` no indexer is running, after listing them and asking
   (`--yes`), as `ponder db prune` does. The event caches stay.
 - The build covers only what decides rows: the config's contracts and blocks, the chain, the tables and the files under

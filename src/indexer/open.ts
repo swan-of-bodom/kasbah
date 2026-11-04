@@ -31,7 +31,7 @@ import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
 import { type FactorySource, factoryReader, Sources, upgradeEventsOf } from "./sources.ts";
-import type { Status } from "./status.ts";
+import type { HandlerTotal, Status } from "./status.ts";
 
 /** How the API is shown: listening on 127.0.0.1 unless told otherwise, shown as localhost, the same address. */
 export const apiUrl = (api: { host?: string }, port: number) =>
@@ -76,6 +76,8 @@ type Stored = {
   known: Map<number, string>;
   children: Child[];
   unkeyed: Set<string>;
+  /** Handler totals the last commit saved, for the progress screen. */
+  handlers: Map<string, HandlerTotal>;
 };
 
 /** Connections the indexer's pool opens: the store's writes, the cache's, and startup reads. */
@@ -116,6 +118,7 @@ export async function open(
   const buildId = buildIdOf(config, chainId, handlers, blockSources, tables, options.buildSalt);
   const { pool, lock } = await openSchema(config, options, status, buildId, signal, closers);
   const stored = await startup(pool, schema, tables, buildId);
+  for (const [name, h] of stored.handlers) status.handlersBefore.set(name, h);
   // For the API's `/status`, which another process may serve.
   await pool.query(
     `INSERT INTO _kasbah_meta VALUES ('chain', $1) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
@@ -467,6 +470,7 @@ function startup(
         )
       ).rows,
       unkeyed: new Set(missing.rows.map((r) => r.name)),
+      handlers: handlerTotalsOf(meta.get("handlers")),
     };
   });
 }
@@ -508,4 +512,14 @@ function factoriesOf(
       ];
     }),
   );
+}
+
+/** The `handlers` meta: `{ name: { count, ms } }`; anything else (a schema from before it) is none. */
+function handlerTotalsOf(v: unknown): Map<string, HandlerTotal> {
+  const out = new Map<string, HandlerTotal>();
+  if (typeof v !== "object" || v === null) return out;
+  for (const [name, h] of Object.entries(v))
+    if (typeof h?.count === "number" && typeof h?.ms === "number")
+      out.set(name, { count: h.count, ms: h.ms });
+  return out;
 }

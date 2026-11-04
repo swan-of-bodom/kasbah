@@ -333,6 +333,10 @@ closed but not yet accepted (one past `latest`), so events at or below the index
   400 ms and RSS +4% and +12% (`--node-b=--max-semi-space-size=…`, 5 and 2 pairs: +2.3%, 2 of 5).
 - `context.db` writes are buffered in memory; flushed with `COPY` once per backfill batch (a few thousand
   events) and once per live block, in one transaction together with the checkpoint row.
+- The same transaction saves each handler's calls and time so far (`handlers` in `_kasbah_meta`), taken with the
+  rows before the commit's first await, so they count exactly the events committed. A resumed run starts the
+  progress screen's handler table from them, so it shows the schema's whole history, not the run's; `/metrics`
+  stays per process, as a Prometheus counter that restarts at zero is expected to.
 - **A backfill commit is written while the next batch is handled** (`Position.start`). Waiting for each one stopped
   the event loop for up to ~0.6 s (cached Ekubo to block 700k: ~45 stops over 400 ms, ~50 s in all; inside them,
   building the COPY text 56%, GC 14%, eviction 10%). The commit takes its rows before its first await

@@ -155,6 +155,9 @@ export type CommitReport = {
  * What a run is doing, updated in place by `run`: read it whenever (the dev screen draws it 4 times a second).
  * What happens once (reorgs, class changes, phase summaries, progress) goes to `subscribe` listeners, in order.
  */
+/** One handler's calls and the milliseconds they took. */
+export type HandlerTotal = { count: number; ms: number };
+
 export class Status {
   phase: Phase = "starting";
   readonly started = performance.now();
@@ -173,7 +176,10 @@ export class Status {
   checkpoint = 0;
   /** Events and block handlers handled. */
   handled = 0;
-  readonly handlers = new Map<string, { count: number; ms: number }>();
+  /** This process's handler calls and time, by handler. */
+  readonly handlers = new Map<string, HandlerTotal>();
+  /** What earlier runs on this schema committed, by handler, read from `_kasbah_meta` at startup. */
+  readonly handlersBefore = new Map<string, HandlerTotal>();
   /**
    * Milliseconds spent waiting for events (`fetch`), for their headers, transactions and receipts (`extras`), in
    * handlers, and for commits (`Position` counts it: a backfill commit runs while the next batch is handled).
@@ -334,6 +340,17 @@ export class Status {
   setRange(first: number, to: number, through: number) {
     this.range = { first, to, through };
     this.#phaseStart = { through };
+  }
+
+  /** Every run's handler calls and time on this schema: earlier runs' committed totals, then this one's. */
+  handlerTotals(): Map<string, HandlerTotal> {
+    const all = new Map<string, HandlerTotal>();
+    for (const m of [this.handlersBefore, this.handlers])
+      for (const [name, h] of m) {
+        const t = all.get(name);
+        all.set(name, t === undefined ? { ...h } : { count: t.count + h.count, ms: t.ms + h.ms });
+      }
+    return all;
   }
 
   record(name: string, ms: number) {
