@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- Events read back from the event cache are unpacked only when a handler reads them, not while their batch waits:
+  cached Ekubo backfills spend a third less time in GC, pause the event loop for over 100 ms a third as often, use
+  up to 30% less memory, and run a few percent faster.
 - A table no handler reads (`find`, `update`, `delete`, `onConflictDo…`) keeps no rows in memory once they're
   written: an insert-only table, like swaps or transfers, costs no cache. Cached Ekubo backfills ~16% faster with
   ~30% less memory. A key such a table receives twice is refused at the insert while the first row waits for its

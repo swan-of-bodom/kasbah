@@ -605,6 +605,15 @@ plain log lines, better for Docker and log files. Skipped events are reported on
   Each felt's length byte is read from its two characters' codes: slicing it out for `parseInt` cost 73 ns per
   felt, the codes 43 ns. Cached Ekubo to block 700k, 4 GB: waiting for events 13.9 → 8.7 s (5 of 5 pairs), the
   run −2.4% (4 of 5, inside A's 3.5% spread).
+- A batch read back holds each event as its row (`CachedEvent`): its address, hashes, keys and data are unpacked
+  from the hex text each time they're read, so each reader reads a field once. A batch lives from its read to its
+  last handler, through several young-generation collections (one every ~70 ms on cached Ekubo); unpacked up front,
+  a swap's ~30 felt strings survived them and were copied. Unpacked by the handler that reads them, they die young,
+  and a batch's size counts only its rows' text, so a small heap reads more events per query. Cached Ekubo,
+  620k–700k, 4 GB: GC 21 → 14 s, loop stops over 100 ms 71–80 → 23, the run ×0.97 (2 pairs, both on a
+  throttling CPU; a third straddled the throttling's onset); peak RSS 2.0 → 1.4 GB in two runs, 1.6–2.0 GB in three
+  throttled ones. At a 512 MB heap, to 630k: 14.3 → 11.0 s, RSS 605 → 585 MB. Postgres isn't what's left: its
+  `COPY` backend was busy ~40% of the backfill, the main thread ~95%.
 - Measured, Ekubo to block 700k (7.68M events): 3.3 GB (≈430 bytes per event; full history would be
   ≈24 GB). Indexing from RPC while writing the cache 232 s; re-index from the cache 132 s, zero `getEvents`.
   Possible later: block hashes and addresses as ids instead of 32 bytes per row.

@@ -166,23 +166,63 @@ function eventBytes(e: EmittedEvent): number {
   return n;
 }
 
-/**
- * What a row read back takes once decoded, from its hex text's lengths alone: `eventBytes` walks every felt, and on
- * the main thread, as busy as it is during a backfill, that walk costs what it cost the writer. A packed felt's hex
- * is about as long as its decoded text, its length byte standing for the `0x`; the third more per character covers
- * each felt's 8 bytes in its array (more than enough for a full felt, about right for a small one).
- */
-function rowBytes(r: {
+/** An event as read back from the cache: numbers, and its address, hashes, keys and data as `encode(…, 'hex')` text. */
+type EventRow = {
+  block: number;
+  tx: number;
+  idx: number;
   address: string;
   block_hash: string;
   tx_hash: string;
   keys: string;
   data: string;
-}) {
+};
+
+/**
+ * A cached event, its felts unpacked from its row each time they're read. A batch lives from its read to its last
+ * handler, through several young-generation collections: unpacked up front, an Ekubo swap's felts were ~30 strings
+ * each of them copied. Unpacked by the handler that reads them, they die young: on Ekubo from block 620k to 700k,
+ * peak memory 2.0 → 1.4 GB and young-generation GC 17.8 → 12.5–15.3 s (2026-11-04).
+ */
+class CachedEvent implements EmittedEvent {
+  readonly block_number: number;
+  readonly transaction_index: number;
+  readonly event_index: number;
+  readonly #row: EventRow;
+
+  constructor(row: EventRow) {
+    this.block_number = row.block;
+    this.transaction_index = row.tx;
+    this.event_index = row.idx;
+    this.#row = row;
+  }
+
+  get from_address(): string {
+    return feltFromMinimalBytes(this.#row.address);
+  }
+  get keys(): string[] {
+    return unpackHex(this.#row.keys);
+  }
+  get data(): string[] {
+    return unpackHex(this.#row.data);
+  }
+  get block_hash(): string {
+    return feltFromMinimalBytes(this.#row.block_hash);
+  }
+  get transaction_hash(): string {
+    return feltFromMinimalBytes(this.#row.tx_hash);
+  }
+}
+
+/**
+ * What a row read back takes while its batch waits, from its hex text's lengths: the row and its `CachedEvent`,
+ * ~170 bytes, and its five strings at twice their length (enough for a two-byte string; hex is one byte per character).
+ * A handler's unpacked felts die with it, so they don't count.
+ */
+function rowBytes(r: EventRow) {
   return (
-    166 +
-    2 * (r.address.length + r.block_hash.length + r.tx_hash.length) +
-    3 * (r.keys.length + r.data.length)
+    170 +
+    2 * (r.address.length + r.block_hash.length + r.tx_hash.length + r.keys.length + r.data.length)
   );
 }
 
@@ -448,19 +488,9 @@ export class EventCache {
     const s = selectors.map(feltBytes);
     const sets =
       filterBytes(filter).length === 0 ? [] : filter.map((p) => new Set(p.map(canonical)));
-    type Row = {
-      block: number;
-      tx: number;
-      idx: number;
-      address: string;
-      block_hash: string;
-      tx_hash: string;
-      keys: string;
-      data: string;
-    };
     const query = async (lo: number, hi: number, n: number | null) =>
       (
-        await this.#pool.query<Row>(
+        await this.#pool.query<EventRow>(
           `SELECT block, tx, idx, encode(address, 'hex') AS address, encode(block_hash, 'hex') AS block_hash, encode(tx_hash, 'hex') AS tx_hash,
                 encode(keys, 'hex') AS keys, encode(data, 'hex') AS data FROM ${this.#schema}.events
          WHERE block BETWEEN $1 AND $2 AND address = ANY($3) AND selector = ANY($4) ORDER BY block, tx, idx LIMIT $5`,
@@ -472,7 +502,7 @@ export class EventCache {
     const sized = (perEvent: number) => Math.max(1, Math.min(limit, Math.floor(budget / perEvent)));
     let most =
       this.#eventSize === undefined ? Math.min(limit, READ_FIRST_EVENTS) : sized(this.#eventSize);
-    const page = async (lo: number): Promise<{ rows: Row[]; through: number }> => {
+    const page = async (lo: number): Promise<{ rows: EventRow[]; through: number }> => {
       const hi = Math.min(to, lo + span - 1);
       const n = most;
       const rows = await this.#timed(query(lo, hi, n));
@@ -491,23 +521,13 @@ export class EventCache {
     for (;;) {
       const { rows, through } = await next;
       if (through < to) next = page(through + 1);
-      // A batch took up to ~170 ms to decode (Ekubo): a turn for the event loop meanwhile, as handlers give one.
+      // A key filter unpacks every row's keys: a turn for the event loop meanwhile, as handlers give one.
       const events: EmittedEvent[] = [];
       let bytes = 0;
       let since = performance.now();
       for (const r of rows) {
-        const keys = unpackHex(r.keys);
-        if (sets.length > 0 && !keysPass(sets, keys)) continue;
-        events.push({
-          from_address: feltFromMinimalBytes(r.address),
-          keys,
-          data: unpackHex(r.data),
-          block_number: r.block,
-          block_hash: feltFromMinimalBytes(r.block_hash),
-          transaction_hash: feltFromMinimalBytes(r.tx_hash),
-          transaction_index: r.tx,
-          event_index: r.idx,
-        });
+        if (sets.length > 0 && !keysPass(sets, unpackHex(r.keys))) continue;
+        events.push(new CachedEvent(r));
         bytes += rowBytes(r);
         if (performance.now() - since > YIELD_MS) {
           await yieldToEventLoop();

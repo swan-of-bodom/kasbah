@@ -9,9 +9,11 @@ import type { Watched } from "./sources.ts";
 
 export type Prefetched = { extras: Map<string, Extras>; headers: Map<number, Block> };
 
+// A cached event's fields are unpacked on every read (`CachedEvent`): each is read once here.
 function watchedOf(run: Run, e: EmittedEvent) {
   const { byAddress } = run.sources;
-  return byAddress.get(e.from_address) ?? byAddress.get(canonical(e.from_address));
+  const address = e.from_address;
+  return byAddress.get(address) ?? byAddress.get(canonical(address));
 }
 
 function includeOf(run: Run, e: EmittedEvent) {
@@ -121,7 +123,7 @@ export async function handle(
           number: e.block_number!,
           hash: e.block_hash === undefined ? undefined : felt(e.block_hash),
         },
-    extras.get(e.transaction_hash),
+    extras.size === 0 ? undefined : extras.get(e.transaction_hash),
     e,
   );
   run.client.current = event.block;

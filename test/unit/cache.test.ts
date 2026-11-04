@@ -141,12 +141,12 @@ test.skipIf(url === undefined)(
       seen.push(...batch.events);
     }
     expect(through).toBe(399);
-    expect(seen).toEqual(events);
+    expect(seen.map(plain)).toEqual(events);
 
     const onlyA: EmittedEvent[] = [];
     for await (const batch of cache.read(["0xa"], ["0x51"], 150, 260, 4))
       onlyA.push(...batch.events);
-    expect(onlyA).toEqual(
+    expect(onlyA.map(plain)).toEqual(
       events.filter(
         (e) => e.from_address === "0xa" && e.block_number! >= 150 && e.block_number! <= 260,
       ),
@@ -178,7 +178,7 @@ test.skipIf(url === undefined)(
     const seen: EmittedEvent[] = [];
     for await (const b of cache.read(["0xa"], ["0x51"], 0, 29_999, 100)) seen.push(...b.events);
     await reader.end();
-    expect(seen).toEqual(events);
+    expect(seen.map(plain)).toEqual(events);
     const inRange = ([lo, hi]: [number, number]) =>
       events.filter((e) => e.block_number! >= lo && e.block_number! <= hi).length;
     // Spanning to the end each time, the queries would cover ~100× the events.
@@ -214,6 +214,38 @@ test.skipIf(url === undefined)(
     await reader.end();
   },
 );
+
+test.skipIf(url === undefined)(
+  "a batch read back holds each event as its row, and unpacks its felts afresh at every read",
+  async () => {
+    pool ??= new pg.Pool({ connectionString: url, max: 2 });
+    await pool.query(`DROP SCHEMA IF EXISTS kasbah_cache_${CHAIN} CASCADE`);
+    const cache = await EventCache.open(pool, CHAIN);
+    const written = { ...event("0xa", 7), keys: ["0x51", "0x2"], data: ["0x0", "0xabc"] };
+    await cache.writer(["0xa"], ["0x51"]).write([written], 0, 9);
+    const read: EmittedEvent[] = [];
+    for await (const b of cache.read(["0xa"], ["0x51"], 0, 9)) read.push(...b.events);
+    const e = read[0]!;
+    // Nothing unpacked waits with the batch: its numbers are its only own fields.
+    expect(Object.keys(e).sort()).toEqual(["block_number", "event_index", "transaction_index"]);
+    e.data.push("0x1");
+    e.keys[1] = "0x3";
+    expect(plain(e)).toEqual(written);
+    expect(e.data).not.toBe(e.data);
+  },
+);
+
+/** A read-back event's fields as a plain object: a cached event's are getters, which `toEqual` doesn't compare. */
+const plain = (e: EmittedEvent): EmittedEvent => ({
+  from_address: e.from_address,
+  keys: e.keys,
+  data: e.data,
+  block_number: e.block_number,
+  block_hash: e.block_hash,
+  transaction_hash: e.transaction_hash,
+  transaction_index: e.transaction_index,
+  event_index: e.event_index,
+});
 
 const event = (address: string, block: number): EmittedEvent => ({
   from_address: address,
