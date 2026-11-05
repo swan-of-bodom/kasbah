@@ -1,22 +1,15 @@
 import type { Relations } from "drizzle-orm";
 import type { PgTable } from "drizzle-orm/pg-core";
-import pg from "pg";
 import type { Abi } from "../abi/abi.ts";
 import type { EventArgs, EventName } from "../abi/types.ts";
-import type { ApiApp } from "../api/context.ts";
 import type { Db } from "../db/store.ts";
 import type { Client } from "../indexer/client.ts";
 import type { FilterConfig } from "../indexer/filters.ts";
-import { inUse } from "../indexer/lock.ts";
-import { apiUrl, run } from "../indexer/run.ts";
 import type { Status } from "../indexer/status.ts";
 import type { Include } from "../sync/extras.ts";
 import type { Block } from "../types/block.ts";
 import type { Receipt, Transaction } from "../types/transaction.ts";
-import { quote } from "../utils/quote.ts";
-import { ConfigError } from "./errors.ts";
 import type { Network } from "./network.ts";
-import { resolveConfig, schemaName } from "./resolve.ts";
 import type { RpcConfig } from "./rpc.ts";
 
 /** Children are the `parameter` (an address) of every `event` the factory at `address` emits. */
@@ -215,7 +208,8 @@ type FilterOf<A extends Abi, F> = {
     : never;
 };
 
-type Checked<C extends Config> = {
+/** The parts of a config whose names depend on its ABIs, checked against them. */
+export type Checked<C extends Config> = {
   contracts: {
     [K in keyof Contracts<C>]: {
       upgradeEvents?: readonly EventName<Contracts<C>[K]["abi"]>[];
@@ -229,73 +223,3 @@ type Checked<C extends Config> = {
  * (`start`, `serve`): no schema from the directory's name, so production never guesses one.
  */
 export type Project = { name: string; tables?: Tables; schemaRequired?: boolean };
-
-export function kasbah<const C extends Config>(initial: C & Checked<C>) {
-  let config: Config = initial;
-  const handlers = new Map<string, Handler<C, HandlerName<C>>>();
-
-  let apiApp: ApiApp | undefined;
-
-  const on = <N extends HandlerName<C>>(name: N, handler: Handler<C, N>) => {
-    if (handlers.has(name)) throw new ConfigError(`${name} already has a handler`);
-    handlers.set(name, handler as never);
-  };
-
-  /** The API alone, over what an indexer of this app stores: another process, or an earlier run. */
-  const serve = async (): Promise<{ url: string; close: () => Promise<void> }> => {
-    const resolved = resolveConfig(config);
-    if (resolved.api === undefined)
-      throw new ConfigError("serve needs the API, which `api` turns off");
-    const { Api } = await import("../api/server.ts");
-    const api = await Api.start({
-      ...resolved.api,
-      database: resolved.database,
-      schema: resolved.schema,
-      tables: resolved.tables,
-      app: apiApp,
-    });
-    return { url: apiUrl(resolved.api, api.port), close: () => api.close() };
-  };
-
-  /** Drops the app's schema (its tables and progress), nothing else in the database. Returns the schema. */
-  const drop = async (): Promise<string> => {
-    const { schema, database } = resolveConfig(config);
-    const pool = new pg.Pool({ connectionString: database, max: 1 });
-    try {
-      if (await inUse(pool, schema))
-        throw new ConfigError(`schema "${schema}" is in use by a running indexer: stop it first`);
-      await pool.query(`DROP SCHEMA IF EXISTS ${quote(schema)} CASCADE`);
-    } finally {
-      await pool.end();
-    }
-    return schema;
-  };
-
-  return {
-    on,
-    /** The app's HTTP endpoints: a Hono app, mounted after the built-in ones. The CLI passes `src/api/index.ts`. */
-    api: (app: ApiApp) => {
-      if (config.api === false) throw new ConfigError("the API is off (`api: false`)");
-      apiApp = app;
-    },
-    run: (options: RunOptions = {}) => run(resolveConfig(config), handlers, options, apiApp),
-    serve,
-    drop,
-    /**
-     * For the CLI, before the project's handlers and API load: what the config leaves out, the layout gives. The
-     * schema is the directory's name, the tables `kasbah.schema.ts`, and the API is on.
-     */
-    useProject: (p: Project) => {
-      if (p.schemaRequired && config.schema === undefined && !process.env.DATABASE_SCHEMA)
-        throw new ConfigError(
-          "no schema: pass --schema or set DATABASE_SCHEMA (a new one per deploy), or set `schema` in the config",
-        );
-      config = {
-        ...config,
-        schema: config.schema ?? schemaName(p.name),
-        tables: config.tables ?? p.tables,
-        api: config.api ?? {},
-      };
-    },
-  };
-}

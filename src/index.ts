@@ -80,6 +80,7 @@ export type {
   FunctionResult,
   TypeOf,
 } from "./abi/types.ts";
+export { kasbah } from "./app.ts";
 export {
   type BlockConfig,
   type Config,
@@ -90,7 +91,6 @@ export {
   type HandlerName,
   type IndexedBlock,
   type IndexedEvent,
-  kasbah,
   type RunOptions,
   type Tables,
 } from "./config/app.ts";
