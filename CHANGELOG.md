@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+## 0.2.1
+
 - A node that can't scan a range in time no longer stops the run. A sparse filter, like a factory's creation event
   past its busy years, made Juno scan millions of blocks for one page, and the free RPC's gateway cut every such
   request at 30 s, so the JediSwap template failed in its factory pass. kasbah now asks for a quarter of the range
