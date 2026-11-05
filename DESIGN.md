@@ -490,8 +490,10 @@ queries, and an `error` nobody listens to throws. As Ponder does (`queryBuilder.
 
 ## 8. ABIs, types and decoding
 
-starknet.js (10.8.0) is used for what it is good at: hashing (`sn_keccak`, Pedersen/Poseidon via
-`@scure/starknet`), and as the RPC types reference. Not for decoding on the hot path, and not for ABI types.
+kasbah doesn't use starknet.js at runtime: `sn_keccak` is Keccak from `@noble/hashes` (the library starknet.js uses
+for it), and decoding and ABI types are kasbah's own (8.3). Its event decoding was 17× (Ekubo Core) to 32× (STRK)
+slower per event on the events in `test/fixtures/`. starknet.js stays a dev dependency: the tests check kasbah's
+selectors and decoded events against it.
 
 ### 8.1 What real ABIs look like (checked on mainnet, files in `test/fixtures/`)
 
