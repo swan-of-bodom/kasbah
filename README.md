@@ -16,6 +16,9 @@ GraphQL and your own endpoints. If you've used [Ponder](https://ponder.sh), you 
 
 ## Quickstart
 
+You need Node 22.18 or later, a package manager (pnpm, npm or Yarn), and either Docker or Podman (`pnpm dev` then
+runs Postgres in a container) or a Postgres of your own, set as `DATABASE_URL` in `.env`.
+
 ```bash
 pnpm create kasbah my-indexer # asks for a contract or a template, an RPC and Postgres; installs it
 cd my-indexer
@@ -75,56 +78,46 @@ app.on("Core:Swapped", async ({ event, context }) => {
 
 ## Commands
 
+Start a project with `pnpm create kasbah` (recommended): it needs nothing installed beforehand and takes the same
+flags as `kasbah init` (`pnpm create kasbah --help`). `npm create kasbah` and `yarn create kasbah` work too, and the
+project then uses npm or Yarn. In a project, the `dev`, `fresh`, `clean`, `start` and `serve` scripts (`pnpm dev`,
+`npm run dev`) run the commands below.
+
 | Command | What it does |
 |---|---|
-| `kasbah init <dir>` | a new project from a contract address or a template (`--help` for its flags) |
-| `kasbah dev` | index and serve, restarting on every change |
-| `kasbah start --schema <name>` | index and serve, for production |
+| `pnpm create kasbah [dir]` | a new project from a contract address or a template; same as `kasbah init` |
+| `kasbah init [dir]` | the same, with kasbah already installed (`--help` for its flags) |
+| `kasbah dev [--reset]` | index and serve, restarting on every change; without `DATABASE_URL`, runs Postgres in a Docker or Podman container; `--reset` starts over (`pnpm fresh`) |
+| `kasbah start --schema <name> [--to <block>] [--reset]` | index and serve, for production |
 | `kasbah serve --schema <name>` | the API alone, over what an indexer stored |
+| `kasbah clean [--yes]` | deletes what the app stored: the dev container and its volume, or with `DATABASE_URL` only the app's schema |
 | `kasbah list` | the schemas in `DATABASE_URL` and the dev databases on the machine, with their sizes |
-| `kasbah prune` | drops the schemas no indexer is running |
-| `kasbah cache clear` | empties the raw-event cache (`kasbah list` shows its size) |
+| `kasbah prune [--yes]` | drops the schemas in `DATABASE_URL` that no indexer is running |
+| `kasbah cache clear [--events] [--calls] [--chain <id>]` | empties the raw-event and call caches (`kasbah list` shows them) |
+
+`start`, `dev`, `clean` and `serve` also take `--schema <name>` (`DATABASE_SCHEMA`), `--port`/`--hostname` (`PORT`
+/ `API_HOST`, default `localhost:42069`), `--ui`/`--no-ui` for the progress screen and `--debug` for the fetcher's
+details on it. `list`, `prune` and `cache` take `--database <url>` in place of `DATABASE_URL`. Every command reads
+`.env` from the working directory; `kasbah --help` lists it all.
 
 ## Docs
 
 **[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**: configuration, handlers, the API,
 and deploying to Railway, Render or a VPS. The source is in [`documentation/`](documentation); the design and its
-reasoning are in [DESIGN.md](DESIGN.md).
-
-## From source
-
-Node 22.18+ and pnpm. To use a local checkout instead of the npm package:
-
-```bash
-git clone https://github.com/swan-of-bodom/kasbah
-cd kasbah && pnpm install
-pnpm pack                                     # writes kasbah-<version>.tgz
-cd ../my-indexer && pnpm add ../kasbah/kasbah-*.tgz
-```
-
-## Development
-
-```bash
-pnpm test        # all tests; the Postgres ones need DATABASE_URL in .env
-pnpm typecheck
-pnpm lint:fix    # Biome; a pre-commit hook refuses unformatted commits
-```
-
-A local Postgres for the tests:
-
-```bash
-docker run -d --name kasbah-pg -e POSTGRES_PASSWORD=kasbah -e POSTGRES_DB=kasbah \
-  -p 127.0.0.1:5544:5432 docker.io/library/postgres:17
-```
-
-Contributors and agents: see [AGENTS.md](AGENTS.md).
+reasoning are in [DESIGN.md](DESIGN.md). To work on kasbah itself, see
+[CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ## Acknowledgments
 
 kasbah's design comes from [Ponder](https://ponder.sh) ([GitHub](https://github.com/ponder-sh/ponder)), the
 open-source TypeScript indexer for EVM chains by the Ponder team (MIT). The code here is written for Starknet, but
 the project layout, the API and many production choices follow Ponder's, and DESIGN.md notes where. Thank you to
-its authors for building it in the open. For EVM chains, use Ponder.
+its authors for building it in the open.
+
+How this repo is organized follows [rindexer](https://rindexer.xyz)
+([GitHub](https://github.com/joshstevens19/rindexer)), the Rust indexer for EVM chains (MIT): one folder per concern,
+every config default in one file, limits as named constants, and the rules in AGENTS.md. Thank you to its authors
+too. For EVM chains, use Ponder or rindexer.
 
 ## License
 

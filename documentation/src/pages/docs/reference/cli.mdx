@@ -1,5 +1,8 @@
 # CLI [Every kasbah command and flag]
 
+The project's `package.json` runs the commands below as scripts: `dev`, `fresh` (`kasbah dev --reset`), `clean`,
+`start` and `serve` (`pnpm dev`, `npm run dev`, `yarn dev`).
+
 ## init
 
 ```bash
@@ -7,7 +10,8 @@ kasbah init [dir]
 ```
 
 Creates a project, then installs its packages and makes it a git repository with one commit. Asks for whatever
-isn't given as a flag. `pnpm create kasbah` (`npm create kasbah@latest`, `yarn create kasbah`) runs it.
+isn't given as a flag. `pnpm create kasbah` (`npm create kasbah@latest`, `yarn create kasbah`) runs it and is the
+recommended way: it needs nothing installed beforehand and takes the same flags.
 
 | Flag | Description |
 | --- | --- |
@@ -108,5 +112,6 @@ size.
 | `--port <n>` | `PORT` | `42069` |
 | `--hostname <host>` | `API_HOST` | `localhost` |
 | `--ui` / `--no-ui` | | on for `dev` in a terminal |
+| `--debug` | | off; with the progress screen, adds the fetcher's buffer and windows, its waits and the event loop's delay |
 
 Every command reads `.env` from the working directory. Variables already set win.
