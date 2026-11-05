@@ -213,9 +213,16 @@ function progress(
     left = `${duration(pace.range[0])} – ${duration(pace.range[1])} left ${p.dim("(varies with event density)")}`;
   else if (pace.left !== undefined) left = `~${duration(pace.left)} left`;
   split(
-    `block ${p.bold(thousands(r.through))} / ${thousands(r.to)}${status.phase === "factories" ? p.dim("  finding factory children") : ""}`,
+    `block ${p.bold(thousands(r.through))} / ${thousands(r.to)}${status.phase === "factories" ? p.dim(`  ${factoriesStep(status)}`) : ""}`,
     left,
   );
+}
+
+/** What the factory pass is doing: finding children, then reading each one's class (two calls a child). */
+function factoriesStep(status: Status): string {
+  const found = thousands(status.foundChildren);
+  if (status.resolvedChildren === undefined) return `finding factory children · ${found} found`;
+  return `reading the children's classes · ${thousands(status.resolvedChildren)} / ${found}`;
 }
 
 function live({ p, split, label }: Box, status: Status) {

@@ -8,6 +8,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
   past its busy years, made Juno scan millions of blocks for one page, and the free RPC's gateway cut every such
   request at 30 s, so the JediSwap template failed in its factory pass. kasbah now asks for a quarter of the range
   after such a failure, and widens it again once requests answer quickly.
+- The screen shows the factory pass at work: how many children it has found, then how many of their classes it has
+  read, instead of a bar at 100% while it reads them. `--debug` counts the requests narrowed.
 
 ## 0.2.0
 

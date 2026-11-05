@@ -171,6 +171,10 @@ export class Status {
   watched = (): { contracts: number; children: number } => ({ contracts: 0, children: 0 });
   /** Blocks of the current phase (factories or backfill): `first..to`, done through `through`. */
   range = { first: 0, to: 0, through: 0 };
+  /** Children the factory pass has found so far, before it commits them. */
+  foundChildren = 0;
+  /** Of those, children whose classes are read, once the pass has found them all; undefined before. */
+  resolvedChildren: number | undefined;
   /** The last block committed. */
   checkpoint = 0;
   /** Events and block handlers handled. */

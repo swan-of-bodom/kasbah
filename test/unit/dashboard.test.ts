@@ -285,6 +285,22 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   );
 });
 
+test("factories: the children found so far, then how many of their classes are read", () => {
+  const s = new Status();
+  s.enter("factories");
+  s.setRange(10_765, 17_493_043, 640_876);
+  s.foundChildren = 1_040;
+  expect(inside(render(s, { width: 110 })).join("\n")).toMatch(
+    /block 640,876 \/ 17,493,043 {2}finding factory children · 1,040 found/,
+  );
+  s.range.through = 17_493_043;
+  s.foundChildren = 1_051;
+  s.resolvedChildren = 300;
+  expect(inside(render(s, { width: 110 })).join("\n")).toMatch(
+    /block 17,493,043 \/ 17,493,043 {2}reading the children's classes · 300 \/ 1,051/,
+  );
+});
+
 test("live: the delay behind the chain, split between the node and us", () => {
   const s = new Status();
   s.enter("live");
