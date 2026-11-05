@@ -857,6 +857,7 @@ function buildCursorCondition(
 ): SQL | undefined {
   const cursorColumns = orderBySchema.map(([columnName, orderDirection]) => {
     const column = columns[columnName] ?? unknownOrderBy(columnName);
+    if (!Object.hasOwn(cursorObject, columnName)) fail("Invalid cursor");
     const value = cursorObject[columnName];
     const forward = (direction === "after") === (orderDirection === "asc");
     const [comparator, comparatorOrEquals] = forward ? [gt, gte] : [lt, lte];

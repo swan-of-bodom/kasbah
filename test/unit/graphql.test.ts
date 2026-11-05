@@ -1027,6 +1027,21 @@ it("cursors keep bigint and date keys as they are: a page after one starts right
   ]);
 });
 
+it("a cursor from another version, without the order's columns, is refused as invalid", async () => {
+  const pet = pgTable("pet", {
+    id: text().primaryKey(),
+    createdAt: date({ mode: "date" }).notNull(),
+  });
+  const query = await setup({ pet }, `INSERT INTO pet VALUES ('id1', '2021-01-01')`);
+  // A cursor from superjson, before 0.2.0: valid JSON, with its keys under "json".
+  const old =
+    "eyJqc29uIjp7ImNyZWF0ZWRBdCI6IjIwMjEtMDEtMDVUMDA6MDA6MDAuMDAwWiIsImlkIjoiaWQ1In0sIm1ldGEiOnsidmFsdWVzIjp7ImNyZWF0ZWRBdCI6WyJEYXRlIl19LCJ2IjoxfX0=";
+  const result = await query(
+    `query { pets(orderBy: "createdAt", after: "${old}") { items { id } } }`,
+  );
+  expect(result.errors?.[0]?.message).toBe("Invalid cursor");
+});
+
 it("cursors page through a composite primary key", async () => {
   const allowance = pgTable(
     "allowance",
