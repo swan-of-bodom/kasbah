@@ -5,12 +5,11 @@ import { quote } from "../utils/quote.ts";
 import { LOCK } from "./lock.ts";
 
 /** Postgres's error codes for a missing table and a missing schema. */
-const UNDEFINED_TABLE = "42P01";
-const INVALID_SCHEMA = "3F000";
+const MISSING = { table: "42P01", schema: "3F000" };
 
 /** Another process (a prune, a reset) dropped the schema between the query that found it and the one reading it. */
 const droppedSinceListed = (e: unknown) =>
-  errorCode(e) === UNDEFINED_TABLE || errorCode(e) === INVALID_SCHEMA;
+  errorCode(e) === MISSING.table || errorCode(e) === MISSING.schema;
 
 /** An app schema in a database, as `kasbah list` shows it and `kasbah prune` decides on it. */
 export type SchemaInfo = {

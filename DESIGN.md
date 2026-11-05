@@ -80,18 +80,18 @@ reorg, are fetched straight into memory (`src/sync/live.ts`).
 whose events aren't written. Pages waiting while one write runs go together in the next, so a write grows with the
 backlog. The fetcher keeps the block through which every block is written (the front window's, Ponder's sync
 cursor), and the backfill reads events back up to it in batches of 12k (`EventCache.read`), waiting there when it
-catches up. A batch is also capped in bytes, a 64th of the heap (`READ_SHARE`), from the size of the events last
+catches up. A batch is also capped in bytes, a 64th of the heap (`READ.share`), from the size of the events last
 read: about four are alive at once (the next one's rows, one decoding, one prepared, one handled), and 12k events
-of 30 felts each ran a 256 MB heap out of memory. Ekubo's 12k fit under the cap from a 1 GB heap up. Each query spans the blocks that held about a batch just before (`READ_FIRST_BLOCKS` to start), never
+of 30 felts each ran a 256 MB heap out of memory. Ekubo's 12k fit under the cap from a 1 GB heap up. Each query spans the blocks that held about a batch just before (`READ.firstBlocks` to start), never
 everything written: with the fetch thread 600k blocks ahead, a query to the front ran 7.7 s instead of milliseconds
 (Postgres collected the whole range before sorting it), and handlers stalled. So fetching never pauses for memory: Ekubo's dense stretch at 640k–665k had 30 of 32 workers idle behind
 the in-memory budget (2026-11-03). The one limit is the events waiting to be written, a twentieth of the heap
-(`WRITE_SHARE`, a fifth of the fetch thread's): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
+(`WRITE.share`, a fifth of the fetch thread's): past it, workers wait before their next page, so a slow disk slows fetching instead of filling
 memory. Fetching still stays near the front, though not for memory: handlers read only up to it, and with
 nothing paused, every worker stayed in the windows the first cuts made far ahead (at a sparse start's density they
 halve the range) while the front moved one page at a time (Ekubo, 2026-11-03: 13.8M events fetched, 2.1M handled
 at 5 min). So windows with more than 8 pages per worker fetched before them, past the front window, pause
-(`AHEAD_PAGES_PER_WORKER`), and idle workers split the front, as the memory budget made them do before; Ponder
+(`WINDOWS.aheadPagesPerWorker`), and idle workers split the front, as the memory budget made them do before; Ponder
 likewise syncs one interval ahead. A page's last block may be partial: its events stay with the window until the next page completes it. A
 crash leaves only complete blocks covered, and a restart fetches only the blocks not covered (`EventCache.missing`),
 gaps between windows that finished included.
@@ -102,7 +102,7 @@ one thread each waited for the other: on Ekubo's dense stretch Alchemy sent a pa
 took 1.5–4.2 s to read it, the answer waiting for the busy main thread (2026-11-03). Events going through Postgres
 make the split cheap: the thread tells the main thread only how far the cache has every block, never the events. It
 has its own RPC client, lent three quarters of each endpoint's rate ceiling (`RpcClient.lend`), so both stay under
-it, its own Postgres connection, and a heap of a quarter of the indexer's (`FETCH_HEAP_SHARE`). It reports its RPC
+it, its own Postgres connection, and a heap of a quarter of the indexer's (`FETCH_HEAP.share`). It reports its RPC
 counts and gauges every 250 ms, added to the main thread's for the dashboard and `/metrics`. Stopping terminates it:
 a write cut short rolls back with its coverage. Ponder fetches on its main thread; this goes past it.
 
@@ -165,7 +165,7 @@ a write cut short rolls back with its coverage. Ponder fetches on its main threa
   cache: 339 s → 304 s to block 700k, median of 5 interleaved pairs, 3 won by 10–13%, the others within 1%). Not
   stopping the cut there split every window on each page: 6,000 windows, and the pass over them stalled the
   event loop for seconds. Every pass over the windows is one, with the events fetched ahead carried along.
-- **At most 8 windows per worker** (`MAX_WINDOWS_PER_WORKER`), checked where windows are cut: Ekubo's full history
+- **At most 8 windows per worker** (`WINDOWS.maxPerWorker`), checked where windows are cut: Ekubo's full history
   peaks near 4 per worker, so it never binds today; it keeps a cutting bug from growing the list without bound.
 - **An empty page with a token means "keep going"**, not "done" (Pathfinder's scan cap).
 - Window size adapts to density: busy contracts get smaller windows so pages don't serialize a whole window;

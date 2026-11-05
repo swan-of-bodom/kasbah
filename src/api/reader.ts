@@ -13,18 +13,22 @@ export type ReaderOptions = {
   tables: TableInfo[];
   /** A login that may only read the app's tables. Without it, kasbah creates `<schema>_reader` (needs CREATEROLE). */
   readDatabase?: string;
-  /** Per query. Default `API_TIMEOUT_MS`. */
+  /** Per query. Default `API_DB.timeoutMs`. */
   timeoutMs?: number;
 };
 
-/** How long one API query may run: long enough for an aggregate over a large table, short enough to free its connection. */
-export const API_TIMEOUT_MS = 30_000;
-
-/** How long an API query waits for a lock: the indexer's key and index builds lock tables, and readers don't queue behind them. */
-export const API_LOCK_TIMEOUT_MS = 500;
-
-/** Connections the API keeps to Postgres. */
-const API_POOL_SIZE = 8;
+/** The API's connections to Postgres. */
+const API_DB = {
+  /** How long one query may run: long enough for an aggregate over a large table, short enough to free its connection. */
+  timeoutMs: 30_000,
+  /**
+   * How long a query waits for a lock: the indexer's key and index builds lock tables, and readers don't queue behind
+   * them.
+   */
+  lockTimeoutMs: 500,
+  /** Connections kept open. */
+  poolSize: 8,
+};
 
 /** A Postgres error the client's query caused: its message reaches the client. */
 export class QueryError extends Error {}
@@ -63,15 +67,15 @@ export class Reader {
   readonly timeoutMs: number;
 
   private constructor(url: string, o: ReaderOptions) {
-    this.timeoutMs = o.timeoutMs ?? API_TIMEOUT_MS;
+    this.timeoutMs = o.timeoutMs ?? API_DB.timeoutMs;
     this.pool = new RetryingPool({
       connectionString: url,
-      max: API_POOL_SIZE,
+      max: API_DB.poolSize,
       options: [
         `-c search_path=${quote(o.schema)}`,
         "-c default_transaction_read_only=on",
         `-c statement_timeout=${this.timeoutMs}`,
-        `-c lock_timeout=${API_LOCK_TIMEOUT_MS}`,
+        `-c lock_timeout=${API_DB.lockTimeoutMs}`,
       ].join(" "),
     });
   }

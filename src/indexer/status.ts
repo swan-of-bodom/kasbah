@@ -13,9 +13,8 @@ export type Phase =
   | "stopped"
   | "failed";
 
-/** Milliseconds per point of the events/s history, and points kept (2 minutes). */
-const BUCKET_MS = 2_000;
-const BUCKETS = 60;
+/** The events/s history: milliseconds per point, and points kept (2 minutes). */
+const HISTORY = { bucketMs: 2_000, buckets: 60 };
 /** Event-loop delay sampling; its own interval is subtracted from what it measures. */
 const LAG_RESOLUTION_MS = 10;
 
@@ -367,9 +366,9 @@ export class Status {
    * average since the start: event density changes a lot along a chain, so both are given as a range.
    */
   pace(now = performance.now()): Pace {
-    while (now - this.#bucket.t >= BUCKET_MS) {
+    while (now - this.#bucket.t >= HISTORY.bucketMs) {
       this.history.push(((this.handled - this.#bucket.handled) / (now - this.#bucket.t)) * 1000);
-      if (this.history.length > BUCKETS) this.history.shift();
+      if (this.history.length > HISTORY.buckets) this.history.shift();
       this.#bucket = { t: now, handled: this.handled };
     }
     const s = this.#samples;

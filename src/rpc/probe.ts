@@ -18,8 +18,7 @@ const EMPTY_SPAN = 300_000;
 /** Page sizes tried, largest first: the caps of Juno, Pathfinder and Madara. */
 const CHUNK_SIZES = [10_240, 1_024, 1_000];
 /** Pathfinder's default page and scan caps, which give away a hosted Pathfinder that hides its version. */
-const PATHFINDER_CHUNK = 1_024;
-const PATHFINDER_SCAN = 81_920;
+const PATHFINDER = { chunk: 1_024, scan: 81_920 };
 
 async function tryRequest<T>(
   rpc: RpcClient,
@@ -68,7 +67,7 @@ export async function probe(rpc: RpcClient): Promise<Endpoint> {
 
   // Hosted Pathfinder (Alchemy, Cartridge) hides pathfinder_version; its defaults give it away.
   const inferred =
-    node === "unknown" && maxChunk === PATHFINDER_CHUNK && scanLimit === PATHFINDER_SCAN
+    node === "unknown" && maxChunk === PATHFINDER.chunk && scanLimit === PATHFINDER.scan
       ? "pathfinder"
       : node;
   return { spec, node: inferred, nodeVersion: pathfinder ?? juno, maxChunk, scanLimit };

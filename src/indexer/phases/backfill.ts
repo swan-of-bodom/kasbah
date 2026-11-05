@@ -5,13 +5,16 @@ import { watchedEvents } from "../events.ts";
 import { blockHeaders, fire, handle, type Prefetched, prefetch } from "../handle.ts";
 import type { BlockSource, Run } from "../open.ts";
 
-/** Events (and block handlers) handled between two backfill commits. */
-const FLUSH_EVENTS = 100_000;
-/**
- * Transactions and receipts the cache holds unwritten before it forces a commit, so memory stays bounded: half of
- * 64 MB, since the commit in flight holds as much again.
- */
-const FLUSH_BYTES = 32 << 20;
+/** What forces a backfill commit. */
+const FLUSH = {
+  /** Events (and block handlers) handled since the last one. */
+  events: 100_000,
+  /**
+   * Transactions and receipts the cache holds unwritten, so memory stays bounded: half of 64 MB, since the commit in
+   * flight holds as much again.
+   */
+  bytes: 32 << 20,
+};
 /** Share of the heap for rows handlers wrote and no commit took yet: a twentieth, the commit in flight holds another. */
 const PENDING_SHARE = 1 / 20;
 
@@ -42,9 +45,9 @@ export async function backfill(run: Run): Promise<void> {
       status.range.through = through;
       if (signal.aborted) break;
       if (
-        since >= FLUSH_EVENTS ||
+        since >= FLUSH.events ||
         through === to ||
-        (cache?.pendingBytes ?? 0) > FLUSH_BYTES ||
+        (cache?.pendingBytes ?? 0) > FLUSH.bytes ||
         run.store.pendingBytes > maxPending
       ) {
         // Postgres writes this batch while the next one is handled.

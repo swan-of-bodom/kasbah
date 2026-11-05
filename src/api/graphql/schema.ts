@@ -89,18 +89,22 @@ type PluralArgs = {
   orderDirection?: "asc" | "desc";
 };
 
-/** Rows a list returns when the query doesn't say. */
-const DEFAULT_LIMIT = 50;
-/** Rows a list returns at most: one page stays small for the client and the API alike. */
-const MAX_LIMIT = 1000;
+/**
+ * Rows a list returns: `default` when the query doesn't say, `max` at most, so one page stays small for the client
+ * and the API alike.
+ */
+const LIMIT = { default: 50, max: 1000 };
 /** Rows one batched lookup of related rows asks for at most: keeps each statement's parameters few. */
 const MAX_BATCH_SIZE = 1_000;
-/** Share of the heap one request's rows may take: lists nested in lists multiply, and one request must not exhaust it. */
-const REQUEST_HEAP_SHARE = 1 / 16;
-/** Statements one request may run: a list in a list runs one per parent row, which nesting multiplies. */
-const MAX_STATEMENTS = 500;
-/** Statements one request runs at once: half the API's pool, so one request never holds every connection. */
-const MAX_PARALLEL_STATEMENTS = 4;
+/** What one request may use: lists nested in lists multiply, and one request must not exhaust the API. */
+const REQUEST = {
+  /** Share of the heap its rows may take. */
+  heapShare: 1 / 16,
+  /** Statements it may run: a list in a list runs one per parent row. */
+  statements: 500,
+  /** Statements it runs at once: half the API's pool, so one request never holds every connection. */
+  parallelStatements: 4,
+};
 
 /** A mistake in the query: its message reaches the client, in production too. */
 function fail(message: string): never {
@@ -130,8 +134,8 @@ export class RequestBudget {
     maxStatements,
   }: { timeoutMs: number; maxBytes?: number; maxStatements?: number }) {
     this.#timeoutMs = timeoutMs;
-    this.#maxBytes = maxBytes ?? Math.floor(heapLimit() * REQUEST_HEAP_SHARE);
-    this.#maxStatements = maxStatements ?? MAX_STATEMENTS;
+    this.#maxBytes = maxBytes ?? Math.floor(heapLimit() * REQUEST.heapShare);
+    this.#maxStatements = maxStatements ?? REQUEST.statements;
     this.#deadline = performance.now() + timeoutMs;
   }
 
@@ -142,7 +146,7 @@ export class RequestBudget {
       this.#fail(
         `query needs more than ${this.#maxStatements} SQL statements: nest fewer lists, or ask for fewer rows in the outer ones`,
       );
-    if (this.#running >= MAX_PARALLEL_STATEMENTS)
+    if (this.#running >= REQUEST.parallelStatements)
       await new Promise<void>((resolve) => this.#waiting.push(resolve));
     this.#running++;
     let result: T;
@@ -515,10 +519,10 @@ async function executePluralQuery(
   includeTotalCount: boolean,
   extraConditions: (SQL | undefined)[] = [],
 ): Promise<Page> {
-  const limit = args.limit ?? DEFAULT_LIMIT;
+  const limit = args.limit ?? LIMIT.default;
   const offset = args.offset ?? 0;
 
-  if (limit > MAX_LIMIT) fail(`Invalid limit. Got ${limit}, expected <=${MAX_LIMIT}.`);
+  if (limit > LIMIT.max) fail(`Invalid limit. Got ${limit}, expected <=${LIMIT.max}.`);
 
   const orderBySchema = buildOrderBySchema(table, args);
   const orderBy = orderBySchema.map(([columnName, direction]) => {

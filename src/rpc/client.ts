@@ -69,34 +69,32 @@ export type RpcClientOptions = {
 const TIMEOUT_MS = 30_000;
 /** Requests in flight at most, unless the caller sets `maxConcurrency`. */
 const MAX_CONCURRENCY = 64;
-/** Calls per second at the start: the limit doubles from here until the endpoint first throttles. */
-const INITIAL_RATE = 100;
-/** The limit never climbs above this, however fast the endpoint answers. */
-const MAX_RATE = 10_000;
-/** The limit never falls below this, however often the endpoint throttles. */
-const MIN_RATE = 5;
-/** Tries per call for failures that aren't throttling (throttled tries don't count). */
-const MAX_ATTEMPTS = 8;
-/** First retry backoff; it doubles per attempt up to `MAX_BACKOFF_MS`, then gets ±50% jitter. */
-const BACKOFF_MS = 200;
-const MAX_BACKOFF_MS = 10_000;
-/** Pause of all requests after a throttle, growing `PAUSE_GROWTH` per throttle in a row up to `MAX_PAUSE_MS`. */
-const INITIAL_PAUSE_MS = 100;
-const MAX_PAUSE_MS = 5_000;
-const PAUSE_GROWTH = 1.5;
-/** Rate growth per step before the first throttle (slow start), and after it. */
-const SLOW_START_GROWTH = 2;
-const GROWTH = 1.05;
-/** Successes needed for a step, in seconds' worth at the current rate: before the first throttle, and after. */
-const SLOW_START_STEP_S = 1;
-const STEP_S = 5;
-/** Rate cut on the first throttle or timeout, which ends the slow start, and on each one after. */
-const SLOW_START_CUT = 0.5;
-const CUT = 0.95;
-/** Share of requests sent to a random ready endpoint instead of the fastest, so a slow one that recovers is noticed. */
-const EXPLORE = 0.05;
-/** Weight of the newest answer in an endpoint's mean latency. */
-const LATENCY_WEIGHT = 0.1;
+/**
+ * An endpoint's calls-per-second limit. It starts at `initial` and, in the slow start, doubles each time a second's
+ * worth of calls succeeds; the first throttle or timeout halves it and ends the slow start. After that it grows 5% per
+ * five seconds' worth of successes and falls 5% per throttle, staying between `min` and `max`.
+ */
+const RATE = {
+  initial: 100,
+  min: 5,
+  max: 10_000,
+  /** Before the first throttle: growth per step, the step in seconds' worth of successes, and the cut that ends it. */
+  slowStart: { growth: 2, stepS: 1, cut: 0.5 },
+  /** After it. */
+  steady: { growth: 1.05, stepS: 5, cut: 0.95 },
+};
+/**
+ * Retries of failures that aren't throttling (throttled tries don't count): `attempts` tries per call, the backoff
+ * starting at `backoffMs` and doubling per attempt up to `maxBackoffMs`, then given ±50% jitter.
+ */
+const RETRY = { attempts: 8, backoffMs: 200, maxBackoffMs: 10_000 };
+/** Pause of all requests after a throttle, growing `growth` times per throttle in a row up to `maxMs`. */
+const PAUSE = { initialMs: 100, maxMs: 5_000, growth: 1.5 };
+/**
+ * Picking an endpoint: `explore` is the share of requests sent to a random ready one instead of the fastest, so a slow
+ * one that recovers is noticed; `latencyWeight` is the weight of the newest answer in an endpoint's mean latency.
+ */
+const PICK = { explore: 0.05, latencyWeight: 0.1 };
 /** `getEvents` continuation tokens remembered with the endpoint that issued them, oldest dropped first. */
 const MAX_TOKENS = 10_000;
 
@@ -107,18 +105,20 @@ type Response = {
   error?: { code: number; message: string; data?: unknown };
 };
 
-/** JSON-RPC's internal error, which nodes also send for a failure on their side worth retrying. */
-const INTERNAL_ERROR = -32603;
-/** "Limit exceeded": how some providers throttle, instead of HTTP 429 (which others also send as a code). */
-const LIMIT_EXCEEDED = -32005;
-const TOO_MANY_REQUESTS = 429;
+/**
+ * Error codes: JSON-RPC's internal error, which nodes also send for a failure on their side worth retrying; "limit
+ * exceeded", how some providers throttle instead of HTTP 429; and 429, which others also send as a code.
+ */
+const CODES = { internalError: -32603, limitExceeded: -32005, tooManyRequests: 429 };
 
 const throttles = (status: number | undefined, code: number | undefined) =>
-  status === TOO_MANY_REQUESTS || code === TOO_MANY_REQUESTS || code === LIMIT_EXCEEDED;
+  status === CODES.tooManyRequests ||
+  code === CODES.tooManyRequests ||
+  code === CODES.limitExceeded;
 
 function retryable(status: number | undefined, code?: number): boolean {
   if (throttles(status, code)) return true;
-  return (status !== undefined && status >= 500) || code === INTERNAL_ERROR;
+  return (status !== undefined && status >= 500) || code === CODES.internalError;
 }
 
 class Endpoint {
@@ -133,7 +133,7 @@ class Endpoint {
   refilled = Date.now();
   gate: Promise<void> = Promise.resolve();
   pausedUntil = 0;
-  pauseMs = INITIAL_PAUSE_MS;
+  pauseMs = PAUSE.initialMs;
   active = 0;
   claimed = 0;
   latencyMs = 0;
@@ -183,13 +183,13 @@ class Endpoint {
 
   answered(n: number, ms: number) {
     this.latencyMs =
-      this.latencyMs === 0 ? ms : this.latencyMs + (ms - this.latencyMs) * LATENCY_WEIGHT;
+      this.latencyMs === 0 ? ms : this.latencyMs + (ms - this.latencyMs) * PICK.latencyWeight;
     if (n === 0) return;
-    this.pauseMs = INITIAL_PAUSE_MS;
+    this.pauseMs = PAUSE.initialMs;
     this.succeeded += n;
-    const step = this.slowStart ? SLOW_START_STEP_S : STEP_S;
-    if (!this.waitedForRate || this.succeeded < step * this.rate) return;
-    this.rate = Math.min(this.maxRate, this.rate * (this.slowStart ? SLOW_START_GROWTH : GROWTH));
+    const phase = this.slowStart ? RATE.slowStart : RATE.steady;
+    if (!this.waitedForRate || this.succeeded < phase.stepS * this.rate) return;
+    this.rate = Math.min(this.maxRate, this.rate * phase.growth);
     this.succeeded = 0;
     this.waitedForRate = false;
   }
@@ -199,8 +199,8 @@ class Endpoint {
     const now = Date.now();
     if (now < this.pausedUntil) return;
     this.rate = Math.max(
-      Math.min(MIN_RATE, this.maxRate),
-      this.rate * (this.slowStart ? SLOW_START_CUT : CUT),
+      Math.min(RATE.min, this.maxRate),
+      this.rate * (this.slowStart ? RATE.slowStart : RATE.steady).cut,
     );
     this.slowStart = false;
     this.succeeded = 0;
@@ -210,8 +210,8 @@ class Endpoint {
     this.refilled = this.pausedUntil;
     // Whole milliseconds: a pause ending mid-millisecond would wake on it again, since Date.now() can't pass it.
     this.pauseMs = timeout
-      ? INITIAL_PAUSE_MS
-      : Math.min(MAX_PAUSE_MS, Math.round(this.pauseMs * PAUSE_GROWTH));
+      ? PAUSE.initialMs
+      : Math.min(PAUSE.maxMs, Math.round(this.pauseMs * PAUSE.growth));
   }
 }
 
@@ -261,13 +261,13 @@ export class RpcClient {
       typeof e === "string" ? { url: e } : e,
     );
     if (endpoints.length === 0) throw new Error("no RPC endpoint");
-    const initial = options.initialRate ?? INITIAL_RATE;
-    const max = options.maxRate ?? MAX_RATE;
+    const initial = options.initialRate ?? RATE.initial;
+    const max = options.maxRate ?? RATE.max;
     this.#endpoints = endpoints.map((e) => new Endpoint(e, initial, max));
     this.#fetch = options.fetch ?? fetch;
     this.#timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
     this.#maxConcurrency = options.maxConcurrency ?? MAX_CONCURRENCY;
-    this.#maxAttempts = options.maxAttempts ?? MAX_ATTEMPTS;
+    this.#maxAttempts = options.maxAttempts ?? RETRY.attempts;
     this.#signal = options.signal;
   }
 
@@ -342,7 +342,7 @@ export class RpcClient {
     const now = Date.now();
     const candidates = avoid === undefined ? all : all.filter((e) => e !== avoid);
     const ready = candidates.filter((e) => e.waitMs(n, now) === 0);
-    if (ready.length > 1 && Math.random() < EXPLORE)
+    if (ready.length > 1 && Math.random() < PICK.explore)
       return ready[Math.floor(Math.random() * ready.length)]!;
     const key = (e: Endpoint) => [e.waitMs(n, now), e.latencyMs, e.active];
     return candidates.reduce((best, e) => {
@@ -434,7 +434,8 @@ export class RpcClient {
       else if (attempt >= this.#maxAttempts) throw failure;
       else
         await sleep(
-          Math.min(MAX_BACKOFF_MS, BACKOFF_MS * 2 ** (attempt - 1)) * (0.5 + Math.random()),
+          Math.min(RETRY.maxBackoffMs, RETRY.backoffMs * 2 ** (attempt - 1)) *
+            (0.5 + Math.random()),
           this.#signal,
         );
     }
@@ -471,7 +472,7 @@ export class RpcClient {
     endpoint.headersMs =
       endpoint.headersMs === 0
         ? ms
-        : endpoint.headersMs + (ms - endpoint.headersMs) * LATENCY_WEIGHT;
+        : endpoint.headersMs + (ms - endpoint.headersMs) * PICK.latencyWeight;
     onStatus(res.status);
     // fetch decodes br and gzip itself, and zstd too in newer Node 24 (still labelled zstd): the frame magic tells.
     const bytes = new Uint8Array(await res.arrayBuffer());
@@ -491,7 +492,7 @@ export class RpcClient {
     return calls.map((c, i) => {
       const r = byId.get(first + i);
       if (r === undefined)
-        return new RpcError(c.method, INTERNAL_ERROR, "missing response in batch");
+        return new RpcError(c.method, CODES.internalError, "missing response in batch");
       if (r.error !== undefined)
         return new RpcError(c.method, r.error.code, r.error.message, r.error.data);
       return r.result;

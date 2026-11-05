@@ -19,24 +19,27 @@ export type EventStreamOptions = {
   windowEvents?: number;
   /** Smallest range worth splitting off. */
   minSplit?: number;
-  /** Most windows at once. Default: `MAX_WINDOWS_PER_WORKER` per worker. */
+  /** Most windows at once. Default: `WINDOWS.maxPerWorker` per worker. */
   maxWindows?: number;
   /** Receives a reader of the stream's state, for `--debug`. */
   gauges?: (read: () => FetchGauges) => void;
 };
 
-/** Smallest range, in blocks, worth splitting off a window for an idle worker. */
-const MIN_SPLIT = 64;
-/** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
-const DENSITY_DECAY = 0.9;
-/** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
-const MAX_WINDOWS_PER_WORKER = 8;
-/**
- * Pages per worker fetched past the front window before the windows further on pause: the handlers read only up to
- * the front, so idle workers then split it instead. On disk, not in memory. Without it, every worker
- * stayed far ahead and the front advanced one page at a time (Ekubo, 2026-11-03: 13.8M fetched, 2.1M handled).
- */
-const AHEAD_PAGES_PER_WORKER = 8;
+/** How the block range is cut into windows for the workers. */
+const WINDOWS = {
+  /** Smallest range, in blocks, worth splitting off a window for an idle worker. */
+  minSplit: 64,
+  /** Most windows per worker: Ekubo's history peaks near 4, so this only stops a runaway, whatever cuts windows. */
+  maxPerWorker: 8,
+  /**
+   * Pages per worker fetched past the front window before the windows further on pause: the handlers read only up to
+   * the front, so idle workers then split it instead. On disk, not in memory. Without it, every worker stayed far
+   * ahead and the front advanced one page at a time (Ekubo, 2026-11-03: 13.8M fetched, 2.1M handled).
+   */
+  aheadPagesPerWorker: 8,
+  /** Weight the density seen so far keeps at each page, so cuts follow where events are now. */
+  densityDecay: 0.9,
+};
 
 /** Span of `workerTime`: a few seconds, so it follows the stretch being fetched without flickering. */
 const TIME_SHARE_MS = 5_000;
@@ -135,10 +138,10 @@ class EventFetcher {
   constructor(o: EventStreamOptions, stats: FetchStats) {
     this.#o = o;
     this.#stats = stats;
-    this.#minSplit = o.minSplit ?? MIN_SPLIT;
-    this.#maxWindows = o.maxWindows ?? MAX_WINDOWS_PER_WORKER * o.concurrency;
+    this.#minSplit = o.minSplit ?? WINDOWS.minSplit;
+    this.#maxWindows = o.maxWindows ?? WINDOWS.maxPerWorker * o.concurrency;
     this.#windowEvents = o.windowEvents ?? 2 * o.chunkSize;
-    this.#maxAhead = AHEAD_PAGES_PER_WORKER * o.concurrency * o.chunkSize;
+    this.#maxAhead = WINDOWS.aheadPagesPerWorker * o.concurrency * o.chunkSize;
     this.#windows = (o.ranges ?? [[o.from, o.to]]).map(([from, to]) => ({
       from,
       to,
@@ -318,8 +321,9 @@ class EventFetcher {
         token === undefined
           ? w.until
           : Math.min(w.until, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
-      this.#recentEvents = this.#recentEvents * DENSITY_DECAY + kept;
-      this.#recentBlocks = this.#recentBlocks * DENSITY_DECAY + Math.max(0, at - w.fetchedUntil);
+      this.#recentEvents = this.#recentEvents * WINDOWS.densityDecay + kept;
+      this.#recentBlocks =
+        this.#recentBlocks * WINDOWS.densityDecay + Math.max(0, at - w.fetchedUntil);
       this.#write(o.store, w, Math.min(at, w.until));
       if (at >= w.until) {
         w.fetchedUntil = w.until;

@@ -22,7 +22,9 @@ CI runs the same three on every push to main and on every PR.
 
 - Every config default lives in `src/config/resolve.ts` (`DEFAULTS`, `resolveConfig`). The indexer reads the
   resolved config and never writes `config.x ?? n`.
-- A limit, size or interval is a named constant with a one-line doc saying why it has that value.
+- A limit, size or interval is a named constant with a one-line doc saying why it has that value. Constants that
+  tune one mechanism go in one object named for it (`RATE`, `RETRY`, `READ`), with a doc on how the mechanism works
+  and one on each field that needs its own reason; a value that stands alone stays a constant of its own.
 - Helpers shared across folders go in `src/utils/`, one small file each. Felt forms (`felt`, `unpadded`,
   `canonical`) belong in `src/types/felt.ts`.
 - A mistake the user can fix (config, CLI arguments, a missing handler) throws `ConfigError`, which the CLI prints

@@ -13,8 +13,11 @@ import { transaction } from "./transaction.ts";
 
 /** Rows per DELETE: one parameter per key column each, far under Postgres's 65,535 per statement. */
 const ROWS_PER_DELETE = 1_000;
-const CACHE_SHARE = 1 / 5;
-const CACHE_KEPT = 0.8;
+/**
+ * The row cache, all tables together: up to `share` of the heap; past it, the least-read tables' rows go until
+ * `kept` of that is left, so the next rows read don't evict again at once.
+ */
+const ROW_CACHE = { share: 1 / 5, kept: 0.8 };
 
 type Pending = { op: "insert" | "upsert"; row: Row } | { op: "delete"; row: Row };
 
@@ -101,7 +104,7 @@ export class Store {
 
   constructor(orm: NodePgDatabase & { $client: Pool }, tables: PgTable[], options: StoreOptions) {
     this.#orm = orm;
-    this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * CACHE_SHARE);
+    this.#maxCachedBytes = options.maxCachedBytes ?? Math.floor(heapLimit() * ROW_CACHE.share);
     for (const t of tables) {
       const info = tableInfo(t);
       this.#tables.set(t, {
@@ -389,7 +392,7 @@ export class Store {
     const tables = [...this.#tables.values()];
     let total = tables.reduce((n, s) => n + s.cachedBytes, 0);
     if (total <= this.#maxCachedBytes) return;
-    const target = this.#maxCachedBytes * CACHE_KEPT;
+    const target = this.#maxCachedBytes * ROW_CACHE.kept;
     for (const s of tables.sort((a, b) => a.hits - b.hits)) {
       // A row still waiting for its commit may go too: reads find it there.
       for (const [k, row] of s.cache) {

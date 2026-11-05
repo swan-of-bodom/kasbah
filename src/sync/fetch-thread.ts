@@ -9,12 +9,11 @@ import type { Batch, FetchGauges } from "./fetch.ts";
 /** How often the fetch thread reports its RPC counts and gauges: often enough for the dashboard's second-by-second view. */
 export const STATS_MS = 250;
 /**
- * The fetch thread's heap, as a share of the indexer's: pages in flight and events waiting for Postgres, which the
- * main thread held before. It follows the heap the process is given, as every other limit does.
+ * The fetch thread's heap, `share` of the indexer's: pages in flight and events waiting for Postgres, which the main
+ * thread held before. It follows the heap the process is given, as every other limit does, and is at least `minMb`,
+ * for a few pages in flight on the smallest heap.
  */
-export const FETCH_HEAP_SHARE = 1 / 4;
-/** The least heap the fetch thread gets, for a few pages in flight on the smallest heap. */
-const FETCH_HEAP_MIN_MB = 48;
+const FETCH_HEAP = { share: 1 / 4, minMb: 48 };
 /**
  * Share of each endpoint's rate ceiling lent to the fetch thread: `getEvents` is most of a backfill's calls, and the
  * main thread keeps the rest for headers, transactions and calls.
@@ -81,8 +80,8 @@ export async function* fetchThread(
     } satisfies ThreadJob,
     resourceLimits: {
       maxOldGenerationSizeMb: Math.max(
-        FETCH_HEAP_MIN_MB,
-        Math.floor((heapLimit() / 2 ** 20) * FETCH_HEAP_SHARE),
+        FETCH_HEAP.minMb,
+        Math.floor((heapLimit() / 2 ** 20) * FETCH_HEAP.share),
       ),
     },
   });

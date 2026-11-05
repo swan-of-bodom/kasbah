@@ -14,20 +14,23 @@ export type App = {
   api: (app: ApiApp) => void;
 };
 
-export const CONFIG = "kasbah.config.ts";
-/** The project's tables, when the config doesn't pass `tables`. */
-export const SCHEMA = "kasbah.schema.ts";
-/** A project's handlers, registered on the config's app: imported after it, when present. */
-export const HANDLERS = "src/index.ts";
-/** A project's HTTP endpoints: its default export, a Hono app, is mounted after kasbah's own. */
-export const API = "src/api/index.ts";
+/** A project's files, by convention. */
+const FILES = {
+  config: "kasbah.config.ts",
+  /** The project's tables, when the config doesn't pass `tables`. */
+  schema: "kasbah.schema.ts",
+  /** Its handlers, registered on the config's app: imported after it, when present. */
+  handlers: "src/index.ts",
+  /** Its HTTP endpoints: the default export, a Hono app, is mounted after kasbah's own. */
+  api: "src/api/index.ts",
+};
 
 /** The app file given, or the project's config in the working directory. */
 export function target(arg: string | undefined): string {
   if (arg !== undefined) return arg;
-  if (!existsSync(CONFIG))
-    throw new ConfigError(`no ${CONFIG} here: run it in a project, or pass the app file`);
-  return CONFIG;
+  if (!existsSync(FILES.config))
+    throw new ConfigError(`no ${FILES.config} here: run it in a project, or pass the app file`);
+  return FILES.config;
 }
 
 /** `schemaRequired`: `start` and `serve`, which never take the schema from the directory's name. */
@@ -38,19 +41,20 @@ export async function load(file: string, o: { schemaRequired?: boolean } = {}): 
     throw new ConfigError(
       `${file}: the default export must be the app (export default kasbah(config))`,
     );
-  if (file.endsWith(CONFIG)) {
+  if (file.endsWith(FILES.config)) {
     const dir = dirname(resolve(file));
-    const schema = join(dir, SCHEMA);
+    const schema = join(dir, FILES.schema);
     const tables = existsSync(schema)
       ? ((await import(pathToFileURL(schema).href)) as Tables)
       : undefined;
     app.useProject({ name: basename(dir), tables, schemaRequired: o.schemaRequired });
-    if (existsSync(join(dir, HANDLERS))) await import(pathToFileURL(join(dir, HANDLERS)).href);
-    if (existsSync(join(dir, API))) {
-      const api = (await import(pathToFileURL(join(dir, API)).href)) as { default?: ApiApp };
+    if (existsSync(join(dir, FILES.handlers)))
+      await import(pathToFileURL(join(dir, FILES.handlers)).href);
+    if (existsSync(join(dir, FILES.api))) {
+      const api = (await import(pathToFileURL(join(dir, FILES.api)).href)) as { default?: ApiApp };
       if (typeof api.default?.fetch !== "function")
         throw new ConfigError(
-          `${API}: the default export must be a Hono app (const app = new Hono(); … export default app)`,
+          `${FILES.api}: the default export must be a Hono app (const app = new Hono(); … export default app)`,
         );
       app.api(api.default);
     }
@@ -71,7 +75,7 @@ const NOT_INDEXING = /^src\/api\/|\.(test|spec)\.[a-z]+$/;
  * the config's settings keeps the indexed data. A single-file app hashes every code file beside it.
  */
 export function sourceHash(file: string): string {
-  const project = file.endsWith(CONFIG);
+  const project = file.endsWith(FILES.config);
   const root = project ? join(dirname(resolve(file)), "src") : dirname(resolve(file));
   const h = createHash("sha256");
   const files = (existsSync(root) ? (readdirSync(root, { recursive: true }) as string[]) : [])

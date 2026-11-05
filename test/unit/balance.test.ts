@@ -43,7 +43,7 @@ test("load balancing: a failing endpoint's call is retried on another", async ()
     return "0x1";
   });
   const rpc = new RpcClient(loadBalance(["http://a", "http://b"]) as string[], { fetch: n.fetch });
-  // Off the random pick (EXPLORE), so the first call goes to a, the first in order.
+  // Off the random pick (`PICK.explore`), so the first call goes to a, the first in order.
   const random = vi.spyOn(Math, "random").mockReturnValue(0.99);
   try {
     expect(await rpc.request("starknet_blockNumber", [])).toBe("0x1");

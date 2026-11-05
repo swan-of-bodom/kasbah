@@ -26,36 +26,38 @@ import { transaction } from "./transaction.ts";
 /** Transactions per INSERT: one statement's array parameters are built as one string. */
 const ROWS_PER_INSERT = 1_000;
 /**
- * Share of the heap for fetched events waiting for Postgres, the write in flight included: past it, fetching waits.
- * It's the fetch thread's heap, a quarter of the indexer's (`FETCH_HEAP_SHARE`): a twentieth of that. Writes keep up
- * on any disk that keeps up with the RPC, so it's reached only on a slow one.
+ * Fetched events waiting for Postgres, the write in flight included: past `share` of the heap, at least `minBytes`,
+ * fetching waits. It's the fetch thread's heap, a quarter of the indexer's (`FETCH_HEAP.share`): a twentieth of that.
+ * Writes keep up on any disk that keeps up with the RPC, so it's reached only on a slow one.
  */
-const WRITE_SHARE = 1 / 5;
-const MIN_WRITE_BYTES = 8 << 20;
-/** Most events per batch read back for the handlers. */
-const READ_LIMIT = 12_000;
-/**
- * Share of the heap one read-back batch may take, decoded: about four are alive at once (the next one's rows, the one
- * being decoded, the one prepared, the one handled), each with the rows its handlers write. Large events fill it
- * before `READ_LIMIT` does: 30-felt events ran a 256 MB heap out of memory at 12k per batch.
- */
-const READ_SHARE = 1 / 64;
-/**
- * Events in the cache's first read-back batch, before their size is known. Only the first: a backfill reads from
- * where it is to the fetch thread's front each time that moves, several times a second, and every such read starting
- * at 1,000 cost Ekubo 7–9 s to block 652k (4%, 2 runs each, 2026-11-03).
- */
-const READ_FIRST_EVENTS = 1_000;
-/**
- * Blocks the first read-back query spans; each next one spans what held about `READ_LIMIT` events. A query over all
- * that is written ran 7.7 s instead of milliseconds while the fetch thread was 600k blocks ahead (Ekubo, 2026-11-03):
- * Postgres took a plan that collects the whole range before it sorts. Bounded, no plan touches far more than a batch.
- */
-const READ_FIRST_BLOCKS = 1_000;
-/** The most a read's span grows from one query to the next, so a dense stretch after a sparse one costs one big query at most. */
-const READ_GROWTH = 4;
-/** Span of `recentReads`. */
-const READ_WINDOW_MS = 5_000;
+const WRITE = { share: 1 / 5, minBytes: 8 << 20 };
+/** Reading events back for the handlers. */
+const READ = {
+  /** Most events per batch. */
+  limit: 12_000,
+  /**
+   * Share of the heap one batch may take, decoded: about four are alive at once (the next one's rows, the one being
+   * decoded, the one prepared, the one handled), each with the rows its handlers write. Large events fill it before
+   * `limit` does: 30-felt events ran a 256 MB heap out of memory at 12k per batch.
+   */
+  share: 1 / 64,
+  /**
+   * Events in the first batch, before their size is known. Only the first: a backfill reads from where it is to the
+   * fetch thread's front each time that moves, several times a second, and every such read starting at 1,000 cost
+   * Ekubo 7–9 s to block 652k (4%, 2 runs each, 2026-11-03).
+   */
+  firstEvents: 1_000,
+  /**
+   * Blocks the first query spans; each next one spans what held about `limit` events. A query over all that is written
+   * ran 7.7 s instead of milliseconds while the fetch thread was 600k blocks ahead (Ekubo, 2026-11-03): Postgres took
+   * a plan that collects the whole range before it sorts. Bounded, no plan touches far more than a batch.
+   */
+  firstBlocks: 1_000,
+  /** The most a span grows from one query to the next, so a dense stretch after a sparse one costs one big query at most. */
+  growth: 4,
+  /** Span of `recentReads`. */
+  windowMs: 5_000,
+};
 /** Share of `maxCalls` left after pruning, so the next inserts don't prune again at once. */
 const CALLS_KEPT = 0.9;
 
@@ -241,7 +243,7 @@ export class EventCache implements ClassStore {
   /** Fetched pages waiting for the next write, oldest first. */
   #writes: Write[] = [];
   #held = { bytes: 0, events: 0 };
-  readonly #maxHeld = Math.max(MIN_WRITE_BYTES, Math.floor(heapLimit() * WRITE_SHARE));
+  readonly #maxHeld = Math.max(WRITE.minBytes, Math.floor(heapLimit() * WRITE.share));
   /** The writes under way; it never rejects (each page's promise does). */
   #writing: Promise<void> | undefined;
   #roomWakers: (() => void)[] = [];
@@ -369,7 +371,7 @@ export class EventCache implements ClassStore {
 
   /**
    * Cached events of `addresses` × `selectors` in `[from, to]`, in chain order, at most about `limit` per batch
-   * and fewer when large events pass `READ_SHARE` of the heap: paged by position, and a batch never ends inside a block. `cached`: counted as read from the cache, not
+   * and fewer when large events pass `READ.share` of the heap: paged by position, and a batch never ends inside a block. `cached`: counted as read from the cache, not
    * fetched by this run. `filter`: the keys after the selector, as `getEvents` takes them; a range the unfiltered
    * stream covers holds the events it drops too.
    */
@@ -378,7 +380,7 @@ export class EventCache implements ClassStore {
     selectors: string[],
     from: number,
     to: number,
-    limit = READ_LIMIT,
+    limit = READ.limit,
     cached = true,
     filter: string[][] = [],
   ): AsyncGenerator<Batch> {
@@ -395,17 +397,17 @@ export class EventCache implements ClassStore {
           [lo, hi, a, s, n],
         )
       ).rows;
-    let span = READ_FIRST_BLOCKS;
-    const budget = heapLimit() * READ_SHARE;
+    let span = READ.firstBlocks;
+    const budget = heapLimit() * READ.share;
     const sized = (perEvent: number) => Math.max(1, Math.min(limit, Math.floor(budget / perEvent)));
     let most =
-      this.#eventSize === undefined ? Math.min(limit, READ_FIRST_EVENTS) : sized(this.#eventSize);
+      this.#eventSize === undefined ? Math.min(limit, READ.firstEvents) : sized(this.#eventSize);
     const page = async (lo: number): Promise<{ rows: EventRow[]; through: number }> => {
       const hi = Math.min(to, lo + span - 1);
       const n = most;
       const rows = await this.#timed(query(lo, hi, n));
       if (rows.length < n) {
-        span = Math.ceil(span * Math.min(READ_GROWTH, n / Math.max(1, rows.length)));
+        span = Math.ceil(span * Math.min(READ.growth, n / Math.max(1, rows.length)));
         return { rows, through: hi };
       }
       const last = rows.at(-1)!.block;
@@ -454,7 +456,7 @@ export class EventCache implements ClassStore {
 
   #rollReads() {
     const now = performance.now();
-    if (now - this.#reads.at < READ_WINDOW_MS) return;
+    if (now - this.#reads.at < READ.windowMs) return;
     this.#readsShown = { count: this.#reads.count, slowestMs: this.#reads.slowestMs };
     this.#reads = { at: now, count: 0, slowestMs: 0 };
   }

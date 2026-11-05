@@ -81,10 +81,13 @@ export function upgradeEventsOf(
   return found.length > 0 ? new Set(found) : undefined;
 }
 
-/** Above this many addresses, live class checks read each block's state diff instead of asking per address. */
-const PER_ADDRESS_CHECKS = 100;
-/** `getStateUpdate` calls per batch request: diffs are large, so batches stay small. */
-const STATE_UPDATES_PER_BATCH = 100;
+/** Live class checks. */
+const CLASS_CHECKS = {
+  /** Above this many addresses, they read each block's state diff instead of asking per address. */
+  maxPerAddress: 100,
+  /** `getStateUpdate` calls per batch request: diffs are large, so batches stay small. */
+  stateUpdatesPerBatch: 100,
+};
 
 type StateUpdate = {
   state_diff: { replaced_classes: { contract_address: string; class_hash: string }[] };
@@ -374,7 +377,7 @@ export class Sources {
       (w) => w.checked < to && this.#contracts.get(w.contract)!.upgrades === undefined,
     );
     if (due.length === 0) return;
-    if (due.length <= PER_ADDRESS_CHECKS) {
+    if (due.length <= CLASS_CHECKS.maxPerAddress) {
       const current = await this.#rpc.batch<string[]>(
         due.map((w) => ({
           method: "starknet_getClassHashAt",
@@ -402,7 +405,7 @@ export class Sources {
     }
     const start = Math.min(...due.map((w) => w.checked + 1), from);
     const blocks = Array.from({ length: to - start + 1 }, (_, i) => start + i);
-    for (const part of chunks(blocks, STATE_UPDATES_PER_BATCH)) {
+    for (const part of chunks(blocks, CLASS_CHECKS.stateUpdatesPerBatch)) {
       const updates = await this.#rpc.batch<StateUpdate[]>(
         part.map((n) => ({
           method: "starknet_getStateUpdate",
