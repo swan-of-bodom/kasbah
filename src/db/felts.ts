@@ -11,7 +11,9 @@ export function feltHex(felt: string): string {
   const h = felt.slice(i).toLowerCase();
   return h.length % 2 === 1 ? `0${h}` : h;
 }
+
 export const feltBytes = (felt: string): Buffer => Buffer.from(feltHex(felt), "hex");
+
 /** A felt from its minimal bytes as hex. */
 export const feltFromMinimalBytes = (h: string): string =>
   h.length === 0 ? "0x0" : h.charCodeAt(0) === 48 ? `0x${h.slice(1)}` : `0x${h}`;
