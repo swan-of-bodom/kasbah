@@ -66,6 +66,10 @@ export function resolveConfig(
   const port = env.PORT ? Number(env.PORT) : undefined;
   if (port !== undefined && !Number.isInteger(port))
     throw new ConfigError(`PORT=${env.PORT} is not a port number`);
+  if (typeof config.cache === "boolean")
+    throw new ConfigError(
+      `cache: ${config.cache} is no longer an option: the event cache is always on. Remove it`,
+    );
   const rpc = endpointsOf(config.rpc);
   if (config.finality !== undefined && config.reorgWindow !== undefined)
     throw new ConfigError('`finality: "l1"` and `reorgWindow` both set: L1 finality has no window');
@@ -87,7 +91,7 @@ export function resolveConfig(
     reorgWindow: config.reorgWindow ?? DEFAULTS.reorgWindow,
     pollMs: config.pollMs ?? DEFAULTS.pollMs,
     ws: config.ws === true ? rpc[0]!.url.replace(/^http/, "ws") : config.ws,
-    cache: { maxCalls: cacheOf(config.cache).maxCalls ?? DEFAULTS.maxCalls },
+    cache: { maxCalls: config.cache?.maxCalls ?? DEFAULTS.maxCalls },
     blocks: config.blocks ?? {},
   };
 }
@@ -101,13 +105,4 @@ export function schemaName(name: string): string {
     .replace(/^_+|_+$/g, "");
   if (s === "") return DEFAULTS.schema;
   return (/^[0-9]/.test(s) ? `_${s}` : s).slice(0, 63);
-}
-
-function cacheOf(cache: unknown): { maxCalls?: number } {
-  if (cache === undefined || cache === true) return {};
-  if (cache === false)
-    throw new ConfigError(
-      "cache: false is no longer an option: events go through the event cache. Remove it (kasbah clean empties the cache)",
-    );
-  return cache as { maxCalls?: number };
 }

@@ -23,15 +23,16 @@ test("resolveConfig: every left-out field gets its default", () => {
   });
 });
 
-test("resolveConfig: `ws: true` is the RPC URL's socket, and `cache: true` keeps the default calls", () => {
-  const r = resolveConfig({ ...base, ws: true, cache: true });
+test("resolveConfig: `ws: true` is the RPC URL's socket, and no `cache` keeps the default calls", () => {
+  const r = resolveConfig({ ...base, ws: true });
   expect(r.ws).toBe("wss://node/rpc");
   expect(r.cache).toEqual({ maxCalls: DEFAULTS.maxCalls });
   expect(resolveConfig({ ...base, cache: { maxCalls: 5 } }).cache).toEqual({ maxCalls: 5 });
 });
 
-test("resolveConfig: `cache: false` is refused, as events always go through the cache", () => {
+test("resolveConfig: `cache: true` and `cache: false` are refused, as the event cache is always on", () => {
   expect(() => resolveConfig({ ...base, cache: false as never })).toThrow(ConfigError);
+  expect(() => resolveConfig({ ...base, cache: true as never })).toThrow(ConfigError);
 });
 
 test("resolveConfig: the environment wins over the config, so one config deploys anywhere", () => {

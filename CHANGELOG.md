@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- **Breaking:** `cache: true` is refused, like `cache: false`: the event cache is always on, so it did nothing. Remove it
+  from `kasbah.config.ts`; `cache: { maxCalls }` stays. New projects and the templates no longer write it.
 - The package no longer depends on `pg-query-emscripten`, which nothing used: an install is 4.5 MB smaller.
 - Handlers that update the same row again and again (a busy account's balance) no longer slow down as the run goes
   on. Each update of a hot row took longer than the last, and a cached LORDS backfill to block 1.3M took 118.8 s.

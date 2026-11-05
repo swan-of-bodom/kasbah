@@ -162,7 +162,6 @@ export function generate(p: Project): Record<string, string> {
     "  contracts: {",
     `    ${p.name}: { abi: ${abiName}, address: "${p.address}", startBlock: ${p.startBlock}${p.timestamps ? ", include: { block: true }" : ""} },`,
     "  },",
-    "  cache: true,",
     "});",
   );
   const schemaTs = lines(

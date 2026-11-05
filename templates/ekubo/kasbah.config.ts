@@ -13,5 +13,4 @@ export default kasbah({
       startBlock: 165_392,
     },
   },
-  cache: true,
 });

@@ -102,9 +102,9 @@ export type Config = {
   /**
    * The event cache: final raw events and call results in Postgres (schema `kasbah_cache_<chain>`), so a re-index
    * refetches nothing. Always on: events are fetched into it and handlers read them back. `maxCalls`: call results
-   * kept, oldest dropped first (default 1M). `true` is accepted as before; `false` is no longer.
+   * kept, oldest dropped first (default 1M).
    */
-  cache?: true | { maxCalls?: number };
+  cache?: { maxCalls?: number };
 };
 
 export const createConfig = <const C extends Config>(config: C): C => config;

@@ -442,7 +442,7 @@ handlers `event.transaction` with the transaction's RPC fields and `event.receip
   whole blocks instead of ≈2 MB.
 - Backfill fetches the next slice's data while the current one is handled; with `include`, batches are cut into
   slices of ≈2,000 events at block boundaries, so memory stays flat.
-- Cached (final blocks, `cache: true`) in `transactions(hash, block, transaction jsonb, receipt jsonb)`, written
+- Cached (final blocks) in `transactions(hash, block, transaction jsonb, receipt jsonb)`, written
   in chunks with the commit; a commit also happens once 32 MB of it is waiting (as much again may be in the
   commit being written).
 - Measured, Ekubo blocks 2.00M–2.02M (56k events, 15k transactions): without `include` 4 s; with both
