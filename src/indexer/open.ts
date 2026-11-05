@@ -34,9 +34,12 @@ import type { AnyHandler } from "./run.ts";
 import { type FactorySource, factoryReader, Sources, upgradeEventsOf } from "./sources.ts";
 import type { HandlerTotal, Status } from "./status.ts";
 
-/** How the API is shown: listening on 127.0.0.1 unless told otherwise, shown as localhost, the same address. */
+/** Hosts the API is shown at as localhost: every interface (the default) includes it, and 127.0.0.1 is it. */
+const LOCAL_HOSTS = new Set([undefined, "0.0.0.0", "::", "127.0.0.1"]);
+
+/** How the API is shown: localhost when it's reachable there, else the host it listens on. */
 export const apiUrl = (api: { host?: string }, port: number) =>
-  `http://${api.host === undefined || api.host === "127.0.0.1" ? "localhost" : api.host}:${port}`;
+  `http://${LOCAL_HOSTS.has(api.host) ? "localhost" : api.host}:${port}`;
 
 export type Factory = FactorySource & { reader: ReturnType<typeof factoryReader> };
 export type BlockSource = BlockConfig & { name: string };

@@ -4,6 +4,9 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- The API listens on every network interface by default, so platforms reach it without
+  `API_HOST=0.0.0.0`. To keep it on this machine only, set `API_HOST=127.0.0.1` (or `--hostname 127.0.0.1`).
+
 ## 0.2.1
 
 - A node that can't scan a range in time no longer stops the run. A sparse filter, like a factory's creation event

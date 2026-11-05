@@ -29,7 +29,7 @@ const DEPLOY_SCHEMA: [string, string] = [
 const PORT: [string, string] = ["--port <n>", "Where the API listens (PORT; default: 42069)"];
 const HOSTNAME: [string, string] = [
   "--hostname <host>",
-  "The host it listens on (API_HOST; default: localhost)",
+  "The host it listens on (API_HOST; default: every interface)",
 ];
 const UI: [string, string] = [
   "--ui / --no-ui",

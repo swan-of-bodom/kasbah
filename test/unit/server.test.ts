@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { networkInterfaces } from "node:os";
 import { count, eq, sql } from "drizzle-orm";
 import { integer, pgTable, text } from "drizzle-orm/pg-core";
 import { Hono } from "hono";
@@ -193,6 +194,19 @@ test.skipIf(url === undefined)(
     } finally {
       await second.close();
     }
+  },
+);
+
+/** An address of this machine other than loopback, as a platform's proxy reaches a container: none offline. */
+const outside = Object.values(networkInterfaces())
+  .flat()
+  .find((i) => i !== undefined && !i.internal && i.family === "IPv4")?.address;
+
+test.skipIf(url === undefined || outside === undefined)(
+  "without a host the API listens on every interface, not only loopback",
+  async () => {
+    const r = await fetch(`http://${outside}:${api.port}/health`);
+    expect(r.status).toBe(200);
   },
 );
 

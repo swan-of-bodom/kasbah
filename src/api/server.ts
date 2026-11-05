@@ -71,7 +71,8 @@ export class Api {
       fetch: (request, env) => apiContext.run(context, () => root.fetch(request, env)),
       createServer,
       port: o.port,
-      hostname: o.host ?? "127.0.0.1",
+      // Unset: every interface, as a platform's proxy and health check reach it from outside the container.
+      hostname: o.host,
     }) as Server;
     try {
       await new Promise<void>((resolve, reject) => {

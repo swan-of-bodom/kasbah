@@ -29,7 +29,7 @@ export default kasbah({
 | `ws` | `string \| true` | none | WebSocket for new heads. `true`: the RPC URL as `ws`. |
 | `concurrency` | `number` | `32` | `getEvents` requests in parallel. |
 | `cache` | `{ maxCalls? }` | `{ maxCalls: 1_000_000 }` | Final events and reads are always kept in Postgres; `maxCalls` caps the reads. |
-| `api` | `false \| { port?, host?, readDatabase? }` | port `42069`, localhost | The read API. `PORT` and `API_HOST` win. |
+| `api` | `false \| { port?, host?, readDatabase? }` | port `42069`, every interface | The read API. `PORT` and `API_HOST` win. |
 | `database` | `string` | `DATABASE_URL` | Postgres URL. |
 | `schema` | `string` | `dev`: the directory's name | Postgres schema. `DATABASE_SCHEMA` wins. `start`/`serve` need one. |
 | `tables` | `Record<string, PgTable>` | `kasbah.schema.ts` | Your tables. |
