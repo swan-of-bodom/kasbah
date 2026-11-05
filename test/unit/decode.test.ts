@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { CairoCustomEnum, CairoOption, CallData, events, hash } from "starknet";
 import { describe, expect, test } from "vitest";
+import { abiEvents, createDecoder } from "../../src/abi/events.ts";
 import { rawSelector } from "../../src/abi/selector.ts";
-import { type Abi, abiEvents, createDecoder, DecodeError, selector } from "../../src/index.ts";
+import { type Abi, DecodeError, selector } from "../../src/index.ts";
 import { felt, unpadded } from "../../src/types/felt.ts";
 
 type EmittedEvent = { keys: string[]; data: string[]; from_address: string };

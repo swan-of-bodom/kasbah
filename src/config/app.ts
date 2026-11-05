@@ -100,8 +100,6 @@ export type Config = {
   cache?: { maxCalls?: number };
 };
 
-export const createConfig = <const C extends Config>(config: C): C => config;
-
 type Contracts<C extends Config> = C["contracts"];
 type Blocks<C extends Config> =
   C["blocks"] extends Record<string, BlockConfig> ? C["blocks"] : Record<never, never>;

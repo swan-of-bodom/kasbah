@@ -1,6 +1,6 @@
+import { createDecoder } from "../../src/abi/events.ts";
 import {
   type Block,
-  createDecoder,
   type EventArgs,
   type EventName,
   type IndexedEvent,

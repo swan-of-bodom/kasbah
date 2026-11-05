@@ -67,9 +67,6 @@ export {
 } from "drizzle-orm/pg-core";
 export type * from "./abi/abi.ts";
 export { DecodeError } from "./abi/codec.ts";
-export { abiEvents, createDecoder, type EventDef } from "./abi/events.ts";
-export { abiFunctions, compileFunction } from "./abi/functions.ts";
-export { classHistory, createHistoricalDecoder } from "./abi/history.ts";
 export { selector } from "./abi/selector.ts";
 export type {
   DecodedEvent,
@@ -81,18 +78,17 @@ export type {
   TypeOf,
 } from "./abi/types.ts";
 export { kasbah } from "./app.ts";
-export {
-  type BlockConfig,
-  type Config,
-  type ContractConfig,
-  createConfig,
-  type FactoryConfig,
-  type Handler,
-  type HandlerName,
-  type IndexedBlock,
-  type IndexedEvent,
-  type RunOptions,
-  type Tables,
+export type {
+  BlockConfig,
+  Config,
+  ContractConfig,
+  FactoryConfig,
+  Handler,
+  HandlerName,
+  IndexedBlock,
+  IndexedEvent,
+  RunOptions,
+  Tables,
 } from "./config/app.ts";
 export { ConfigError } from "./config/errors.ts";
 export type { Network } from "./config/network.ts";

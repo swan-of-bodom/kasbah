@@ -3,7 +3,7 @@ import { Codec, DecodeError, type Reader } from "./codec.ts";
 import { rawSelector } from "./selector.ts";
 
 /** Every function of an ABI: top-level (Cairo 0, Cairo 1 before 2.0) and inside interfaces. */
-export function abiFunctions(abi: Abi): AbiFunction[] {
+function abiFunctions(abi: Abi): AbiFunction[] {
   return abi.flatMap((i) =>
     i.type === "function"
       ? [i]

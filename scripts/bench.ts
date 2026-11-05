@@ -2,8 +2,9 @@
 //   node --env-file=.env --no-warnings scripts/bench.ts --endpoint alchemy --from 900000 --to 1000000 --concurrency 32
 import { readFileSync } from "node:fs";
 import { parseArgs } from "node:util";
+import { createDecoder } from "../src/abi/events.ts";
 import { classHistory, createHistoricalDecoder } from "../src/abi/history.ts";
-import { type Abi, createDecoder } from "../src/index.ts";
+import type { Abi } from "../src/index.ts";
 import { RpcClient } from "../src/rpc/client.ts";
 import type { EmittedEvent } from "../src/rpc/methods.ts";
 import { blockNumber, getEvents, getHeaders } from "../src/rpc/methods.ts";
