@@ -4,6 +4,7 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- The package no longer depends on `pg-query-emscripten`, which nothing used: an install is 4.5 MB smaller.
 - Handlers that update the same row again and again (a busy account's balance) no longer slow down as the run goes
   on. Each update of a hot row took longer than the last, and a cached LORDS backfill to block 1.3M took 118.8 s.
   It now takes 18.5 s.

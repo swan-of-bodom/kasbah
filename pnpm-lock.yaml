@@ -44,9 +44,6 @@ importers:
       pg-copy-streams:
         specifier: ^7.0.0
         version: 7.0.0
-      pg-query-emscripten:
-        specifier: 5.1.0
-        version: 5.1.0
       superjson:
         specifier: ^2.2.6
         version: 2.2.6
@@ -887,9 +884,6 @@ packages:
 
   pg-protocol@1.16.1:
     resolution: {integrity: sha512-p9VOFMiHB/ZbJATetbg+99PxssTVSQRnyuPSQ67mN1+1KBOjZaZ83ZQzltnxPhJwSsC3nwVjJ10DVJlerbFzLg==}
-
-  pg-query-emscripten@5.1.0:
-    resolution: {integrity: sha512-H1ZWOzLRddmHuE4GZqFjjo55hA9zMiePz/WDDGANA/EnvILCJps9pcRucyGd+MFvapeYOy6TWSYz6DbtBOaxRQ==}
 
   pg-types@2.2.0:
     resolution: {integrity: sha512-qTAAlrEsl8s4OiEQY69wDvcMIdQN6wdz5ojQiOy6YRMuynxenON0O5oCpJI6lshc6scgAY8qvJ2On/p+CXY0GA==}
@@ -1780,8 +1774,6 @@ snapshots:
       pg: 8.23.1
 
   pg-protocol@1.16.1: {}
-
-  pg-query-emscripten@5.1.0: {}
 
   pg-types@2.2.0:
     dependencies:

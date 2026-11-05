@@ -78,7 +78,6 @@
     "hono": "^4.13.16",
     "pg": "^8.23.1",
     "pg-copy-streams": "^7.0.0",
-    "pg-query-emscripten": "5.1.0",
     "superjson": "^2.2.6"
   },
   "devDependencies": {
