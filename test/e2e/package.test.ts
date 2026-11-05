@@ -91,16 +91,17 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
   mkdirSync(create);
   pnpm(["pack", "--pack-destination", create], join(root, "create"));
   const createTarball = readdirSync(create).find((f) => f.endsWith(".tgz"))!;
-  // Until it's on the registry, its kasbah dependency comes from the tarball.
   writeFileSync(
     join(create, "package.json"),
     JSON.stringify({
       name: "c",
       private: true,
       dependencies: { "create-kasbah": `file:./${createTarball}` },
-      pnpm: { overrides: { kasbah: `file:../${tarball}` } },
     }),
   );
+  // Its kasbah dependency comes from the tarball, not the registry. In pnpm-workspace.yaml: pnpm 11 and later
+  // ignore `pnpm.overrides` in package.json, and this directory has no `packageManager` to pin an older one.
+  writeFileSync(join(create, "pnpm-workspace.yaml"), `overrides:\n  kasbah: file:../${tarball}\n`);
   pnpm(
     ["install", "--prefer-offline", "--store-dir", pnpm(["store", "path"], root).trim()],
     create,
