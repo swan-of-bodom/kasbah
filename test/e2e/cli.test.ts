@@ -233,6 +233,50 @@ test("a mistake to fix prints its message, without a stack", () => {
   expect([r.status, r.stderr]).toEqual([1, "[kasbah] set DATABASE_URL or pass --database\n"]);
 });
 
+const kasbah = (...args: string[]) =>
+  spawnSync(process.execPath, ["--no-warnings", resolve("src/cli/main.ts"), ...args], {
+    cwd: dir,
+    encoding: "utf8",
+  });
+
+test("kasbah, kasbah --help and kasbah help list every command, one line each", () => {
+  const help = kasbah("--help");
+  expect(help.status).toBe(0);
+  for (const command of [
+    "init",
+    "dev",
+    "start",
+    "serve",
+    "clean",
+    "list",
+    "prune",
+    "cache",
+    "help",
+  ])
+    expect(help.stdout).toMatch(new RegExp(`^  ${command} +\\S`, "m"));
+  expect(kasbah().stdout).toBe(help.stdout);
+  expect(kasbah("help").stdout).toBe(help.stdout);
+});
+
+test("kasbah <command> --help and kasbah help <command> print that command's options", () => {
+  const dev = kasbah("dev", "--help");
+  expect([dev.status, dev.stderr]).toEqual([0, ""]);
+  expect(dev.stdout).toContain("Usage: kasbah dev [app.ts] [options]");
+  expect(dev.stdout).toContain("--reset");
+  expect(kasbah("help", "dev").stdout).toBe(dev.stdout);
+  expect(kasbah("start", "-h").stdout).toContain("--to <block>");
+  expect(kasbah("cache", "clear", "--help").stdout).toContain("--chain <id>");
+});
+
+test("an unknown command exits 2 with the commands kasbah has", () => {
+  for (const args of [["nope"], ["help", "nope"], ["nope", "--help"]]) {
+    const r = kasbah(...args);
+    expect(r.status).toBe(2);
+    expect(r.stderr).toMatch(/^\[kasbah\] no command nope\n/);
+    expect(r.stderr).toContain("Usage: kasbah <command> [options]");
+  }
+});
+
 test.skipIf(url === undefined)("cache clear runs on a chain with no cache", async () => {
   const run = cli("cache", "clear", "--chain", "0x0");
   expect(await run.exited).toBe(0);

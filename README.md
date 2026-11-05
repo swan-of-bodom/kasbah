@@ -76,29 +76,45 @@ app.on("Core:Swapped", async ({ event, context }) => {
 });
 ```
 
-## Commands
+## Use kasbah
 
 Start a project with `pnpm create kasbah` (recommended): it needs nothing installed beforehand and takes the same
 flags as `kasbah init` (`pnpm create kasbah --help`). `npm create kasbah` and `yarn create kasbah` work too, and the
 project then uses npm or Yarn. In a project, the `dev`, `fresh`, `clean`, `start` and `serve` scripts (`pnpm dev`,
 `npm run dev`) run the commands below.
 
-| Command | What it does |
-|---|---|
-| `pnpm create kasbah [dir]` | a new project from a contract address or a template; same as `kasbah init` |
-| `kasbah init [dir]` | the same, with kasbah already installed (`--help` for its flags) |
-| `kasbah dev [--reset]` | index and serve, restarting on every change; without `DATABASE_URL`, runs Postgres in a Docker or Podman container; `--reset` starts over (`pnpm fresh`) |
-| `kasbah start --schema <name> [--to <block>] [--reset]` | index and serve, for production |
-| `kasbah serve --schema <name>` | the API alone, over what an indexer stored |
-| `kasbah clean [--yes]` | deletes what the app stored: the dev container and its volume, or with `DATABASE_URL` only the app's schema |
-| `kasbah list` | the schemas in `DATABASE_URL` and the dev databases on the machine, with their sizes |
-| `kasbah prune [--yes]` | drops the schemas in `DATABASE_URL` that no indexer is running |
-| `kasbah cache clear [--events] [--calls] [--chain <id>]` | empties the raw-event and call caches (`kasbah list` shows them) |
+Once installed, run `kasbah --help` in your project (`pnpm kasbah --help`, `npx kasbah --help`) to see every
+command:
 
-`start`, `dev`, `clean` and `serve` also take `--schema <name>` (`DATABASE_SCHEMA`), `--port`/`--hostname` (`PORT`
-/ `API_HOST`, default `localhost:42069`), `--ui`/`--no-ui` for the progress screen and `--debug` for the fetcher's
-details on it. `list`, `prune` and `cache` take `--database <url>` in place of `DATABASE_URL`. Every command reads
-`.env` from the working directory; `kasbah --help` lists it all.
+```bash
+pnpm kasbah --help
+```
+
+```
+A minimal, fast Starknet indexer in TypeScript.
+
+Usage: kasbah <command> [options]
+
+Commands:
+  init   Create a project from a contract address or a template
+  dev    Index and serve, restarting on every file change
+  start  Index and serve, for production
+  serve  Serve the API alone, over what an indexer stored
+  clean  Delete what the app stored
+  list   Show the app schemas, event caches and dev databases
+  prune  Drop the schemas no indexer is running
+  cache  Empty the raw-event and call caches
+  help   Print this, or a command's help (kasbah help <command>)
+
+Options:
+  -h, --help     Print help (kasbah <command> --help for a command's options)
+  -v, --version  Print the version
+
+Reads .env from the working directory. Docs: https://swan-of-bodom.github.io/kasbah/
+```
+
+`kasbah <command> --help` (or `kasbah help <command>`) prints a command's options, and the
+[CLI reference](https://swan-of-bodom.github.io/kasbah/docs/reference/cli) has every flag.
 
 ## Docs
 

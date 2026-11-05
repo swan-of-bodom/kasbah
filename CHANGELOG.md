@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- `kasbah --help` lists the commands one line each, and every command has its own help: `kasbah <command> --help`
+  or `kasbah help <command>`. An unknown command says so before the list.
 - A `pragma` template: `kasbah init --template pragma` records Pragma's ETH, BTC and STRK prices in USD, read from its
   oracle every 2,000 blocks by a block handler.
 - An enum the ABI declares has its own type in handlers and contract reads. It used to type as a meaningless

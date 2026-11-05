@@ -80,7 +80,7 @@ test("the packed package installs and works outside the repo: library, types and
       cwd: dir,
       encoding: "utf8",
     }),
-  ).toContain("kasbah start [app.ts]");
+  ).toContain("Usage: kasbah <command> [options]");
 }, 120_000);
 
 test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed package", async () => {
