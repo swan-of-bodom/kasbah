@@ -681,76 +681,67 @@ About 43k lines in Ponder's `core/src`. Not needed here:
 - `ponder dev` drop-and-rebuild, the views schema (TODO, see the schema lock), live-query NOTIFY (maybe later)
 - `utils/sql-parse.ts` (1.5k lines, libpg-query) used only for raw-SQL flush logic
 
-Target size: under 10k lines for v1.
+Target size was under 10k lines; `src/` is 13.5k (2026-11-05), most of the difference the GraphQL API and the CLI.
 
-## 11. Build order
+## 11. API, CLI and projects
 
-0. **ABI model + decoder + types**, tested on the real ABIs and events in `test/fixtures/` (Cairo 0 and Ekubo).
-   Small, independent, and everything else depends on it.
-1. **Spike: fetcher benchmark.** Endpoint probe + backfill fetcher only, printing events/s. Run on a real
-   Ekubo history against Alchemy, Cartridge (Pathfinder) and PublicNode (Juno), and compare with the Ponder fork.
-   This validates the core bet before writing anything else.
-   Done, results in §11.1.
-2. Decoder, config, schema, handlers, buffered store with COPY. Backfill end to end.
-   Done.
-3. Raw-event cache + coverage; re-index with zero RPC calls. (Moved after 5: a full Ekubo refetch costs $0.57.)
-   Done, with factories (§5.2) and block-interval handlers: config `blocks: { Name: { interval,
-   startBlock, endBlock? } }`, handler `"Name:block"` with the block's number, hash and timestamp, run after that
-   block's events; headers are fetched only for the blocks it fires on.
-4. Live polling, undo journal, crash recovery. Done.
-5. Read API. Done (`src/api/`):
-   - The API is a Hono app (`src/api/server.ts`): kasbah's `/health`, `/ready`, `/status` and `/metrics`, then the
-     app's own (the default export of `src/api/index.ts`), as in Ponder. `db` and `graphql()` come from
-     `kasbah/api`; they find the API serving the request through `AsyncLocalStorage`, so two APIs in one process
-     (tests, `serve` next to an indexer) never mix. An earlier `app.get`/`app.post` kept the API dependency-free,
-     but an app wanting middleware, validation or its own errors had to wait for kasbah; Hono gives them. `hono` is a
-     dependency (as an optional peer, a project without it, from npm or an older `init`, crashed when the built-in
-     endpoints loaded it). A request body may take 1 MB. An error a route throws reaches the client in full only in
-     `kasbah dev` (`NODE_ENV=development`, which `dev` sets); elsewhere it's a plain 500 and a log line, so a lock
-     timeout or a bug doesn't show a server path to anyone.
-   - Every query runs as `<schema>_reader`, a login role kasbah creates (or `api.readDatabase`) with SELECT on the
-     app's tables and `_kasbah_meta` only. Its password is an HMAC of the database URL and the role's name, so
-     every process on the schema sets the same one (at first each start set a random one, locking out the
-     processes already running: a zero-downtime deploy's old instance, `serve` replicas). The setup runs in one
-     transaction under an advisory lock, so processes starting at once don't race. Its connections start
-     read-only, with a 30 s statement timeout and a 500 ms lock timeout, so a route's query fails rather than
-     writes or queues behind a migration. Ponder reads with the indexer's own login on read-only connections; a
-     role keeps Postgres as the guard.
-   - SQL over HTTP (Ponder's `client()`, which `@ponder/client` queries) was ported and left out (2026-11-04): its
-     safety rests on a SQL parser (a WebAssembly build of Postgres' own, 4.5 MB) and a 1,200-line allow list, and
-     no app used it; apps write endpoints. Its branch keeps the port. With it went live queries and the commit
-     `NOTIFY` they listened to.
-   - `POST /graphql` (`graphql()` from `kasbah/api`, `src/api/graphql/`): Ponder's schema builder, ported, so the
-     schema, filters, ordering, cursors, `totalCount`, relations, `_meta { status }` and errors are Ponder's; a
-     Ponder client works unchanged. Per table key `pool`: `pool(<primary key>)` and
-     `pools(where, orderBy, orderDirection, before, after, limit, offset)`. Where kasbah differs: `bignum()` is
-     Ponder's `t.bigint()` (`BigInt`) and `hex()` its `t.hex()` (no `_nocase` filters), but `hex()` keeps values
-     as written where Ponder lowercases them, so filters match as stored; no enums or views, which kasbah doesn't
-     create; `status` is `/status`'s (the chain's name as its id); two tables whose fields would collide, or a
-     relation named like a column, are refused at startup; a query's own mistakes (a bad cursor, a value Postgres
-     refuses, a limit over 1,000) are GraphQL errors that keep their message, and everything else is masked unless
-     in `kasbah dev`, judged by the error's name since a plugin may load another copy of graphql (the token limit's
-     message was masked so); an int8 read as a number is a `Float`, not Ponder's 32-bit `Int`; a column type of the
-     app's own reads back as `JSON` with no filters, where Ponder refuses the schema; a date column's filters and
-     keys take the milliseconds it reads back as, or an ISO date (Ponder passes the string to Drizzle, which fails).
-     And, to run anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages
-     multiply: 1,000 × 1,000 × …), it runs at most 500 statements, four at a time (half the pool, so one request
-     never holds every connection), and all within the query timeout; past a limit, its later statements fail
-     at once.
-   - `GET /status`: `{ "<chain>": { id, block: { number, timestamp } } }`, the checkpoint and its block's time,
-     Ponder's shape (the chain's name as its id: kasbah stores no numeric one).
-   - GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables` takes both, so
-     `import * as schema` works). A `one()` field is the related row, through a per-request DataLoader: a page's
-     lookups go out as one statement. A `many()` field is a page with the list's arguments, one statement per
-     parent, as in Ponder (a `LATERAL` join over the parents' keys would batch them, but cursors, `before` and
-     `totalCount` per parent make it another query planner's worth of code).
-   - GraphQL limits: before a query runs, at most 1,000 tokens, depth 100 and 30 aliases (Ponder's, from Apollo).
-   - `GET /health`: 200 while the process answers. `GET /ready`: 200 once the phase is live (or done: a run with
-     `to` that indexed through it, keys built), else 503. `GET /metrics`: the `Status` in Prometheus' text format
-     (`src/indexer/metrics.ts`), or, with no indexer in the process, the stored checkpoint and phase. A route's
-     error is a 500 (naming the route in `dev`), an `HTTPException` its own status. Auth, rate limits and TLS are left to a
-     proxy in front, as in Ponder.
-6. Opt-ins: WebSocket mode, pre-confirmed overlay, class-hash factories, call/trace handlers.
+### Read API (`src/api/`)
+
+- The API is a Hono app (`src/api/server.ts`): kasbah's `/health`, `/ready`, `/status` and `/metrics`, then the
+  app's own (the default export of `src/api/index.ts`), as in Ponder. `db` and `graphql()` come from
+  `kasbah/api`; they find the API serving the request through `AsyncLocalStorage`, so two APIs in one process
+  (tests, `serve` next to an indexer) never mix. An earlier `app.get`/`app.post` kept the API dependency-free,
+  but an app wanting middleware, validation or its own errors had to wait for kasbah; Hono gives them. `hono` is a
+  dependency (as an optional peer, a project without it, from npm or an older `init`, crashed when the built-in
+  endpoints loaded it). A request body may take 1 MB. An error a route throws reaches the client in full only in
+  `kasbah dev` (`NODE_ENV=development`, which `dev` sets); elsewhere it's a plain 500 and a log line, so a lock
+  timeout or a bug doesn't show a server path to anyone.
+- Every query runs as `<schema>_reader`, a login role kasbah creates (or `api.readDatabase`) with SELECT on the
+  app's tables and `_kasbah_meta` only. Its password is an HMAC of the database URL and the role's name, so
+  every process on the schema sets the same one (at first each start set a random one, locking out the
+  processes already running: a zero-downtime deploy's old instance, `serve` replicas). The setup runs in one
+  transaction under an advisory lock, so processes starting at once don't race. Its connections start
+  read-only, with a 30 s statement timeout and a 500 ms lock timeout, so a route's query fails rather than
+  writes or queues behind a migration. Ponder reads with the indexer's own login on read-only connections; a
+  role keeps Postgres as the guard.
+- SQL over HTTP (Ponder's `client()`, which `@ponder/client` queries) was ported and left out (2026-11-04): its
+  safety rests on a SQL parser (a WebAssembly build of Postgres' own, 4.5 MB) and a 1,200-line allow list, and
+  no app used it; apps write endpoints. Its branch keeps the port. With it went live queries and the commit
+  `NOTIFY` they listened to.
+- `POST /graphql` (`graphql()` from `kasbah/api`, `src/api/graphql/`): Ponder's schema builder, ported, so the
+  schema, filters, ordering, cursors, `totalCount`, relations, `_meta { status }` and errors are Ponder's; a
+  Ponder client works unchanged. Per table key `pool`: `pool(<primary key>)` and
+  `pools(where, orderBy, orderDirection, before, after, limit, offset)`. Where kasbah differs: `bignum()` is
+  Ponder's `t.bigint()` (`BigInt`) and `hex()` its `t.hex()` (no `_nocase` filters), but `hex()` keeps values
+  as written where Ponder lowercases them, so filters match as stored; no enums or views, which kasbah doesn't
+  create; `status` is `/status`'s (the chain's name as its id); two tables whose fields would collide, or a
+  relation named like a column, are refused at startup; a query's own mistakes (a bad cursor, a value Postgres
+  refuses, a limit over 1,000) are GraphQL errors that keep their message, and everything else is masked unless
+  in `kasbah dev`, judged by the error's name since a plugin may load another copy of graphql (the token limit's
+  message was masked so); an int8 read as a number is a `Float`, not Ponder's 32-bit `Int`; a column type of the
+  app's own reads back as `JSON` with no filters, where Ponder refuses the schema; a date column's filters and
+  keys take the milliseconds it reads back as, or an ISO date (Ponder passes the string to Drizzle, which fails).
+  And, to run anywhere: the rows one request reads may take a sixteenth of the heap (pages nested in pages
+  multiply: 1,000 × 1,000 × …), it runs at most 500 statements, four at a time (half the pool, so one request
+  never holds every connection), and all within the query timeout; past a limit, its later statements fail
+  at once.
+- `GET /status`: `{ "<chain>": { id, block: { number, timestamp } } }`, the checkpoint and its block's time,
+  Ponder's shape (the chain's name as its id: kasbah stores no numeric one).
+- GraphQL relations: declared with Drizzle's `relations()` next to the tables (`tables` takes both, so
+  `import * as schema` works). A `one()` field is the related row, through a per-request DataLoader: a page's
+  lookups go out as one statement. A `many()` field is a page with the list's arguments, one statement per
+  parent, as in Ponder (a `LATERAL` join over the parents' keys would batch them, but cursors, `before` and
+  `totalCount` per parent make it another query planner's worth of code).
+- GraphQL limits: before a query runs, at most 1,000 tokens, depth 100 and 30 aliases (Ponder's, from Apollo).
+- `GET /health`: 200 while the process answers. `GET /ready`: 200 once the phase is live (or done: a run with
+  `to` that indexed through it, keys built), else 503. `GET /metrics`: the `Status` in Prometheus' text format
+  (`src/indexer/metrics.ts`), or, with no indexer in the process, the stored checkpoint and phase. A route's
+  error is a 500 (naming the route in `dev`), an `HTTPException` its own status. Auth, rate limits and TLS are left to a
+  proxy in front, as in Ponder.
+
+Later: pre-confirmed blocks (§6.3), class-hash factories (§5.3), call and trace handlers.
+
+### Projects and the CLI
 
 Project defaults (`src/cli/project.ts`, `useProject`): loading a project's `kasbah.config.ts`, the
 CLI fills in what the config leaves out before the handlers load: the schema is the directory's name, the tables
@@ -821,14 +812,6 @@ either waits and recreates it or keeps it. The caches are never pruned: any app 
 `serve`: `kasbah serve <app>` (`app.serve()`) runs the API alone over the app's schema,
 like `ponder serve`: an index finished with `--to`, or API processes next to one indexer.
 
-Ekubo example (before it became the `ekubo` template, which keeps only pools and swaps): candles per pool per hour and day (OHLC from `sqrt_ratio`,
-volume, fees on the input side, balances after the last event, so TVL per candle), balances from the signed deltas
-of swaps, positions, collected fees and accumulated fees, protocol totals snapshotted by a block handler. A handler's
-`db` only reads by key, so "every changed pool" can't be listed in a block handler: per-candle TVL does that job.
-Deployment to block 300,000: 652,647 events in 158 s; hourly sums equal each pool's totals, daily equal hourly, the
-last candle's balances equal the pool's, no negative balance, no OHLC out of order. ETH/USDC 0.05% closes at
-$1,647 (October 2023). The cost is the timestamps: 79,184 headers for that range, one per block with events.
-
 ### 11.1 Fetcher benchmark (Ekubo Core, from a 100 Mbit/s home link)
 
 `scripts/bench.ts`. Every run of the same range gave the same event count and checksum, on every endpoint and in
@@ -857,10 +840,10 @@ Headers: Alchemy 835/s unbatched, 7,840/s in batches of 100. PublicNode ~20/s at
 
 1. Name: **kasbah**.
 2. One chain per process.
-3. API: SQL over HTTP and GraphQL.
+3. API: a Hono app with GraphQL; SQL over HTTP was ported and dropped (§11).
 4. Schema: Drizzle.
 5. First test target: Ekubo pools.
-6. Cairo 0 and Cairo 1 contracts both supported. Own ABI types (§8), starknet.js for hashing and RPC types.
+6. Cairo 0 and Cairo 1 contracts both supported. Own ABI and RPC types (§8); `@noble/hashes` for Keccak.
 
 ---
 
