@@ -399,7 +399,7 @@ function debug({ p, line, label }: Box, status: Status, recent: Recent) {
       );
     label(
       "windows",
-      `${g.running} running · ${g.paused} paused · ${g.done} done, not written ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle`,
+      `${g.running} running · ${g.paused} paused · ${g.done} done, not written ${p.dim(`(${g.windows})`)} · ${g.idleWorkers} of ${g.workers} workers idle${g.narrowed > 0 ? ` · ${plural(g.narrowed, "request")} narrowed` : ""}`,
     );
   }
   for (const e of status.endpoints())

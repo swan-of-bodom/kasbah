@@ -121,6 +121,16 @@ function retryable(status: number | undefined, code?: number): boolean {
   return (status !== undefined && status >= 500) || code === CODES.internalError;
 }
 
+/**
+ * Whether the client tries a call again after `e`: a timeout, a lost connection, a throttle, or a failure on the node's
+ * or its gateway's side. A caller that asked for one attempt can then try a smaller call.
+ */
+export function retried(e: unknown): boolean {
+  if (e instanceof Stopped) return false;
+  if (!(e instanceof RpcError)) return true;
+  return retryable(e.code >= 100 && e.code < 600 ? e.code : undefined, e.code);
+}
+
 class Endpoint {
   readonly url: string;
   readonly host: string;
@@ -311,15 +321,18 @@ export class RpcClient {
     }));
   }
 
-  async request<T>(method: string, params: unknown): Promise<T> {
-    const [result] = await this.batch<[T]>([{ method, params }]);
+  /** One call. `attempts`: tries for failures that aren't throttling (default: the client's `maxAttempts`). */
+  async request<T>(method: string, params: unknown, o: { attempts?: number } = {}): Promise<T> {
+    const [result] = await this.batch<[T]>([{ method, params }], o);
     return result;
   }
 
   /** The same call on every endpoint, in their order: to check they agree (the chain they're on). */
   async requestEach<T>(method: string, params: unknown): Promise<T[]> {
     return Promise.all(
-      this.#endpoints.map(async (e) => (await this.#batch([{ method, params }], false, e))[0] as T),
+      this.#endpoints.map(
+        async (e) => (await this.#batch([{ method, params }], { pinned: e }))[0] as T,
+      ),
     );
   }
 
@@ -328,11 +341,13 @@ export class RpcClient {
    * call order. Calls that fail with a retryable error (a throttled call inside an otherwise fine batch, for one) are
    * sent again on their own; any other call error rejects, or with `settle` takes that call's place as its `RpcError`.
    */
-  async batch<T extends unknown[]>(calls: Call[], o: { settle?: boolean } = {}): Promise<T> {
-    const settle = o.settle === true;
+  async batch<T extends unknown[]>(
+    calls: Call[],
+    o: { settle?: boolean; attempts?: number } = {},
+  ): Promise<T> {
     const size = Math.max(1, Math.max(...this.#endpoints.map((e) => Math.floor(e.rate))));
-    if (calls.length <= size) return this.#batch(calls, settle) as Promise<T>;
-    const parts = await Promise.all([...chunks(calls, size)].map((c) => this.#batch(c, settle)));
+    if (calls.length <= size) return this.#batch(calls, o) as Promise<T>;
+    const parts = await Promise.all([...chunks(calls, size)].map((c) => this.#batch(c, o)));
     return parts.flat() as T;
   }
 
@@ -372,7 +387,13 @@ export class RpcClient {
     }
   }
 
-  async #batch(calls: Call[], settle: boolean, pinned?: Endpoint): Promise<unknown[]> {
+  async #batch(
+    calls: Call[],
+    o: { settle?: boolean; attempts?: number; pinned?: Endpoint },
+  ): Promise<unknown[]> {
+    const settle = o.settle === true;
+    const pinned = o.pinned;
+    const attempts = o.attempts ?? this.#maxAttempts;
     const results = new Array<unknown>(calls.length);
     let pending = calls.map((_, i) => i);
     const issuer = pinned ?? this.#issuer(calls);
@@ -431,7 +452,7 @@ export class RpcClient {
       if (throttled || timeout) endpoint.slowDown(timeout);
       this.stats.retries++;
       if (throttled) attempt--;
-      else if (attempt >= this.#maxAttempts) throw failure;
+      else if (attempt >= attempts) throw failure;
       else
         await sleep(
           Math.min(RETRY.maxBackoffMs, RETRY.backoffMs * 2 ** (attempt - 1)) *

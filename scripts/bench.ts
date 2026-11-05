@@ -112,7 +112,7 @@ function onEvents(events: EmittedEvent[]) {
 }
 
 const t0 = performance.now();
-const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0 };
+const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, narrowed: 0 };
 const stream = eventStream(
   {
     rpc,

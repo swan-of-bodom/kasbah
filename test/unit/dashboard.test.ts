@@ -243,6 +243,7 @@ test("--debug shows the recent read-back queries, and the workers' time only onc
     done: 0,
     workers: 1,
     idleWorkers: 0,
+    narrowed: 0,
     workerTime: undefined,
   });
   const text = inside(render(s, { width: 110 })).join("\n");
@@ -267,6 +268,7 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
     done: 4,
     workers: 32,
     idleWorkers: 2,
+    narrowed: 3,
     workerTime: { calls: 0.25, room: 0.1, idle: 0.05 },
   });
   const text = inside(render(s, { width: 110 })).join("\n");
@@ -275,7 +277,9 @@ test("the time bar splits waiting for events from waiting for headers; --debug s
   expect(text).toMatch(
     /writing +50 MB \/ 200 MB · 41\.0k events waiting for Postgres \(25%\) · written through 123,456/,
   );
-  expect(text).toContain("30 running · 6 paused · 4 done, not written (40) · 2 of 32 workers idle");
+  expect(text).toContain(
+    "30 running · 6 paused · 4 done, not written (40) · 2 of 32 workers idle · 3 requests narrowed",
+  );
   expect(text).toContain(
     "25% in getEvents · 10% waiting for Postgres · 5% idle · 60% between calls (last 5 s)",
   );

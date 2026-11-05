@@ -8,8 +8,16 @@ import {
   type PageStore,
 } from "../../src/sync/fetch.ts";
 
-/** A Pathfinder-like node: pages of `chunk` events, at most `scanLimit` blocks per call, token `"<block>-<matched skipped>"`. */
-function fakeNode(events: EmittedEvent[], scanLimit: number) {
+/**
+ * A Pathfinder-like node: pages of `chunk` events, at most `scanLimit` blocks per call, token `"<block>-<matched
+ * skipped>"`. Behind a gateway that cuts off a call scanning more than `gatewayBlocks` blocks, as the free RPC did
+ * with Juno (no scan limit of its own): the call fails as a timeout.
+ */
+function fakeNode(
+  events: EmittedEvent[],
+  scanLimit: number,
+  gatewayBlocks = Number.POSITIVE_INFINITY,
+) {
   let calls = 0;
   const byBlock = new Map<number, EmittedEvent[]>();
   for (const e of events)
@@ -31,6 +39,11 @@ function fakeNode(events: EmittedEvent[], scanLimit: number) {
       const scanEnd = Math.min(to, block + scanLimit - 1);
       const out: EmittedEvent[] = [];
       for (let b = block; b <= scanEnd; b++) {
+        if (b - block >= gatewayBlocks) {
+          const timeout = new Error("The operation was aborted due to timeout");
+          timeout.name = "TimeoutError";
+          throw timeout;
+        }
         const inBlock = (byBlock.get(b) ?? []).slice(b === block ? skip : 0);
         for (const [i, e] of inBlock.entries()) {
           if (out.length === f.chunk_size) {
@@ -80,7 +93,7 @@ test.each([1, 2, 5])(
     const s = fakeStore();
     let read: (() => FetchGauges) | undefined;
     let peak = 0;
-    const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0 };
+    const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, narrowed: 0 };
     const stream = eventStream(
       {
         rpc: fakeNode(events, 2_048).rpc,
@@ -102,6 +115,47 @@ test.each([1, 2, 5])(
     expect(stats.events).toBe(events.length);
     expect(s.events.map(id).sort()).toEqual(events.map(id).sort());
     if (maxWindows > 1) expect(stats.splits).toBeGreaterThan(0);
+    expect(stats.narrowed).toBe(0);
+  },
+);
+
+test.each([1, 4])(
+  "a node that can't scan a sparse range in time gets narrower requests, and every event is written once: %i workers",
+  async (concurrency) => {
+    // Like JediSwap's factory: dense at first, then a dozen events over a million blocks.
+    const event = (block: number, i: number): EmittedEvent => ({
+      from_address: "0x1",
+      keys: [],
+      data: [],
+      block_number: block,
+      transaction_hash: "0x0",
+      transaction_index: i,
+      event_index: 0,
+    });
+    const events = [
+      ...Array.from({ length: 2_000 }, (_, i) => event(Math.floor(i / 2), i % 2)),
+      ...Array.from({ length: 12 }, (_, i) => event(2_000 + i * 83_000, 0)),
+    ];
+    const s = fakeStore();
+    const stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, narrowed: 0 };
+    let through = -1;
+    for await (const batch of eventStream(
+      {
+        rpc: fakeNode(events, Number.POSITIVE_INFINITY, 50_000).rpc,
+        address: "0x1",
+        from: 0,
+        to: 999_999,
+        chunkSize: 64,
+        concurrency,
+        store: s.store,
+      },
+      stats,
+    ))
+      through = batch.through;
+    expect(through).toBe(999_999);
+    expect(stats.narrowed).toBeGreaterThan(0);
+    expect(stats.events).toBe(events.length);
+    expect(s.events.map(id).sort()).toEqual(events.map(id).sort());
   },
 );
 

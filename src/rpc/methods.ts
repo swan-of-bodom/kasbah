@@ -52,14 +52,25 @@ export type BlockHeader = {
   state_diff_length: number;
 };
 
-export const getEvents = (rpc: RpcClient, filter: EventFilter, chunkSize: number, token?: string) =>
-  rpc.request<EventsPage>("starknet_getEvents", {
-    filter: {
-      ...filter,
-      chunk_size: chunkSize,
-      ...(token === undefined ? {} : { continuation_token: token }),
+/** One page of events. `attempts`: as `RpcClient.request`'s. */
+export const getEvents = (
+  rpc: RpcClient,
+  filter: EventFilter,
+  chunkSize: number,
+  token?: string,
+  o: { attempts?: number } = {},
+) =>
+  rpc.request<EventsPage>(
+    "starknet_getEvents",
+    {
+      filter: {
+        ...filter,
+        chunk_size: chunkSize,
+        ...(token === undefined ? {} : { continuation_token: token }),
+      },
     },
-  });
+    o,
+  );
 
 export const blockNumber = (rpc: RpcClient) => rpc.request<number>("starknet_blockNumber", []);
 

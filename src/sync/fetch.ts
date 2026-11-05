@@ -1,4 +1,4 @@
-import type { RpcClient } from "../rpc/client.ts";
+import { type RpcClient, retried } from "../rpc/client.ts";
 import { type EmittedEvent, getEvents } from "../rpc/methods.ts";
 
 export type EventStreamOptions = {
@@ -41,6 +41,16 @@ const WINDOWS = {
   densityDecay: 0.9,
 };
 
+/**
+ * A request whose range the node can't scan in time. Some nodes scan until a page is full, so a sparse filter over
+ * millions of blocks takes minutes per page, and a gateway cuts it off: the free RPC `init` offers (Juno behind
+ * allnodes) answered at most 30 s (2026-11-05), and JediSwap's factory, a dozen events past block 640k, never got
+ * an answer. Such a request is tried once; the window then starts again where it is, asking for `cut` of the
+ * blocks left, never under `minBlocks`, below which the client's own retries take over. Each run of pages that
+ * answers within `growUnderMs` doubles it back.
+ */
+const NARROW = { cut: 1 / 4, minBlocks: 1_000, growUnderMs: 5_000 };
+
 /** Span of `workerTime`: a few seconds, so it follows the stretch being fetched without flickering. */
 const TIME_SHARE_MS = 5_000;
 
@@ -72,6 +82,8 @@ export type FetchGauges = {
   done: number;
   workers: number;
   idleWorkers: number;
+  /** Requests narrowed so far because the node couldn't answer them (`NARROW`). */
+  narrowed: number;
   /** Shares of the workers' time over the last few seconds: in `getEvents` (pacing included), waiting for the store's room, idle; none before the first few seconds are measured. */
   workerTime: { calls: number; room: number; idle: number } | undefined;
 };
@@ -79,12 +91,21 @@ export type FetchGauges = {
 /** Events in chain order. Every block up to `through` is complete. */
 export type Batch = { events: EmittedEvent[]; through: number };
 
-export type FetchStats = { events: number; pages: number; windows: number; splits: number };
+/** `narrowed`: requests a window narrowed after its node couldn't answer them. */
+export type FetchStats = {
+  events: number;
+  pages: number;
+  windows: number;
+  splits: number;
+  narrowed: number;
+};
 
 type Window = {
+  /** The filter's range: fixed while the window follows a continuation token, which is valid for that filter only. */
   from: number;
-  /** `to_block` of the filter, fixed for the window's lifetime so its continuation token stays valid. */
   to: number;
+  /** Most blocks a filter spans, once a request was too large for the node (`NARROW`); else to the window's end. */
+  span: number | undefined;
   until: number;
   fetchedUntil: number;
   /** Every block before this one is written. */
@@ -110,7 +131,7 @@ const tokenBlock = (token: string): number | undefined => {
  */
 export function eventStream(
   o: EventStreamOptions,
-  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0 },
+  stats: FetchStats = { events: 0, pages: 0, windows: 0, splits: 0, narrowed: 0 },
 ): AsyncGenerator<Batch> {
   return new EventFetcher(o, stats).stream();
 }
@@ -145,6 +166,7 @@ class EventFetcher {
     this.#windows = (o.ranges ?? [[o.from, o.to]]).map(([from, to]) => ({
       from,
       to,
+      span: undefined,
       until: to + 1,
       fetchedUntil: from,
       written: from,
@@ -245,6 +267,7 @@ class EventFetcher {
     const rest: Window = {
       from: cut,
       to: w.until - 1,
+      span: w.span,
       until: w.until,
       fetchedUntil: cut,
       written: cut,
@@ -285,12 +308,6 @@ class EventFetcher {
   async #paginate(w: Window) {
     const o = this.#o;
     const stats = this.#stats;
-    const filter = {
-      from_block: { block_number: w.from },
-      to_block: { block_number: w.to },
-      address: o.address,
-      keys: o.keys,
-    };
     for (;;) {
       const waited = performance.now();
       await o.store.room();
@@ -300,13 +317,32 @@ class EventFetcher {
         w.state = "idle";
         return;
       }
+      if (w.token === undefined) {
+        // A new run of pages: from where the window is, as far as one filter may reach.
+        w.from = w.fetchedUntil;
+        w.to = Math.min(w.until - 1, w.span === undefined ? w.to : w.fetchedUntil + w.span - 1);
+      }
+      const filter = {
+        from_block: { block_number: w.from },
+        to_block: { block_number: w.to },
+        address: o.address,
+        keys: o.keys,
+      };
+      const narrowable = w.to - w.fetchedUntil + 1 > NARROW.minBlocks;
       let page: Awaited<ReturnType<typeof getEvents>>;
       const t = performance.now();
       try {
-        page = await getEvents(o.rpc, filter, o.chunkSize, w.token);
+        page = await getEvents(o.rpc, filter, o.chunkSize, w.token, {
+          attempts: narrowable ? 1 : undefined,
+        });
+      } catch (error) {
+        if (!narrowable || !retried(error) || this.#stopped) throw error;
+        this.#narrow(w);
+        continue;
       } finally {
         this.#spent.calls += performance.now() - t;
       }
+      const ms = performance.now() - t;
       stats.pages++;
       let kept = 0;
       for (const e of page.events) {
@@ -319,7 +355,7 @@ class EventFetcher {
       const token = page.continuation_token;
       const at =
         token === undefined
-          ? w.until
+          ? Math.min(w.until, w.to + 1)
           : Math.min(w.until, tokenBlock(token) ?? w.events.at(-1)?.block_number ?? w.fetchedUntil);
       this.#recentEvents = this.#recentEvents * WINDOWS.densityDecay + kept;
       this.#recentBlocks =
@@ -333,9 +369,24 @@ class EventFetcher {
       }
       w.fetchedUntil = Math.max(w.fetchedUntil, at);
       w.token = token;
+      // Grown once per run of pages, at its end: fast pages in a dense stretch say nothing of the next one.
+      if (token === undefined && w.span !== undefined && ms < NARROW.growUnderMs) w.span *= 2;
       if (this.#waiting > 0) this.#feed();
       this.#notify();
     }
+  }
+
+  /**
+   * After a request the node couldn't answer: the window starts again where it is, over `NARROW.cut` of the blocks
+   * the request asked for. The events of the block it was in are fetched again, from the block's start.
+   */
+  #narrow(w: Window) {
+    w.span = Math.max(NARROW.minBlocks, Math.floor((w.to - w.fetchedUntil + 1) * NARROW.cut));
+    w.fetched -= w.events.length;
+    this.#stats.events -= w.events.length;
+    w.events = [];
+    w.token = undefined;
+    this.#stats.narrowed++;
   }
 
   /** Writes the window's blocks before `end`, complete now; the events of a block still being fetched stay. */
@@ -395,6 +446,7 @@ class EventFetcher {
       done: count("done"),
       workers: this.#workers.length,
       idleWorkers: this.#waiting,
+      narrowed: this.#stats.narrowed,
       workerTime: this.#timeShares(),
     };
   }
