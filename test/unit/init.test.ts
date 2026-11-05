@@ -80,6 +80,13 @@ test("one table per event, arguments as typed columns, structs as jsonb", () => 
   expect(files["src/index.ts"]).not.toContain("plain");
 });
 
+test("the compose file indexes into the project's schema, and every placeholder is filled", () => {
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: compose's variable, written as is
+  expect(files["docker-compose.yml"]).toContain("DATABASE_SCHEMA: ${DATABASE_SCHEMA:-pools}");
+  expect(files.Dockerfile).toContain("RUN pnpm install");
+  for (const content of Object.values(files)) expect(content).not.toMatch(/\{\{\w+\}\}/);
+});
+
 test("secrets only in .env, which git and Docker ignore; .env.example has the names", () => {
   expect(files[".env"]).toBe("KASBAH_RPC_URL=http://rpc\nDATABASE_URL=postgres://db\n");
   expect(files[".env.example"]).toMatch(/^KASBAH_RPC_URL=https:\/\/.*<key>\n# DATABASE_URL=/);

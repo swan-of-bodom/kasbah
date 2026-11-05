@@ -80,6 +80,15 @@ export type Template = keyof typeof TEMPLATES;
 
 const TEMPLATES_DIR = resolve(import.meta.dirname, "../../../templates");
 
+/**
+ * A file every new project gets, from `templates/_project`, its `{{name}}` placeholders filled from `values`. The
+ * ignore files are stored without their dot: npm leaves a `.gitignore` out of a package.
+ */
+function projectFile(name: string, values: Record<string, string> = {}): string {
+  const text = readFileSync(join(TEMPLATES_DIR, "_project", name), "utf8");
+  return text.replace(/\{\{(\w+)\}\}/g, (_, key: string) => values[key]!);
+}
+
 const SMALL = new Set(
   ["u8", "u16", "u32", "usize", "i8", "i16", "i32"].map((t) => `core::integer::${t}`),
 );
@@ -110,6 +119,9 @@ const camel = (s: string) => snake(s).replace(/_([a-z0-9])/g, (_, c: string) => 
 
 const isNetwork = (name: string): name is Network => name in NETWORKS;
 
+/** Lines as a file's text, ending in a newline. */
+const lines = (...l: string[]) => `${l.join("\n")}\n`;
+
 function columnOf(m: AbiMember): string {
   if (SMALL.has(m.type)) return "integer().notNull()";
   if (BIG.has(m.type)) return "bignum().notNull()";
@@ -137,9 +149,7 @@ export function generate(p: Project): Record<string, string> {
     for (const m of [...e.keyMembers, ...e.dataMembers]) {
       const column = columnOf(m);
       const key = FIXED.has(m.name) ? `${m.name}_` : m.name;
-      for (const t of ["integer", "boolean", "jsonb", "text"])
-        if (column.startsWith(`${t}(`)) imports.add(t);
-      for (const t of ["bignum", "hex"]) if (column.startsWith(`${t}(`)) imports.add(t);
+      imports.add(column.slice(0, column.indexOf("(")));
       columns.push(`  ${key}: ${column},`);
       values.push(`${key}: event.args.${m.name}`);
     }
@@ -150,7 +160,6 @@ export function generate(p: Project): Record<string, string> {
   }
   const abiName = `${camel(p.name)}Abi`;
   const first = camel(defs[0]!.name);
-  const lines = (...l: string[]) => `${l.join("\n")}\n`;
   const config = lines(
     `import { kasbah } from "kasbah";`,
     `import ${abiName} from "./abis/${p.name}.ts";`,
@@ -220,7 +229,6 @@ export function templateFiles(template: Template, p: Common): Record<string, str
 
 /** The files around the app's own: package, TypeScript, environment, Docker and README, which starts with `about`. */
 function commonFiles(p: Common, about: string): Record<string, string> {
-  const lines = (...l: string[]) => `${l.join("\n")}\n`;
   const pm = p.packageManager ?? "pnpm";
   const run = (script: string, args = "") => runCommand(pm, script, args);
   const pkg = {
@@ -239,18 +247,6 @@ function commonFiles(p: Common, about: string): Record<string, string> {
     dependencies: { kasbah: p.dependency, hono: HONO },
     devDependencies: { "@types/node": "^24.0.0", typescript: "^5.9.0" },
   };
-  const tsconfig = {
-    compilerOptions: {
-      target: "es2023",
-      module: "nodenext",
-      strict: true,
-      noEmit: true,
-      allowImportingTsExtensions: true,
-      skipLibCheck: true,
-      types: ["node"],
-    },
-    include: ["*.ts", "abis", "src"],
-  };
   const env = (rpc: string, database: string | undefined) =>
     lines(
       ...(rpc === PUBLIC_RPC ? [`# ${PUBLIC_RPC_NOTE}`] : []),
@@ -261,18 +257,20 @@ function commonFiles(p: Common, about: string): Record<string, string> {
     );
   return {
     "package.json": `${JSON.stringify(pkg, null, 2)}\n`,
-    "tsconfig.json": `${JSON.stringify(tsconfig, null, 2)}\n`,
+    "tsconfig.json": projectFile("tsconfig.json"),
     ".env": env(p.rpc, p.database),
     ".env.example": env(
       "https://starknet-mainnet.g.alchemy.com/starknet/version/rpc/v0_10/<key>",
       undefined,
     ),
-    ".gitignore": "node_modules\n.env\n",
-    ".dockerignore": "node_modules\n.env\n.git\n",
-    Dockerfile: dockerfile(pm),
+    ".gitignore": projectFile("gitignore"),
+    ".dockerignore": projectFile("dockerignore"),
+    Dockerfile: projectFile("Dockerfile", { install: INSTALL[pm] }),
     // Yarn 2 and later would otherwise install without node_modules, where the image runs kasbah from.
     ...(pm === "yarn" ? { ".yarnrc.yml": "nodeLinker: node-modules\n" } : {}),
-    "docker-compose.yml": compose(schemaName(basename(p.dir))),
+    "docker-compose.yml": projectFile("docker-compose.yml", {
+      schema: schemaName(basename(p.dir)),
+    }),
     "README.md": lines(
       `# ${basename(p.dir)}`,
       "",
@@ -325,50 +323,6 @@ const INSTALL: Record<PackageManager, string> = {
   npm: "WORKDIR /app\nCOPY . .\nRUN npm install",
   yarn: "RUN corepack enable\nWORKDIR /app\nCOPY . .\nRUN yarn install",
 };
-
-const dockerfile = (pm: PackageManager) => `FROM node:24-slim
-${INSTALL[pm]}
-ENV API_HOST=0.0.0.0
-EXPOSE 42069
-# kasbah itself, not through the package manager: it gets the SIGTERM of a stop and finishes the block it's on.
-CMD ["node", "node_modules/kasbah/dist/cli/main.js", "start"]
-`;
-
-const compose = (schema: string) => `services:
-  postgres:
-    image: docker.io/library/postgres:17
-    environment:
-      POSTGRES_PASSWORD: \${POSTGRES_PASSWORD:-kasbah}
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-U", "postgres"]
-      interval: 5s
-    restart: unless-stopped
-
-  indexer:
-    build: .
-    env_file: .env
-    environment:
-      DATABASE_URL: postgres://postgres:\${POSTGRES_PASSWORD:-kasbah}@postgres:5432/postgres
-      # start needs one: a new one when the build changes (config, tables or handlers).
-      DATABASE_SCHEMA: \${DATABASE_SCHEMA:-${schema}}
-    # Localhost only: put a proxy (Caddy, nginx) in front for the outside, with TLS and rate limits.
-    ports:
-      - "127.0.0.1:42069:42069"
-    depends_on:
-      postgres:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:42069/health').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"]
-      interval: 30s
-      start_period: 30s
-    stop_grace_period: 30s
-    restart: unless-stopped
-
-volumes:
-  pgdata:
-`;
 
 /** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own node_modules), else its version. */
 function indexerSpec(): string {

@@ -793,7 +793,9 @@ free localhost port, and waits until TCP connects (the image's first start runs 
 initialises). Stopped when `dev` exits, kept for the next run. Chosen over PGlite (single connection: no separate
 read-only role, API reads queued behind writes, an in-process stand-in for LISTEN) and embedded Postgres binaries:
 it is the same Postgres as production, and the generated compose file already assumes Docker. `start` never starts
-one. `pnpm create kasbah` is the `create/` package: it runs the installed `kasbah init`.
+one. `pnpm create kasbah` is the `create/` package: it runs the installed `kasbah init`. The files every project gets (Dockerfile,
+compose, tsconfig, ignore files) are plain files in `templates/_project`, with `{{name}}` placeholders; the
+tables, handlers, config and README depend on the contract and stay generated in `src/cli/commands/init.ts`.
 
 `kasbah list` shows the dev containers on the machine, since their data is easy to delete (`clean`) but was hard to
 see: a user found 90 GB in volumes without knowing which were whose. It finds them by the `kasbah=dev` label, reads
