@@ -1,5 +1,6 @@
 import { format } from "node:util";
 import type { Phase, Status } from "../../indexer/status.ts";
+import { colors, wantsColor } from "./color.ts";
 
 const thousands = (n: number) => Math.round(n).toLocaleString("en-US");
 
@@ -48,15 +49,10 @@ export function fit(s: string, width: number): string {
   return s.includes("\x1b") ? `${out}…\x1b[0m` : `${out}…`;
 }
 
-type Paint = Record<
-  "dim" | "bold" | "cyan" | "green" | "yellow" | "blue" | "magenta" | "red",
-  (s: string) => string
-> & { badge: (phase: Phase) => string };
+type Paint = ReturnType<typeof colors> & { badge: (phase: Phase) => string };
 
 function paint(on: boolean): Paint {
-  const c = (open: number, close: number) => (s: string) =>
-    on ? `\x1b[${open}m${s}\x1b[${close}m` : s;
-  const colors: Record<Phase, number> = {
+  const background: Record<Phase, number> = {
     starting: 100,
     factories: 45,
     backfill: 43,
@@ -67,17 +63,10 @@ function paint(on: boolean): Paint {
     failed: 41,
   };
   return {
-    dim: c(2, 22),
-    bold: c(1, 22),
-    cyan: c(36, 39),
-    green: c(32, 39),
-    yellow: c(33, 39),
-    blue: c(34, 39),
-    magenta: c(35, 39),
-    red: c(31, 39),
+    ...colors(on),
     badge: (phase) =>
       on
-        ? `\x1b[30;${colors[phase]};1m ${phase.toUpperCase()} \x1b[0m`
+        ? `\x1b[30;${background[phase]};1m ${phase.toUpperCase()} \x1b[0m`
         : `[${phase.toUpperCase()}]`,
   };
 }
@@ -465,7 +454,7 @@ export class Screen {
     this.#status = status;
     this.#out = out;
     this.#write = out.write.bind(out) as typeof process.stdout.write;
-    this.#color = out.isTTY === true && process.env.NO_COLOR === undefined;
+    this.#color = wantsColor(out);
     this.#console = {
       log: console.log,
       info: console.info,

@@ -1,5 +1,6 @@
 import { emitKeypressEvents } from "node:readline";
 import { errorCode } from "../../utils/errors.ts";
+import { type Color, colors, wantsColor } from "./color.ts";
 import { fit } from "./dashboard.ts";
 
 type Key = { name?: string; ctrl?: boolean };
@@ -11,7 +12,12 @@ const SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏";
 export class Prompt {
   readonly #in: NodeJS.ReadStream;
   readonly #out: NodeJS.WriteStream;
-  readonly #color: boolean;
+  readonly dim: Color;
+  readonly bold: Color;
+  readonly cyan: Color;
+  readonly green: Color;
+  readonly red: Color;
+  readonly yellow: Color;
 
   constructor(
     input: NodeJS.ReadStream = process.stdin,
@@ -19,17 +25,15 @@ export class Prompt {
   ) {
     this.#in = input;
     this.#out = output;
-    this.#color = output.isTTY === true && process.env.NO_COLOR === undefined;
+    ({
+      dim: this.dim,
+      bold: this.bold,
+      cyan: this.cyan,
+      green: this.green,
+      red: this.red,
+      yellow: this.yellow,
+    } = colors(wantsColor(output)));
   }
-
-  #c = (code: number, close: number) => (s: string) =>
-    this.#color ? `\x1b[${code}m${s}\x1b[${close}m` : s;
-  readonly dim = this.#c(2, 22);
-  readonly bold = this.#c(1, 22);
-  readonly cyan = this.#c(36, 39);
-  readonly green = this.#c(32, 39);
-  readonly red = this.#c(31, 39);
-  readonly yellow = this.#c(33, 39);
 
   line(text = "") {
     this.#out.write(`${text}\n`);

@@ -2,14 +2,15 @@ import { homedir } from "node:os";
 import pg from "pg";
 import { type CacheInfo, listSchemas, type SchemaInfo } from "../../indexer/schemas.ts";
 import { type DevDatabaseInfo, devUrl, listDevDatabases } from "../devdb.ts";
-import { ago, colors, size, table } from "../ui/table.ts";
+import { colors, wantsColor } from "../ui/color.ts";
+import { ago, size, table } from "../ui/table.ts";
 
 /**
  * `kasbah list`: the app schemas and event caches in `DATABASE_URL` (or `--database`), else in each running dev
  * container; then the dev databases on the machine, the containers `dev` made. Each largest first.
  */
 export async function list(o: { database?: string }) {
-  const color = process.stdout.isTTY === true && process.env.NO_COLOR === undefined;
+  const color = wantsColor(process.stdout);
   const database = o.database ?? process.env.DATABASE_URL;
   const out: string[] = [];
   const schemasIn = async (url: string, name: string, prune: boolean) => {

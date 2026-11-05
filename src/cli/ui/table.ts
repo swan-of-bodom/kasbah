@@ -1,15 +1,10 @@
+import { colors } from "./color.ts";
+
 /** A column of `table`: its heading, and right-aligned for numbers. */
 export type Column = { title: string; right?: boolean };
 
 /** A row's cells, and how each is colored once padded (`style`: per column index). */
 export type Row = { cells: string[]; style?: (column: number, padded: string) => string };
-
-/** The colors `table` and its callers use; plain text when `color` is off. */
-export function colors(color: boolean) {
-  const c = (open: number, close: number) => (s: string) =>
-    color ? `\x1b[${open}m${s}\x1b[${close}m` : s;
-  return { dim: c(2, 22), bold: c(1, 22), green: c(32, 39), yellow: c(33, 39) };
-}
 
 /**
  * A table in a box like the progress screen's: `kasbah · <title>` and `right` on the top edge, a dim heading, the
