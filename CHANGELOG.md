@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+## 0.2.2
+
 - The API listens on every network interface by default, so platforms reach it without
   `API_HOST=0.0.0.0`. To keep it on this machine only, set `API_HOST=127.0.0.1` (or `--hostname 127.0.0.1`).
 - `init` no longer writes a `Dockerfile` and `docker-compose.yml`: Railway and Render build the project from
