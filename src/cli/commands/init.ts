@@ -74,6 +74,7 @@ export const TEMPLATES = {
   ekubo: "Ekubo's Core: every pool, with its swaps",
   jediswap:
     "JediSwap v1: the pairs its factory creates, found as it runs, with their swaps and reserves",
+  pragma: "Pragma's ETH, BTC and STRK prices in USD, read from its oracle every 2,000 blocks",
 } as const;
 
 export type Template = keyof typeof TEMPLATES;

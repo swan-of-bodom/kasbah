@@ -274,14 +274,18 @@ test("kasbah init --template writes each template from the installed package, an
     ).rejects.toThrow(/the erc20 template indexes mainnet contracts/);
     await expect(
       run(bin, ["init", "x", "--template", "nope", "--rpc", mainnetUrl, "--yes"], { cwd: dir }),
-    ).rejects.toThrow(/no template nope \(there are erc20, ekubo, jediswap\)/);
-    for (const template of ["erc20", "ekubo", "jediswap"]) {
+    ).rejects.toThrow(/no template nope \(there are erc20, ekubo, jediswap, pragma\)/);
+    for (const template of ["erc20", "ekubo", "jediswap", "pragma"]) {
       const name = `kasbah_test_${template}`;
       const args = ["init", name, "--template", template, "--rpc", mainnetUrl, "--yes"];
       args.push("--database", "", "--dependency", `file:../${tarball}`);
       args.push("--skip-install", "--skip-git");
       await run(bin, args, { cwd: dir });
       const project = join(dir, name);
+      // init's message and the dashboard send people to /graphql.
+      expect(readFileSync(join(project, "src/api/index.ts"), "utf8")).toContain(
+        'app.use("/graphql", graphql(',
+      );
       const pnpm = (a: string[]) =>
         execFileSync("pnpm", a, {
           cwd: project,

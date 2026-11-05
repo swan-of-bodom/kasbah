@@ -82,6 +82,43 @@ assert<
 >();
 assert<Equal<TypeOf<None, "core::internal::bounded_int::BoundedInt::<0, 30>">, bigint>>();
 assert<Equal<TypeOf<None, "core::byte_array::ByteArray">, string>>();
+assert<Equal<TypeOf<None, "x::NotDeclared">, unknown>>();
+
+// Enums the ABI declares: all-unit ones are their variant's name, others `{ variant, value }`.
+assert<
+  Equal<
+    TypeOf<typeof strk, "starkware_utils::components::roles::interface::Role">,
+    | "AppGovernor"
+    | "AppRoleAdmin"
+    | "GovernanceAdmin"
+    | "Operator"
+    | "TokenAdmin"
+    | "UpgradeAgent"
+    | "UpgradeGovernor"
+    | "SecurityAdmin"
+    | "SecurityAgent"
+    | "SecurityGovernor"
+  >
+>();
+type DataEnumAbi = readonly [
+  {
+    type: "enum";
+    name: "x::DataType";
+    variants: readonly [
+      { name: "SpotEntry"; type: "core::felt252" },
+      { name: "FutureEntry"; type: "(core::felt252, core::integer::u64)" },
+      { name: "None"; type: "()" },
+    ];
+  },
+];
+assert<
+  Equal<
+    TypeOf<DataEnumAbi, "x::DataType">,
+    | { variant: "SpotEntry"; value: bigint }
+    | { variant: "FutureEntry"; value: [bigint, bigint] }
+    | { variant: "None"; value: undefined }
+  >
+>();
 
 const decode = createDecoder(ekubo);
 const decoded = decode([], []);

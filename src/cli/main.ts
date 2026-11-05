@@ -49,6 +49,7 @@ packages and makes a git repository.
                              erc20     LORDS: balances, transfers and allowances, with GraphQL relations
                              ekubo     Ekubo's Core: every pool, with its swaps
                              jediswap  JediSwap v1: the pairs its factory creates, with their swaps and reserves
+                             pragma    Pragma's ETH, BTC and STRK prices, read from its oracle every 2,000 blocks
   --address <0x…>          or from a contract: its ABI and deployment block are read from the chain
     --name <Name>            its name in the app (handlers are <Name>:<Event>)
     --handle <A,B>           the events to index (default: all)

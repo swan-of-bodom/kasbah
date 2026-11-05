@@ -30,6 +30,7 @@ kasbah init my-indexer --template erc20
 | `erc20` | LORDS: balances, transfers and allowances, about 2.5M events | GraphQL relations both ways (an account's transfers, a transfer's accounts), a two-column key, upserts |
 | `ekubo` | Ekubo's Core: every pool and its swaps | A row updated by later events, a `one`/`many` relation |
 | `jediswap` | JediSwap v1: pairs, their swaps and reserves, about 16M events | A factory: pair contracts found as the factory creates them |
+| `pragma` | Pragma's ETH, BTC and STRK prices in USD, every 2,000 blocks (about an hour) | A block handler, contract reads, an enum argument |
 
 ### Start the dev server
 

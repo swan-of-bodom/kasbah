@@ -4,6 +4,11 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- A `pragma` template: `kasbah init --template pragma` records Pragma's ETH, BTC and STRK prices in USD, read from its
+  oracle every 2,000 blocks by a block handler.
+- An enum the ABI declares has its own type in handlers and contract reads. It used to type as a meaningless
+  `{ [x: string]: … }`, so an enum argument couldn't be passed without a cast. An enum with data is one
+  `{ variant, value }` per variant, so checking `variant` narrows `value`.
 - **Breaking:** `kasbah` no longer exports its internals `createConfig`, `createDecoder`, `abiEvents`, `abiFunctions`,
   `compileFunction`, `classHistory` and `createHistoricalDecoder`, which the docs never named. `kasbah(config)` takes
   the config as `createConfig` did.

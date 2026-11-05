@@ -94,9 +94,12 @@ type EnumItem<TAbi extends Abi, N extends string> = Extract<
 
 type EnumOf<TAbi extends Abi, V extends readonly AbiMember[]> = V[number]["type"] extends "()"
   ? V[number]["name"]
-  : V[number] extends infer Variant extends AbiMember
-    ? { variant: Variant["name"]; value: TypeOf<TAbi, Variant["type"]> }
-    : never;
+  : VariantOf<TAbi, V[number]>;
+
+/** One `{ variant, value }` per variant (a union over `Variant`), so checking `variant` narrows `value`. */
+type VariantOf<TAbi extends Abi, Variant extends AbiMember> = Variant extends AbiMember
+  ? { variant: Variant["name"]; value: TypeOf<TAbi, Variant["type"]> }
+  : never;
 
 /** The TypeScript type `createDecoder` produces for an ABI type string. */
 export type TypeOf<TAbi extends Abi, Raw extends string> = Raw extends `@${infer T}`
@@ -133,15 +136,21 @@ export type TypeOf<TAbi extends Abi, Raw extends string> = Raw extends `@${infer
                             : never
                           : Raw extends "Uint256"
                             ? bigint
-                            : StructItem<TAbi, Raw> extends {
-                                  members: infer M extends readonly AbiMember[];
-                                }
-                              ? MembersOf<TAbi, M>
-                              : EnumItem<TAbi, Raw> extends {
-                                    variants: infer V extends readonly AbiMember[];
-                                  }
-                                ? EnumOf<TAbi, V>
-                                : unknown;
+                            : NamedType<TAbi, Raw>;
+
+/**
+ * A struct or enum the ABI declares, by name. Each lookup is checked for `never` first: `never extends { … }` holds,
+ * so an enum would otherwise take the struct branch.
+ */
+type NamedType<TAbi extends Abi, Raw extends string> = [StructItem<TAbi, Raw>] extends [never]
+  ? [EnumItem<TAbi, Raw>] extends [never]
+    ? unknown
+    : EnumItem<TAbi, Raw> extends { variants: infer V extends readonly AbiMember[] }
+      ? EnumOf<TAbi, V>
+      : unknown
+  : StructItem<TAbi, Raw> extends { members: infer M extends readonly AbiMember[] }
+    ? MembersOf<TAbi, M>
+    : unknown;
 
 type PointerName<M extends readonly AbiMember[]> = Extract<
   M[number],

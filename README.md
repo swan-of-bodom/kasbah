@@ -23,7 +23,7 @@ pnpm dev                      # backfills, follows the head, restarts on every c
 ```
 
 Or start from a template: `pnpm create kasbah --template erc20` (LORDS, with GraphQL relations), `ekubo` (pools
-and swaps) or `jediswap` (pairs found through the factory).
+and swaps), `jediswap` (pairs found through the factory) or `pragma` (oracle prices read every 2,000 blocks).
 
 Then open [localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL, or ask from anywhere:
 
