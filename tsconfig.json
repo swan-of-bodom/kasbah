@@ -19,5 +19,5 @@
     }
   },
   "include": ["src", "test", "scripts", "templates"],
-  "exclude": ["test/bench/apps", "test/.tmp-*"]
+  "exclude": ["test/bench/apps", "test/bench/results", "test/.tmp-*"]
 }

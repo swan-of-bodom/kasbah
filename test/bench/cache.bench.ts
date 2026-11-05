@@ -1,5 +1,5 @@
 import { bench, describe } from "vitest";
-import { packFeltsHex } from "../../src/db/cache.ts";
+import { packFeltsHex } from "../../src/db/felts.ts";
 
 const felts = Array.from({ length: 30 }, (_, i) =>
   i % 3 === 0

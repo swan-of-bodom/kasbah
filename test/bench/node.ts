@@ -9,7 +9,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { parseArgs } from "node:util";
 import pg from "pg";
-import { feltHex, unpackHex } from "../../src/db/cache.ts";
+import { feltHex, unpackHex } from "../../src/db/felts.ts";
 
 const { values: a } = parseArgs({
   options: {

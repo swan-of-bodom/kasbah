@@ -1,13 +1,7 @@
 import pg from "pg";
 import { afterAll, expect, test } from "vitest";
-import {
-  EventCache,
-  feltHex,
-  packCopyHex,
-  packFelts,
-  packFeltsHex,
-  unpackFelts,
-} from "../../src/db/cache.ts";
+import { EventCache } from "../../src/db/cache.ts";
+import { feltHex, packCopyHex, packFelts, packFeltsHex, unpackHex } from "../../src/db/felts.ts";
 import type { BlockHeader, EmittedEvent } from "../../src/rpc/methods.ts";
 import { felt } from "../../src/types/felt.ts";
 import { approxBytes } from "../../src/utils/memory.ts";
@@ -33,7 +27,7 @@ test("felts pack to minimal bytes and back", () => {
     `0x${"f".repeat(63)}`,
     "0x00000000000000000000000000000000000000000000000000000000000001",
   ];
-  expect(unpackFelts(packFelts(felts))).toEqual([
+  expect(unpackHex(packFelts(felts).toString("hex"))).toEqual([
     "0x0",
     "0x1",
     "0xff",
@@ -47,7 +41,9 @@ test("felts pack to minimal bytes and back", () => {
 
 test("felts of every length decode back to their minimal form", () => {
   const felts = Array.from({ length: 64 }, (_, i) => `0x${"9a".repeat(32).slice(0, i + 1)}`);
-  expect(unpackFelts(packFelts(felts))).toEqual(felts.map((f) => `0x${BigInt(f).toString(16)}`));
+  expect(unpackHex(packFelts(felts).toString("hex"))).toEqual(
+    felts.map((f) => `0x${BigInt(f).toString(16)}`),
+  );
 });
 
 const viaBigInt = (felts: string[]) =>
