@@ -61,8 +61,7 @@ It deploys to [GitHub Pages](https://swan-of-bodom.github.io/kasbah/) on every p
 - Keep it to one change. Its title, like its commits, is one short sentence in the imperative ("Add …", "Fix …").
 - Update what users would notice in the same PR: the docs, and an entry under **Unreleased** in `CHANGELOG.md`.
 - CI runs lint, typecheck and the tests against Postgres. If it fails, the Actions logs say why.
-- [AGENTS.md](../AGENTS.md) has the code rules (config defaults, errors, comments) and [DESIGN.md](../DESIGN.md) the
-  reasons behind the design.
+- [AGENTS.md](../AGENTS.md) has the code rules (config defaults, errors, comments).
 
 ## Releases
 

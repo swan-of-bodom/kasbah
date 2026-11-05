@@ -1,7 +1,6 @@
 # Working on kasbah
 
-Rules for anyone changing this repo, people and agents alike. `README.md` maps the folders and `DESIGN.md` gives
-the reasons behind them.
+Rules for anyone changing this repo, people and agents alike. `README.md` maps the folders.
 
 ## Before a commit
 
@@ -14,7 +13,7 @@ pnpm test         # needs DATABASE_URL: a Postgres the tests may create schemas 
 CI runs the same three on every push to main and on every PR.
 
 - Commits: one short sentence, no trailing period, authored by the person committing, with no tool attribution.
-- A change ships with its tests and docs (README, DESIGN, and `CHANGELOG.md` when users would notice it), all
+- A change ships with its tests and docs (README, and `CHANGELOG.md` when users would notice it), all
   in the same commit.
 - Never commit `.env`, `dist/`, packed `*.tgz` files or RPC URLs with keys, and never print them in logs or issues.
 

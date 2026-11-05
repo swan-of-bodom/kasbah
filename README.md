@@ -103,16 +103,15 @@ details on it. `list`, `prune` and `cache` take `--database <url>` in place of `
 ## Docs
 
 **[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**: configuration, handlers, the API,
-and deploying to Railway, Render or a VPS. The source is in [`documentation/`](documentation); the design and its
-reasoning are in [DESIGN.md](DESIGN.md). To work on kasbah itself, see
-[CONTRIBUTING.md](.github/CONTRIBUTING.md).
+and deploying to Railway, Render or a VPS. The source is in [`documentation/`](documentation). To work on kasbah
+itself, see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
 
 ## Acknowledgments
 
 kasbah's design comes from [Ponder](https://ponder.sh) ([GitHub](https://github.com/ponder-sh/ponder)), the
 open-source TypeScript indexer for EVM chains by the Ponder team (MIT). The code here is written for Starknet, but
-the project layout, the API and many production choices follow Ponder's, and DESIGN.md notes where. Thank you to
-its authors for building it in the open.
+the project layout, the API and many production choices follow Ponder's. Thank you to its authors for building it
+in the open.
 
 How this repo is organized follows [rindexer](https://rindexer.xyz)
 ([GitHub](https://github.com/joshstevens19/rindexer)), the Rust indexer for EVM chains (MIT): one folder per concern,

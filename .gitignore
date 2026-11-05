@@ -6,3 +6,5 @@ test/.tmp-*
 documentation/src/pages.gen.ts
 test/bench/results
 generated/
+DESIGN.md
+CLAUDE.local.md

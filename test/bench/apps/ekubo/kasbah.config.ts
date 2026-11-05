@@ -1,7 +1,7 @@
 import { kasbah } from "kasbah";
 import coreAbi from "./abis/Core.ts";
 
-/** Ekubo Core's swaps, positions and fees into pools and candles: the workload behind the numbers in DESIGN.md. */
+/** Ekubo Core's swaps, positions and fees into pools and candles: the workload `pnpm bench:app` measures. */
 export default kasbah({
   // The simulated node answers its own chain id (test/bench/node.ts).
   network: process.env.KASBAH_BENCH_SIM === "1" ? undefined : "mainnet",
