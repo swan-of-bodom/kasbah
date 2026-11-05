@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- GraphQL cursors are base64 JSON with tagged bigints and dates, without `superjson`: one dependency fewer. A
+  cursor from an earlier version is refused as invalid; ask for the page again.
 - **Breaking:** `kasbah cache info` is gone: `kasbah list` shows each chain's cache with its size. `kasbah cache clear`
   stays.
 - **Breaking:** `cache: true` is refused, like `cache: false`: the event cache is always on, so it did nothing. Remove it

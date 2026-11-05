@@ -994,6 +994,39 @@ it("an empty page after the last row still has a previous page", async () => {
   });
 });
 
+it("cursors keep bigint and date keys as they are: a page after one starts right past it", async () => {
+  const transfer = pgTable("transfer", {
+    id: bignum().primaryKey(),
+    at: timestamp({ mode: "date" }).notNull(),
+  });
+  const query = await setup(
+    { transfer },
+    `INSERT INTO transfer VALUES (18446744073709551617, '2026-01-01T00:00:03Z'),
+      (18446744073709551616, '2026-01-01T00:00:01Z'), (18446744073709551618, '2026-01-01T00:00:02Z')`,
+  );
+  const page = `items { id } pageInfo { endCursor }`;
+  const first = await query(`query { transfers(orderBy: "at", limit: 1) { ${page} } }`);
+  expect(first.data.transfers.items).toEqual([{ id: "18446744073709551616" }]);
+  const rest = await query(
+    `query { transfers(orderBy: "at", after: "${first.data.transfers.pageInfo.endCursor}") { ${page} } }`,
+  );
+  expect(rest.errors?.[0]?.message).toBeUndefined();
+  expect(rest.data.transfers.items).toEqual([
+    { id: "18446744073709551618" },
+    { id: "18446744073709551617" },
+  ]);
+  const byId = await query(
+    `query { transfers(orderBy: "id", orderDirection: "desc", limit: 1) { ${page} } }`,
+  );
+  const below = await query(
+    `query { transfers(orderBy: "id", orderDirection: "desc", after: "${byId.data.transfers.pageInfo.endCursor}") { items { id } } }`,
+  );
+  expect(below.data.transfers.items).toEqual([
+    { id: "18446744073709551617" },
+    { id: "18446744073709551616" },
+  ]);
+});
+
 it("cursors page through a composite primary key", async () => {
   const allowance = pgTable(
     "allowance",
@@ -1106,10 +1139,10 @@ it("cursors page through a date column, and keep its type", async () => {
           },
         ],
         "pageInfo": {
-          "endCursor": "eyJqc29uIjp7ImNyZWF0ZWRBdCI6IjIwMjEtMDEtMDVUMDA6MDA6MDAuMDAwWiIsImlkIjoiaWQ1In0sIm1ldGEiOnsidmFsdWVzIjp7ImNyZWF0ZWRBdCI6WyJEYXRlIl19LCJ2IjoxfX0=",
+          "endCursor": "eyJjcmVhdGVkQXQiOnsiJGRhdGUiOjE2MDk4MDQ4MDAwMDB9LCJpZCI6ImlkNSJ9",
           "hasNextPage": true,
           "hasPreviousPage": false,
-          "startCursor": "eyJqc29uIjp7ImNyZWF0ZWRBdCI6IjIwMjEtMDEtMDFUMDA6MDA6MDAuMDAwWiIsImlkIjoiaWQxIn0sIm1ldGEiOnsidmFsdWVzIjp7ImNyZWF0ZWRBdCI6WyJEYXRlIl19LCJ2IjoxfX0=",
+          "startCursor": "eyJjcmVhdGVkQXQiOnsiJGRhdGUiOjE2MDk0NTkyMDAwMDB9LCJpZCI6ImlkMSJ9",
         },
         "totalCount": 9,
       },
@@ -1147,10 +1180,10 @@ it("cursors page through a date column, and keep its type", async () => {
           },
         ],
         "pageInfo": {
-          "endCursor": "eyJqc29uIjp7ImNyZWF0ZWRBdCI6IjIwMjEtMDEtMDlUMDA6MDA6MDAuMDAwWiIsImlkIjoiaWQ5In0sIm1ldGEiOnsidmFsdWVzIjp7ImNyZWF0ZWRBdCI6WyJEYXRlIl19LCJ2IjoxfX0=",
+          "endCursor": "eyJjcmVhdGVkQXQiOnsiJGRhdGUiOjE2MTAxNTA0MDAwMDB9LCJpZCI6ImlkOSJ9",
           "hasNextPage": false,
           "hasPreviousPage": true,
-          "startCursor": "eyJqc29uIjp7ImNyZWF0ZWRBdCI6IjIwMjEtMDEtMDZUMDA6MDA6MDAuMDAwWiIsImlkIjoiaWQ2In0sIm1ldGEiOnsidmFsdWVzIjp7ImNyZWF0ZWRBdCI6WyJEYXRlIl19LCJ2IjoxfX0=",
+          "startCursor": "eyJjcmVhdGVkQXQiOnsiJGRhdGUiOjE2MDk4OTEyMDAwMDB9LCJpZCI6ImlkNiJ9",
         },
         "totalCount": 9,
       },

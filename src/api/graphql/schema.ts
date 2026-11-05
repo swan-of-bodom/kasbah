@@ -58,7 +58,6 @@ import {
   Kind,
   type SelectionNode,
 } from "graphql";
-import superjson from "superjson";
 import { ConfigError } from "../../config/errors.ts";
 import { isBignum, isHex } from "../../config/schema.ts";
 import { tableInfo } from "../../db/table.ts";
@@ -825,12 +824,28 @@ function decodeCursor(cursor: string): Row {
   return fail("Invalid cursor");
 }
 
+/**
+ * Key values as base64 JSON. Bigints and dates are tagged (`{ "$bigint": "…" }`, `{ "$date": ms }`), so they read
+ * back as themselves: a cursor or a loader key compares with the column as it was read.
+ */
 function encodeRowFragment(rowFragment: Row): string {
-  return Buffer.from(superjson.stringify(rowFragment)).toString("base64");
+  const json = JSON.stringify(rowFragment, function (this: Row, key, value: unknown) {
+    const raw = this[key];
+    if (raw instanceof Date) return { $date: raw.getTime() };
+    return typeof value === "bigint" ? { $bigint: value.toString() } : value;
+  });
+  return Buffer.from(json).toString("base64");
 }
 
 function decodeRowFragment(encodedRowFragment: string): Row {
-  return superjson.parse(Buffer.from(encodedRowFragment, "base64").toString());
+  return JSON.parse(Buffer.from(encodedRowFragment, "base64").toString(), (_, value: unknown) => {
+    if (value === null || typeof value !== "object") return value;
+    if (typeof (value as { $bigint?: unknown }).$bigint === "string")
+      return BigInt((value as { $bigint: string }).$bigint);
+    if (typeof (value as { $date?: unknown }).$date === "number")
+      return new Date((value as { $date: number }).$date);
+    return value;
+  });
 }
 
 /** Rows after (or before) the cursor's in the order: `a > x OR (a = x AND (b > y OR (b = y AND c >= z)))`. */
