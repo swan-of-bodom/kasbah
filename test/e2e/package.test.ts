@@ -131,7 +131,6 @@ test("create-kasbah (what `pnpm create kasbah` runs) is init from the installed 
   expect(JSON.parse(readFileSync(join(project, "package.json"), "utf8")).packageManager).toBe(
     undefined,
   );
-  expect(readFileSync(join(project, "Dockerfile"), "utf8")).toContain("RUN npm install");
   expect(out).toContain("npm run dev");
   const git = (args: string[]) => execFileSync("git", args, { cwd: project, encoding: "utf8" });
   expect(git(["rev-list", "--count", "HEAD"]).trim()).toBe("1");

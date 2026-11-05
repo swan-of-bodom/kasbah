@@ -228,7 +228,7 @@ export function templateFiles(template: Template, p: Common): Record<string, str
   };
 }
 
-/** The files around the app's own: package, TypeScript, environment, Docker and README, which starts with `about`. */
+/** The files around the app's own: package, TypeScript, environment and README, which starts with `about`. */
 function commonFiles(p: Common, about: string): Record<string, string> {
   const pm = p.packageManager ?? "pnpm";
   const run = (script: string, args = "") => runCommand(pm, script, args);
@@ -237,6 +237,8 @@ function commonFiles(p: Common, about: string): Record<string, string> {
     private: true,
     type: "module",
     ...(pm === "pnpm" ? { packageManager: PNPM } : {}),
+    // What kasbah needs: platforms that build the project themselves (Railway, Render) pick their Node from it.
+    engines: { node: NODE },
     scripts: {
       dev: "kasbah dev",
       fresh: "kasbah dev --reset",
@@ -265,13 +267,8 @@ function commonFiles(p: Common, about: string): Record<string, string> {
       undefined,
     ),
     ".gitignore": projectFile("gitignore"),
-    ".dockerignore": projectFile("dockerignore"),
-    Dockerfile: projectFile("Dockerfile", { install: INSTALL[pm] }),
-    // Yarn 2 and later would otherwise install without node_modules, where the image runs kasbah from.
+    // Yarn 2 and later would otherwise install with Plug'n'Play, without node_modules, which kasbah isn't tested with.
     ...(pm === "yarn" ? { ".yarnrc.yml": "nodeLinker: node-modules\n" } : {}),
-    "docker-compose.yml": projectFile("docker-compose.yml", {
-      schema: schemaName(basename(p.dir)),
-    }),
     "README.md": lines(
       `# ${basename(p.dir)}`,
       "",
@@ -286,16 +283,9 @@ function commonFiles(p: Common, about: string): Record<string, string> {
       `${run("dev")}   # index and follow the head, restarted on every change; GraphiQL at http://localhost:42069/graphql`,
       `${run("start", `--schema ${schemaName(basename(p.dir))}`)}   # the same for production, without watching (a new schema per deploy)`,
       `${run("serve", `--schema ${schemaName(basename(p.dir))}`)}   # the API alone, over what start indexed`,
-      "docker compose up -d   # Postgres and the indexer, the API on 127.0.0.1:42069",
       "```",
       "",
-      "`.env` holds the RPC URL (and the database, if not the dev container): it stays out of git and the image.",
-      ...(p.dependency.startsWith("file:")
-        ? [
-            "",
-            `kasbah comes from a local tarball (a checkout's): \`docker compose\` builds once it's \`${pm} add kasbah\` from npm.`,
-          ]
-        : []),
+      "`.env` holds the RPC URL (and the database, if not the dev container): it stays out of git.",
     ),
   };
 }
@@ -310,20 +300,17 @@ const PUBLIC_RPC = "https://starknet-rpc.publicnode.com";
 const PUBLIC_RPC_NOTE =
   "A free public RPC, to try kasbah: replace it with a provider's (Alchemy, Infura, your own node) for a long backfill.";
 
-/** The pnpm a project asks for (`packageManager`), and its image installs. */
+/** The pnpm a project asks for (`packageManager`). */
 const PNPM = "pnpm@10.12.1";
+
+/** The Node a project asks for (`engines`): kasbah's own. */
+const NODE = ">=22.18";
 
 /** `script` with `args` as `pm` runs it: npm needs `run`, and `--` before arguments. */
 function runCommand(pm: PackageManager, script: string, args = ""): string {
   if (pm === "npm") return `npm run ${script}${args === "" ? "" : ` -- ${args}`}`;
   return `${pm} ${script}${args === "" ? "" : ` ${args}`}`;
 }
-
-const INSTALL: Record<PackageManager, string> = {
-  pnpm: `RUN npm install -g ${PNPM}\nWORKDIR /app\nCOPY . .\nRUN pnpm install`,
-  npm: "WORKDIR /app\nCOPY . .\nRUN npm install",
-  yarn: "RUN corepack enable\nWORKDIR /app\nCOPY . .\nRUN yarn install",
-};
 
 /** The dependency on kasbah: from a checkout its packed tarball (a link would bring the checkout's own node_modules), else its version. */
 function indexerSpec(): string {

@@ -4,7 +4,7 @@
 
 ### Push your project to GitHub
 
-`init` already wrote the `Dockerfile` Railway builds with.
+Railway builds it from `package.json`: no Dockerfile needed.
 
 ### Create the service
 
@@ -23,23 +23,23 @@ On the indexer service, **Variables**:
 | `DATABASE_URL` | **Add Reference → Postgres → `DATABASE_URL`** |
 | `KASBAH_RPC_URL` | your RPC URL |
 
-`PORT` is set by Railway and used automatically; the Dockerfile sets `API_HOST=0.0.0.0`.
+`PORT` is set by Railway and used automatically.
 
 ### One schema per deploy
 
 **Settings → Deploy → Custom Start Command**:
 
 ```bash
-/bin/sh -c "exec node node_modules/kasbah/dist/cli/main.js start --schema $RAILWAY_DEPLOYMENT_ID"
+pnpm start --schema $RAILWAY_DEPLOYMENT_ID
 ```
 
-Each deploy indexes into its own schema while the old one keeps serving. `exec` lets it receive `SIGTERM`.
+Each deploy indexes into its own schema while the old one keeps serving.
 
 ### Health check
 
 **Settings → Deploy → Healthcheck Path**: `/ready`, and **Healthcheck Timeout**: `3600` (the most Railway allows).
-Traffic moves to a new deploy only once it's caught up. A backfill longer than an hour fails the deploy: keep the
-cache on (the default) so later deploys re-index from it.
+Traffic moves to a new deploy only once it's caught up. A backfill longer than an hour fails the deploy; later
+deploys re-index from the event cache, so they fetch nothing already fetched.
 
 ### Get a URL
 
@@ -49,3 +49,7 @@ cache on (the default) so later deploys re-index from it.
 
 Old schemas stay in the database. `kasbah list` shows them with their sizes; `kasbah prune` drops every one no
 indexer is running, or `kasbah clean --schema <id> --yes` drops one.
+
+A repository with a `Dockerfile` is built from it instead, and Railway then runs the start command without a shell,
+so `$RAILWAY_DEPLOYMENT_ID` stays as written. Wrap it:
+`/bin/sh -c "exec pnpm start --schema $RAILWAY_DEPLOYMENT_ID"`.

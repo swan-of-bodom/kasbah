@@ -80,18 +80,19 @@ test("one table per event, arguments as typed columns, structs as jsonb", () => 
   expect(files["src/index.ts"]).not.toContain("plain");
 });
 
-test("the compose file indexes into the project's schema, and every placeholder is filled", () => {
-  // biome-ignore lint/suspicious/noTemplateCurlyInString: compose's variable, written as is
-  expect(files["docker-compose.yml"]).toContain("DATABASE_SCHEMA: ${DATABASE_SCHEMA:-pools}");
-  expect(files.Dockerfile).toContain("RUN pnpm install");
+test("every placeholder is filled, and no Docker files: platforms build the project from package.json", () => {
   for (const content of Object.values(files)) expect(content).not.toMatch(/\{\{\w+\}\}/);
+  for (const docker of ["Dockerfile", "docker-compose.yml", ".dockerignore"])
+    expect(files[docker]).toBe(undefined);
+  expect(JSON.parse(files["package.json"]!).engines.node).toBe(
+    JSON.parse(readFileSync(join(import.meta.dirname, "../../package.json"), "utf8")).engines.node,
+  );
 });
 
-test("secrets only in .env, which git and Docker ignore; .env.example has the names", () => {
+test("secrets only in .env, which git ignores; .env.example has the names", () => {
   expect(files[".env"]).toBe("KASBAH_RPC_URL=http://rpc\nDATABASE_URL=postgres://db\n");
   expect(files[".env.example"]).toMatch(/^KASBAH_RPC_URL=https:\/\/.*<key>\n# DATABASE_URL=/);
   expect(files[".gitignore"]).toContain(".env\n");
-  expect(files[".dockerignore"]).toContain(".env\n");
   for (const [path, content] of Object.entries(files))
     if (path !== ".env") expect(content).not.toContain("http://rpc");
 });
@@ -131,18 +132,14 @@ test("the project is written for its package manager: npm runs scripts with run,
   const common = { dir: "/x/mine", rpc: "http://rpc", database: undefined, dependency: "^0.0.0" };
   const pnpm = templateFiles("ekubo", common);
   expect(JSON.parse(pnpm["package.json"]!).packageManager).toMatch(/^pnpm@/);
-  expect(pnpm.Dockerfile).toContain("RUN pnpm install");
   expect(pnpm["README.md"]).toContain("pnpm start --schema mine");
 
   const npm = templateFiles("ekubo", { ...common, packageManager: "npm" });
   expect(JSON.parse(npm["package.json"]!).packageManager).toBe(undefined);
-  expect(npm.Dockerfile).toContain("RUN npm install");
-  expect(npm.Dockerfile).not.toContain("pnpm");
   expect(npm["README.md"]).toContain("npm run start -- --schema mine");
 
   const yarn = templateFiles("ekubo", { ...common, packageManager: "yarn" });
   expect(yarn[".yarnrc.yml"]).toBe("nodeLinker: node-modules\n");
-  expect(yarn.Dockerfile).toContain("RUN corepack enable");
   expect(yarn["README.md"]).toContain("yarn dev");
 });
 

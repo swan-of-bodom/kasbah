@@ -8,9 +8,7 @@ my-indexer/
 ├── src/
 │   ├── index.ts        event handlers
 │   └── api/index.ts    the HTTP API, a Hono app (optional)
-├── .env                KASBAH_RPC_URL, DATABASE_URL
-├── Dockerfile
-└── docker-compose.yml
+└── .env                KASBAH_RPC_URL, DATABASE_URL
 ```
 
 Handlers import the app from the config, so they're typed from it without code generation:

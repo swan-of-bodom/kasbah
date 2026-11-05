@@ -53,7 +53,9 @@ Drizzle comes with it: tables and queries are imported from `kasbah` too.
 
 ## Docker
 
-Every project gets a `Dockerfile` and a `docker-compose.yml` from `init`: see [VPS](/docs/production/vps).
+Docker (or Podman) only runs Postgres for `dev` when there's no `DATABASE_URL`. Platforms like Railway and Render
+build the project from `package.json`; to run it in Docker yourself, [VPS](/docs/production/vps) has a Dockerfile and
+a compose file.
 
 ## From source
 
@@ -65,5 +67,5 @@ cd kasbah && pnpm install && pnpm pack
 cd ../my-indexer && pnpm add ../kasbah/kasbah-*.tgz
 ```
 
-A project made by `init` from a checkout uses that tarball, so its Docker image can't build until you switch it
-to the npm version (`pnpm add kasbah`).
+A project made by `init` from a checkout uses that tarball, so it can't be deployed until you switch it to the npm
+version (`pnpm add kasbah`).

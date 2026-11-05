@@ -4,7 +4,7 @@
 
 ### Push your project to GitHub
 
-`init` already wrote the `Dockerfile` Render builds with.
+Render builds it from `package.json`: no Dockerfile needed.
 
 ### Create the database
 
@@ -12,7 +12,14 @@
 
 ### Create the service
 
-**New → Web Service**, pick the repository, **Language: Docker**. Choose the same region as the database.
+**New → Web Service**, pick the repository, **Language: Node**, in the same region as the database.
+
+| Setting | Value |
+| --- | --- |
+| Build Command | `pnpm install --frozen-lockfile` |
+| Start Command | `pnpm start` |
+
+With npm: `npm install` and `npm start`.
 
 ### Set the variables
 
