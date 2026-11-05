@@ -17,9 +17,9 @@ import {
   detailedErrors,
   type Tables,
 } from "./context.ts";
-import { prometheus } from "./prometheus.ts";
+import { progress, prometheus } from "./prometheus.ts";
 import { Reader, type ReaderOptions } from "./reader.ts";
-import { type Meta, readMeta, readStatus } from "./status.ts";
+import { readMeta, readStatus } from "./status.ts";
 
 export type ApiOptions = Omit<ReaderOptions, "tables"> & {
   /** Tables, and Drizzle `relations()` between them: a schema module works as is. */
@@ -118,7 +118,11 @@ function routes(reader: Reader, o: ApiOptions): Hono {
         onError: (c) => c.text(`request body over ${MAX_BODY / 2 ** 20} MB`, 413),
       }),
     )
-    .get("/metrics", async (c) => c.text(o.metrics?.() ?? storedMetrics(await readMeta(reader))))
+    .get("/metrics", async (c) => {
+      if (o.metrics !== undefined) return c.text(o.metrics());
+      const m = await readMeta(reader);
+      return c.text(prometheus(progress(m.phase ?? "starting", Number(m.checkpoint ?? 0))));
+    })
     .get("/health", (c) => c.text("", 200))
     .get("/ready", async (c) =>
       READY_PHASES.has((await readMeta(reader)).phase ?? "")
@@ -132,23 +136,6 @@ function routes(reader: Reader, o: ApiOptions): Hono {
     root.all("*", (c) => app.fetch(c.req.raw));
   }
   return root.onError(onError);
-}
-
-function storedMetrics(m: Meta): string {
-  return prometheus([
-    {
-      name: "phase",
-      type: "gauge",
-      help: "The phase running (1).",
-      samples: [[{ phase: m.phase ?? "starting" }, 1]],
-    },
-    {
-      name: "checkpoint",
-      type: "gauge",
-      help: "Last block committed.",
-      samples: [[{}, Number(m.checkpoint ?? 0)]],
-    },
-  ]);
 }
 
 /** Where in the app's code an error was thrown: the first file in its stack. */

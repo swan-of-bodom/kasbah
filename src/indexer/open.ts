@@ -27,7 +27,7 @@ import type { Child } from "./events.ts";
 import { compileFilters } from "./filters.ts";
 import { Finality } from "./finality.ts";
 import { SchemaLock } from "./lock.ts";
-import { metricsOf } from "./metrics.ts";
+import { metricsOf, ProcessMetrics } from "./metrics.ts";
 import { resume } from "./phases/live.ts";
 import { type Plan, planOf } from "./plan.ts";
 import type { AnyHandler } from "./run.ts";
@@ -270,15 +270,19 @@ async function startApi(
   closers: (() => unknown)[],
 ): Promise<void> {
   const { Api } = await import("../api/server.ts");
+  const processMetrics = new ProcessMetrics();
   const server = await Api.start({
     ...api,
     database: config.database,
     schema: config.schema,
     tables: config.tables,
     app,
-    metrics: () => metricsOf(status),
+    metrics: () => metricsOf(status, processMetrics),
   });
-  closers.push(() => server.close());
+  closers.push(
+    () => server.close(),
+    () => processMetrics.stop(),
+  );
   status.api = apiUrl(api, server.port);
   status.note({ kind: "api", url: status.api });
 }
