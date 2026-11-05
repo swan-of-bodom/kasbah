@@ -665,7 +665,7 @@ Built (`src/indexer/client.ts`, `src/abi/functions.ts`):
   from events up to that block.
 - Capped: `cache: { maxCalls }`, default 1M rows; past it the oldest inserted are dropped down to
   90% (insertion order, `seq`, not last use: a hit costs no write). Checked at open, so lowering the cap prunes at
-  once. `kasbah cache info` / `kasbah cache clear` (§11) show and empty each chain's cache.
+  once. `kasbah list` shows each chain's cache with its size; `kasbah cache clear` empties it.
 - Not yet: batching reads made in parallel by a handler.
 
 ## 10. What we drop from Ponder, with its size
@@ -783,7 +783,7 @@ it: each process reads its own schema. Old deploy schemas are listed and dropped
 test never opens a port by surprise. `network` is checked against `starknet_chainId` before the schema opens: an
 RPC on the wrong chain must not drop or write anything.
 
-CLI (`src/cli/main.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache info|clear`. The app
+CLI (`src/cli/main.ts`): `kasbah start <app>`, `kasbah dev <app>`, `kasbah cache clear`. The app
 module default-exports `kasbah(config)` with its handlers. `dev` runs `start` in a child process and restarts it
 on any code-file change under the app's directory (ES modules can't be unloaded, so a fresh process is the
 reliable reload), with `onBuildChange: "reset"`. The build id now includes each handler's source and the CLI's

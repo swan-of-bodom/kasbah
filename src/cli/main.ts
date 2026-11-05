@@ -35,9 +35,8 @@ const USAGE = `usage:
                                         cache stays
   kasbah serve [app.ts]          the API only, over what an indexer of the app stored (more API processes
                                         than indexers, or a finished run)
-  kasbah cache info [--chain <id>]
-                                        each chain's raw-event and call cache, with its size
   kasbah cache clear [--events] [--calls] [--chain <id>]
+                                        empties the raw-event and call caches (list shows them)
 Reads .env from the working directory. The cache, list and prune commands use DATABASE_URL (or --database).`;
 
 /** `kasbah init --help`, which `pnpm create kasbah --help` shows too. */

@@ -223,7 +223,7 @@ test("a mistake to fix prints its message, without a stack", () => {
   const { DATABASE_URL: _, ...env } = process.env;
   const r = spawnSync(
     process.execPath,
-    ["--no-warnings", resolve("src/cli/main.ts"), "cache", "info"],
+    ["--no-warnings", resolve("src/cli/main.ts"), "cache", "clear"],
     {
       env,
       cwd: dir,
@@ -233,8 +233,8 @@ test("a mistake to fix prints its message, without a stack", () => {
   expect([r.status, r.stderr]).toEqual([1, "[kasbah] set DATABASE_URL or pass --database\n"]);
 });
 
-test.skipIf(url === undefined)("cache info runs", async () => {
-  const run = cli("cache", "info", "--chain", "0x0");
+test.skipIf(url === undefined)("cache clear runs on a chain with no cache", async () => {
+  const run = cli("cache", "clear", "--chain", "0x0");
   expect(await run.exited).toBe(0);
 });
 

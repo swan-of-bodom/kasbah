@@ -83,7 +83,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
 | `kasbah serve --schema <name>` | the API alone, over what an indexer stored |
 | `kasbah list` | the schemas in `DATABASE_URL` and the dev databases on the machine, with their sizes |
 | `kasbah prune` | drops the schemas no indexer is running |
-| `kasbah cache info` | the raw-event cache and its size |
+| `kasbah cache clear` | empties the raw-event cache (`kasbah list` shows its size) |
 
 ## Docs
 

@@ -362,52 +362,14 @@ export class EventCache implements ClassStore {
     this.#callRows -= r.rowCount ?? 0;
   }
 
-  /** Every chain's cache in the database (or one chain's), with its size. */
-  static async info(
-    pool: pg.Pool,
-    chainId?: string,
-  ): Promise<
-    {
-      schema: string;
-      events: number;
-      calls: number;
-      transactions: number;
-      headers: number;
-      bytes: number;
-    }[]
-  > {
-    const { rows } = await pool.query<{ schema: string; bytes: string }>(
-      `SELECT n.nspname AS schema, coalesce(sum(pg_total_relation_size(c.oid)), 0)::text AS bytes FROM pg_namespace n
-       LEFT JOIN pg_class c ON c.relnamespace = n.oid AND c.relkind = 'r' WHERE n.nspname LIKE 'kasbah\\_cache\\_%' GROUP BY 1 ORDER BY 1`,
-    );
-    const out = [];
-    for (const r of rows) {
-      if (chainId !== undefined && r.schema !== `kasbah_cache_${chainId.toLowerCase()}`) continue;
-      const s = quote(r.schema);
-      const n = async (t: string) => {
-        const exists =
-          (await pool.query(`SELECT to_regclass($1) AS r`, [`${s}.${t}`])).rows[0].r !== null;
-        return exists
-          ? Number(
-              (await pool.query<{ n: string }>(`SELECT count(*) AS n FROM ${s}.${t}`)).rows[0]!.n,
-            )
-          : 0;
-      };
-      out.push({
-        schema: r.schema,
-        events: await n("events"),
-        calls: await n("calls"),
-        transactions: await n("transactions"),
-        headers: await n("headers"),
-        bytes: Number(r.bytes),
-      });
-    }
-    return out;
-  }
-
   /** Empties a chain's cache (or every chain's): events with their coverage and headers, call results, or both. */
   static async clear(pool: pg.Pool, what: { events?: boolean; calls?: boolean }, chainId?: string) {
-    for (const { schema } of await EventCache.info(pool, chainId)) {
+    const { rows } = await pool.query<{ schema: string }>(
+      `SELECT nspname AS schema FROM pg_namespace WHERE nspname LIKE 'kasbah\\_cache\\_%'`,
+    );
+    const only = chainId === undefined ? undefined : `kasbah_cache_${chainId.toLowerCase()}`;
+    for (const { schema } of rows) {
+      if (only !== undefined && schema !== only) continue;
       const s = quote(schema);
       if (what.events) await pool.query(`TRUNCATE ${s}.events, ${s}.coverage, ${s}.headers`);
       if (

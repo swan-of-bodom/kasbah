@@ -94,11 +94,11 @@ re-indexes without fetching again. A dev container is deleted with `kasbah clean
 ## cache
 
 ```bash
-kasbah cache info [--chain <id>]
 kasbah cache clear [--events] [--calls] [--chain <id>]
 ```
 
-The shared cache of raw events and contract reads, per chain.
+Empties the shared cache of raw events and contract reads, per chain. `kasbah list` shows each chain's cache and its
+size.
 
 ## Common flags
 

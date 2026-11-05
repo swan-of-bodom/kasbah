@@ -8,7 +8,7 @@ export default kasbah({
   rpc: process.env.KASBAH_RPC_URL!,
   contracts: { /* … */ },
   finality: "l1",
-  cache: false,
+  cache: { maxCalls: 1_000_000 },
   api: {
     port: 42069,
   },
@@ -24,14 +24,14 @@ export default kasbah({
 
 ## Cache
 
-- On by default: final raw events and contract reads are kept in Postgres (schema `kasbah_cache_<chain>`), shared
+- Always on: final raw events and contract reads are kept in Postgres (schema `kasbah_cache_<chain>`), shared
   by every app on the chain, so a re-index fetches nothing again. `{ maxCalls }` caps the reads kept (default
   1,000,000).
 - It costs disk: about 400 bytes per event, indexes included (50M Ekubo events took 19 GB), so a busy contract's
-  whole history can take tens of GB. `cache: false` turns it off; `kasbah cache clear` deletes what it holds.
+  whole history can take tens of GB. `kasbah list` shows its size; `kasbah cache clear` deletes what it holds.
 
 ```bash
-kasbah cache info
+kasbah list
 kasbah cache clear --events
 ```
 

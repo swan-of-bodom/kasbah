@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver (README, "Licen
 
 ## Unreleased
 
+- **Breaking:** `kasbah cache info` is gone: `kasbah list` shows each chain's cache with its size. `kasbah cache clear`
+  stays.
 - **Breaking:** `cache: true` is refused, like `cache: false`: the event cache is always on, so it did nothing. Remove it
   from `kasbah.config.ts`; `cache: { maxCalls }` stays. New projects and the templates no longer write it.
 - The package no longer depends on `pg-query-emscripten`, which nothing used: an install is 4.5 MB smaller.
