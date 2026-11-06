@@ -44,6 +44,9 @@ my-indexer/
 
 ```ts
 // kasbah.config.ts
+import { kasbah } from "kasbah";
+import coreAbi from "./abis/Core.ts";
+
 export default kasbah({
   network: "mainnet",
   rpc: process.env.KASBAH_RPC_URL!,
@@ -53,6 +56,8 @@ export default kasbah({
 
 ```ts
 // kasbah.schema.ts
+import { hex, integer, pgTable, text } from "kasbah";
+
 export const swapped = pgTable("swapped", {
   id: text().primaryKey(),
   block: integer().notNull(),
@@ -62,6 +67,9 @@ export const swapped = pgTable("swapped", {
 
 ```ts
 // src/index.ts
+import app from "../kasbah.config.ts";
+import { swapped } from "../kasbah.schema.ts";
+
 app.on("Core:Swapped", async ({ event, context }) => {
   await context.db.insert(swapped).values({
     id: `${event.transaction.hash}:${event.index}`,
@@ -69,6 +77,25 @@ app.on("Core:Swapped", async ({ event, context }) => {
     locker: event.args.locker,
   });
 });
+```
+
+```ts
+// src/api/index.ts
+import { Hono } from "hono";
+import { desc } from "kasbah";
+import { db, graphql } from "kasbah/api";
+import * as schema from "../../kasbah.schema.ts";
+
+const app = new Hono();
+
+app.use("/graphql", graphql({ db, schema }));
+
+app.get("/swaps/latest", async (c) => {
+  const rows = await db.select().from(schema.swapped).orderBy(desc(schema.swapped.block)).limit(20);
+  return c.json(rows);
+});
+
+export default app;
 ```
 
 ## Use kasbah
