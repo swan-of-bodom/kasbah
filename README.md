@@ -73,13 +73,7 @@ app.on("Core:Swapped", async ({ event, context }) => {
 
 ## Use kasbah
 
-Start a project with `pnpm create kasbah` (recommended): it needs nothing installed beforehand and takes the same
-flags as `kasbah init` (`pnpm create kasbah --help`). `npm create kasbah` and `yarn create kasbah` work too, and the
-project then uses npm or Yarn. In a project, the `dev`, `fresh`, `clean`, `start` and `serve` scripts (`pnpm dev`,
-`npm run dev`) run the commands below.
-
-Once installed, run `kasbah --help` in your project (`pnpm kasbah --help`, `npx kasbah --help`) to see every
-command:
+Start a project with `pnpm create kasbah` (recommended).
 
 ```bash
 pnpm kasbah --help
