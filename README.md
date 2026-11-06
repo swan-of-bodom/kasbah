@@ -30,20 +30,26 @@ GraphQL and your own endpoints. If you've used [Ponder](https://ponder.sh), you 
 
 ## Quickstart
 
-You need Node 22.18 or later, a package manager (pnpm, npm or Yarn), and either Docker or Podman (`pnpm dev` then
-runs Postgres in a container) or a Postgres of your own, set as `DATABASE_URL` in `.env`.
+You need:
+
+- Node 22.18 or later
+- pnpm, npm or Yarn
+- Docker (`pnpm dev` runs Postgres in it), or a Postgres of your own as `DATABASE_URL` in `.env`
 
 ```bash
-pnpm create kasbah my-indexer # asks for a contract or a template, an RPC and Postgres; installs it
+pnpm create kasbah my-indexer   # pick a contract or a template
 cd my-indexer
-pnpm dev                      # backfills, follows the head, restarts on every change
+pnpm dev                        # backfill, follow the head, reload on change
 ```
 
-Or start from a template: `pnpm create kasbah --template erc20` (LORDS, with GraphQL relations), `ekubo` (pools
-and swaps), `jediswap` (pairs found through the factory) or `pragma` (oracle prices read every 2,000 blocks).
+Or start from a template with `pnpm create kasbah --template <name>`:
 
-> [!TIP]
-> Open [localhost:42069/graphql](http://localhost:42069/graphql) for GraphiQL.
+| Template   | What it shows                         |
+| ---------- | ------------------------------------- |
+| `erc20`    | LORDS, with GraphQL relations         |
+| `ekubo`    | Pools and swaps                       |
+| `jediswap` | Pairs found through the factory       |
+| `pragma`   | Oracle prices read every 2,000 blocks |
 
 ## A project
 
@@ -65,7 +71,13 @@ import coreAbi from "./abis/Core.ts";
 export default kasbah({
   network: "mainnet",
   rpc: process.env.KASBAH_RPC_URL!,
-  contracts: { Core: { abi: coreAbi, address: "0x…", startBlock: "deployment" } },
+  contracts: {
+    Core: {
+      abi: coreAbi,
+      address: "0x…",
+      startBlock: "deployment",
+    },
+  },
 });
 ```
 
@@ -106,7 +118,11 @@ const app = new Hono();
 app.use("/graphql", graphql({ db, schema }));
 
 app.get("/swaps/latest", async (c) => {
-  const rows = await db.select().from(schema.swapped).orderBy(desc(schema.swapped.block)).limit(20);
+  const rows = await db
+    .select()
+    .from(schema.swapped)
+    .orderBy(desc(schema.swapped.block))
+    .limit(20);
   return c.json(rows);
 });
 
