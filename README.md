@@ -132,6 +132,18 @@ Reads .env from the working directory. Docs: https://swan-of-bodom.github.io/kas
 `kasbah <command> --help` (or `kasbah help <command>`) prints a command's options, and the
 [CLI reference](https://swan-of-bodom.github.io/kasbah/docs/reference/cli) has every flag.
 
+## Performance
+
+Full history of a template, from its start block to the chain head, on a cold event cache, with Alchemy as the RPC
+and Postgres 17 on the same machine. Measured on a laptop (Intel Core i7, 10 cores) with kasbah 0.2.2 on Node 22,
+in November 2026, one run per template.
+
+| Template | Indexes                 | Blocks | Events | Time    |
+| -------- | ----------------------- | ------ | ------ | ------- |
+| `ekubo`  | swaps and pool creation | 17.4M  | 42.9M  | ~16 min |
+
+To measure your own, run `pnpm create kasbah --template ekubo` and `pnpm dev`.
+
 ## Docs
 
 **[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**: configuration, handlers, the API,
