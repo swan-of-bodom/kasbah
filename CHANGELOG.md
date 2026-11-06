@@ -1,6 +1,6 @@
 # Changelog
 
-Changes users would notice, newest first. Versions follow semver (README, "License and versions").
+Changes users would notice, newest first. Versions follow semver.
 
 ## Unreleased
 
