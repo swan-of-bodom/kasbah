@@ -72,4 +72,4 @@ them on npmjs.com. While kasbah is 0.x, a minor version may break the config or 
 
 ---
 
-This guide follows the shape of [Ponder's](https://github.com/ponder-sh/ponder/blob/main/.github/CONTRIBUTING.md).
+This guide follows the shape of the contribution guides of [Ponder](https://github.com/ponder-sh/ponder/blob/main/.github/CONTRIBUTING.md) and [viem](https://github.com/wevm/viem/blob/main/.github/CONTRIBUTING.md).

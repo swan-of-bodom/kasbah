@@ -138,17 +138,21 @@ Full history of a template, from its start block to the chain head, on a cold ev
 and Postgres 17 on the same machine. Measured on a laptop (Intel Core i7, 10 cores) with kasbah 0.2.2 on Node 22,
 in November 2026, one run per template.
 
-| Template | Indexes                 | Blocks | Events | Time    |
-| -------- | ----------------------- | ------ | ------ | ------- |
-| `ekubo`  | swaps and pool creation | 17.4M  | 42.9M  | ~16 min |
+| Template | Indexes                       | Blocks | Events | Time    |
+| -------- | ----------------------------- | ------ | ------ | ------- |
+| `erc20`  | LORDS transfers and approvals | 17.5M  | 2.5M   | ~45 s   |
+| `ekubo`  | swaps and pool creation       | 17.4M  | 42.9M  | ~16 min |
 
 To measure your own, run `pnpm create kasbah --template ekubo` and `pnpm dev`.
 
 ## Docs
 
-**[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**: configuration, handlers, the API,
-and deploying to Railway, Render or a VPS. The source is in [`documentation/`](documentation). To work on kasbah
-itself, see [CONTRIBUTING.md](.github/CONTRIBUTING.md).
+Configuration, handlers, the API and deploying to production are covered at
+**[swan-of-bodom.github.io/kasbah](https://swan-of-bodom.github.io/kasbah/)**.
+
+## Contributing
+
+If you're interested in contributing to kasbah, please read the [contribution guide](.github/CONTRIBUTING.md).
 
 ## Acknowledgments
 
@@ -164,6 +168,4 @@ too. For EVM chains, use Ponder or rindexer.
 
 ## License
 
-[Apache-2.0](LICENSE), with code adapted from MIT projects listed in
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md). Versions follow semver: while at 0.x, a minor version may break things and a patch never
-does. See [CHANGELOG.md](CHANGELOG.md).
+Apache-2.0, with code adapted from MIT projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

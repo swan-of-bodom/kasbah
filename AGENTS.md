@@ -106,7 +106,7 @@ Apps are written against the config type, so in a patch release:
 - fields are never renamed or removed;
 - a changed default goes in the changelog, since it changes what an existing app does.
 
-At 0.x, a minor version may break any of these (README, "License and versions").
+At 0.x, a minor version may break any of these (the 0.x note at the top of the README).
 
 ## Tests
 
