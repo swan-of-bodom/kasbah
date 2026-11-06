@@ -5,7 +5,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/kasbah"><img src="https://img.shields.io/npm/v/kasbah" alt="npm version"></a>
   <a href="https://github.com/swan-of-bodom/kasbah/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/swan-of-bodom/kasbah/ci.yml?branch=main&label=CI" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache--2.0-blue" alt="Apache-2.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue" alt="MIT"></a>
 </p>
 
 <p align="center">
@@ -178,4 +178,4 @@ file, limits as named constants. Thank you to both. For EVM chains, use Ponder o
 
 ## License
 
-Apache-2.0, with code adapted from MIT projects listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+MIT. Notices for code adapted from other projects are in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

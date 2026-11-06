@@ -2,7 +2,7 @@
   "name": "create-kasbah",
   "version": "0.2.2",
   "description": "Create a kasbah project: a Starknet indexer from a contract address",
-  "license": "Apache-2.0",
+  "license": "MIT",
   "author": "swan-of-bodom",
   "repository": {
     "type": "git",
