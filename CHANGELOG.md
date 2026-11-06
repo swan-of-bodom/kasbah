@@ -4,6 +4,8 @@ Changes users would notice, newest first. Versions follow semver.
 
 ## Unreleased
 
+## 0.2.3
+
 - The license is MIT, no longer Apache-2.0. Versions up to 0.2.2 stay under Apache-2.0.
 
 ## 0.2.2

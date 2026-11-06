@@ -1,6 +1,6 @@
 {
   "name": "kasbah",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "A minimal, fast Starknet indexer in TypeScript: event handlers, Postgres, SQL and GraphQL",
   "license": "MIT",
   "author": "swan-of-bodom",
